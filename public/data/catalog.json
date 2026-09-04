@@ -1,0 +1,16 @@
+{
+  "years": [
+    {
+      "year": "2013",
+      "indexUrl": "data/2013/index.json"
+    },
+    {
+      "year": "2002",
+      "indexUrl": "data/2002/index.json"
+    },
+    {
+      "year": "2001",
+      "indexUrl": "data/2001/index.json"
+    }
+  ]
+}

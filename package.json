@@ -1,0 +1,34 @@
+{
+  "name": "640x480",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "import:year": "node scripts/import-photos.mjs",
+    "import:2013:sample": "npm run import:year -- --year 2013 --limit 300",
+    "import:2013": "npm run import:year -- --year 2013",
+    "import": "npm run import:year --",
+    "archive:inventory": "node scripts/archive-inventory.mjs",
+    "release:audit": "node scripts/release-audit.mjs",
+    "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
+    "media:upload": "node scripts/media-upload-r2.mjs --execute"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "exifr": "^7.1.3",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sharp": "^0.35.4",
+    "vite": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.7.2"
+  }
+}
