@@ -1,6 +1,8 @@
+@import url("https://fonts.googleapis.com/css2?family=Raleway:wght@500;600;700;800;900&display=swap");
+
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Raleway, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: #090909;
   color: #f4f1ea;
   font-synthesis: none;
@@ -35,71 +37,161 @@ img {
   max-width: 100%;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
 #root {
   min-height: 100vh;
 }
 
 .collection-shell {
-  width: min(100% - 24px, 1240px);
+  width: min(100% - 24px, 1280px);
   margin: 0 auto;
-  padding: max(18px, env(safe-area-inset-top)) 0 56px;
+  padding: max(8px, env(safe-area-inset-top)) 0 56px;
 }
 
-.collection-header {
+.collection-chrome {
   position: sticky;
   top: 0;
-  z-index: 4;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  padding: 6px 0 10px;
+  background: linear-gradient(180deg, #090909 0%, rgba(9, 9, 9, 0.96) 78%, rgba(9, 9, 9, 0) 100%);
+}
+
+.app-bar {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0 16px;
-  background: linear-gradient(180deg, #090909 0%, rgba(9, 9, 9, 0.94) 74%, rgba(9, 9, 9, 0) 100%);
-}
-
-.collection-header h1 {
-  margin: 0;
-  color: #f8f5ee;
-  font-size: clamp(2.4rem, 1.8rem + 2.2vw, 4.25rem);
-  line-height: 0.92;
-  letter-spacing: 0;
-}
-
-.collection-header p,
-.collection-header__meta {
-  margin: 8px 0 0;
-  color: rgba(244, 241, 234, 0.6);
-  font-size: 0.78rem;
-  font-weight: 650;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.collection-header__meta {
-  white-space: nowrap;
-}
-
-.collection-header__controls {
-  display: flex;
-  flex: 0 0 auto;
+  min-height: 42px;
   align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.app-bar__identity {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
   gap: 10px;
 }
 
+.app-bar__brand {
+  color: #f8f5ee;
+  font-size: 1.02rem;
+  font-weight: 820;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.app-bar__year {
+  color: rgba(244, 241, 234, 0.62);
+  font-size: 0.84rem;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.app-bar__range {
+  color: rgba(244, 241, 234, 0.45);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.album-context {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  border-top: 1px solid rgba(244, 241, 234, 0.08);
+  color: rgba(244, 241, 234, 0.66);
+  font-size: 0.78rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.album-context--hidden {
+  visibility: hidden;
+}
+
+.album-context__year {
+  flex: 0 0 auto;
+  color: rgba(244, 241, 234, 0.88);
+  font-weight: 830;
+}
+
+.album-context__folder {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(244, 241, 234, 0.56);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid rgba(244, 241, 234, 0.1);
+  border-radius: 6px;
+  background: rgba(20, 20, 20, 0.86);
+  color: rgba(244, 241, 234, 0.64);
+  font-size: 0.74rem;
+  font-weight: 720;
+}
+
+.collection-status--error {
+  border-color: rgba(255, 151, 151, 0.3);
+  color: #ffb8b8;
+}
+
+.collection-status button {
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(244, 241, 234, 0.2);
+  border-radius: 5px;
+  color: #f4f1ea;
+  background: rgba(244, 241, 234, 0.08);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
 .year-selector {
+  flex: 0 0 auto;
   display: inline-grid;
   grid-auto-flow: column;
-  gap: 4px;
-  padding: 4px;
+  gap: 3px;
+  max-width: min(60vw, 520px);
+  overflow-x: auto;
+  padding: 3px;
   border: 1px solid rgba(244, 241, 234, 0.14);
   border-radius: 6px;
   background: rgba(9, 9, 9, 0.72);
+  scrollbar-width: none;
+}
+
+.year-selector::-webkit-scrollbar {
+  display: none;
 }
 
 .year-selector button {
-  min-width: 58px;
-  min-height: 30px;
-  padding: 0 10px;
+  min-width: 52px;
+  min-height: 34px;
+  padding: 0 9px;
   border: 1px solid transparent;
   border-radius: 4px;
   color: rgba(244, 241, 234, 0.68);
@@ -127,6 +219,7 @@ img {
 .virtual-album-stack {
   position: relative;
   min-height: 60vh;
+  margin-top: 6px;
 }
 
 .virtual-entry {
@@ -149,6 +242,9 @@ img {
 }
 
 .album-group__heading h2 {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
   overflow: hidden;
   margin: 0;
   font-size: 0.78rem;
@@ -159,11 +255,58 @@ img {
   white-space: nowrap;
 }
 
-.album-group__heading span {
+.album-heading__year {
+  flex: 0 0 auto;
+  color: rgba(244, 241, 234, 0.86);
+  font-weight: 820;
+}
+
+.album-heading__folder {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(244, 241, 234, 0.58);
+  font-weight: 620;
+  text-overflow: ellipsis;
+}
+
+.album-group__heading > span {
   flex: 0 0 auto;
   color: rgba(244, 241, 234, 0.44);
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+.album-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 151, 151, 0.22);
+  border-radius: 6px;
+  background: rgba(28, 12, 12, 0.68);
+  color: #ffb8b8;
+  font-size: 0.74rem;
+  font-weight: 720;
+}
+
+.album-error--loading {
+  border-color: rgba(244, 241, 234, 0.12);
+  background: rgba(244, 241, 234, 0.06);
+  color: rgba(244, 241, 234, 0.58);
+}
+
+.album-error button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 184, 184, 0.34);
+  border-radius: 5px;
+  background: rgba(255, 184, 184, 0.1);
+  color: #ffe0e0;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 780;
 }
 
 .photo-rows {
@@ -177,6 +320,10 @@ img {
   width: 100%;
 }
 
+.photo-mosaic {
+  position: absolute;
+}
+
 .photo-tile {
   position: relative;
   flex: 0 0 auto;
@@ -186,6 +333,11 @@ img {
   border-radius: 3px;
   background: #171717;
   cursor: pointer;
+}
+
+.photo-tile--mosaic {
+  position: absolute;
+  flex: none;
 }
 
 .photo-tile::after {
@@ -229,6 +381,147 @@ img {
   margin: 0;
   color: rgba(244, 241, 234, 0.68);
   font-size: 1rem;
+}
+
+.system-state button {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(244, 241, 234, 0.18);
+  border-radius: 6px;
+  color: #f4f1ea;
+  background: rgba(244, 241, 234, 0.08);
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.archive-timeline {
+  position: fixed;
+  top: calc(max(74px, env(safe-area-inset-top) + 62px));
+  right: max(2px, env(safe-area-inset-right));
+  bottom: calc(max(22px, env(safe-area-inset-bottom) + 14px));
+  z-index: 8;
+  width: 86px;
+  touch-action: none;
+  pointer-events: none;
+}
+
+.archive-timeline__scrubber {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+
+.archive-timeline__track {
+  position: absolute;
+  top: 0;
+  right: 18px;
+  bottom: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(244, 241, 234, 0.26), rgba(244, 241, 234, 0.08));
+}
+
+.archive-timeline__thumb {
+  position: absolute;
+  left: 50%;
+  width: 12px;
+  height: 28px;
+  border: 1px solid rgba(244, 241, 234, 0.32);
+  border-radius: 999px;
+  background: rgba(244, 241, 234, 0.78);
+  box-shadow: 0 0 0 4px rgba(9, 9, 9, 0.46);
+  transform: translate(-50%, -50%);
+}
+
+.archive-timeline__tick {
+  position: absolute;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(244, 241, 234, 0.28);
+  transform: translate(-50%, -50%);
+}
+
+.archive-timeline__tick.is-active {
+  width: 7px;
+  height: 7px;
+  background: #f4f1ea;
+}
+
+.archive-timeline__scrubber:hover .archive-timeline__track,
+.archive-timeline__scrubber:focus-visible .archive-timeline__track,
+.archive-timeline.is-dragging .archive-timeline__track {
+  background: rgba(244, 241, 234, 0.26);
+}
+
+.archive-timeline__scrubber:focus-visible {
+  outline: 2px solid #8fb2ff;
+  outline-offset: -4px;
+}
+
+.archive-timeline__years {
+  position: absolute;
+  top: 0;
+  right: 34px;
+  bottom: 0;
+  width: 52px;
+  pointer-events: none;
+}
+
+.archive-timeline__years button {
+  position: absolute;
+  right: 0;
+  min-width: 44px;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  color: rgba(244, 241, 234, 0.48);
+  background: rgba(9, 9, 9, 0.62);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1;
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.archive-timeline__years button.is-active {
+  color: #f4f1ea;
+  background: rgba(244, 241, 234, 0.12);
+}
+
+.archive-timeline__years button:hover,
+.archive-timeline__years button:focus-visible {
+  color: #f4f1ea;
+}
+
+.archive-timeline__label {
+  position: absolute;
+  top: 50%;
+  right: 86px;
+  max-width: min(270px, calc(100vw - 76px));
+  overflow: hidden;
+  padding: 7px 9px;
+  border: 1px solid rgba(244, 241, 234, 0.18);
+  border-radius: 6px;
+  background: rgba(8, 8, 8, 0.88);
+  color: #f4f1ea;
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  backdrop-filter: blur(14px);
+  pointer-events: none;
 }
 
 .player-overlay {
@@ -336,7 +629,7 @@ img {
   left: 50%;
   bottom: max(16px, env(safe-area-inset-bottom));
   display: grid;
-  grid-template-columns: 40px 46px 40px 40px minmax(190px, 1fr) minmax(170px, auto);
+  grid-template-columns: 40px 46px 40px 40px 40px minmax(190px, 1fr) minmax(170px, auto);
   align-items: center;
   gap: 8px;
   width: min(calc(100% - 24px), 860px);
@@ -466,28 +759,157 @@ img {
     padding-bottom: 38px;
   }
 
-  .collection-header {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    padding-top: 8px;
+  .collection-chrome {
+    gap: 5px;
+    padding-top: 4px;
   }
 
-  .collection-header h1 {
-    font-size: 3rem;
+  .app-bar {
+    gap: 8px;
   }
 
-  .collection-header p,
-  .collection-header__meta {
-    font-size: 0.7rem;
+  .app-bar__identity {
+    gap: 7px;
   }
 
-  .collection-header__controls {
-    width: 100%;
-    justify-content: space-between;
+  .app-bar__brand {
+    font-size: 0.96rem;
+  }
+
+  .app-bar__year,
+  .album-context {
+    font-size: 0.74rem;
+  }
+
+  .year-selector {
+    max-width: calc(100vw - 146px);
   }
 
   .year-selector button {
-    min-width: 54px;
+    min-width: 48px;
+    min-height: 36px;
+    padding: 0 8px;
+  }
+
+  .archive-timeline {
+    top: calc(max(86px, env(safe-area-inset-top) + 76px));
+    right: env(safe-area-inset-right);
+    bottom: calc(max(42px, env(safe-area-inset-bottom) + 34px));
+    width: 128px;
+  }
+
+  .archive-timeline__scrubber {
+    right: 0;
+    width: 62px;
+  }
+
+  .archive-timeline__track {
+    right: 0;
+    width: 3px;
+    background: transparent;
+    transition: background 140ms ease;
+  }
+
+  .archive-timeline__tick {
+    opacity: 0;
+    transition: opacity 140ms ease, background 140ms ease;
+  }
+
+  .archive-timeline__years {
+    right: 58px;
+    width: 70px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+
+  .archive-timeline__years button {
+    min-width: 58px;
+    min-height: 34px;
+    padding: 0 13px;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    border-radius: 999px;
+    color: #1c1d1f;
+    background: rgba(248, 249, 252, 0.94);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+    font-size: 1rem;
+    font-weight: 650;
+  }
+
+  .archive-timeline__years button.is-active {
+    color: #050505;
+    background: #fff;
+    font-weight: 760;
+  }
+
+  .archive-timeline__years button:hover,
+  .archive-timeline__years button:focus-visible {
+    color: #050505;
+    background: #fff;
+  }
+
+  .archive-timeline__thumb {
+    left: auto;
+    right: 0;
+    width: 54px;
+    height: 86px;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    border-radius: 999px 0 0 999px;
+    background: rgba(248, 249, 252, 0.97);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+    transform: translateY(-50%);
+  }
+
+  .archive-timeline__thumb::before,
+  .archive-timeline__thumb::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-right: 9px solid transparent;
+    border-left: 9px solid transparent;
+    transform: translateX(-50%);
+  }
+
+  .archive-timeline__thumb::before {
+    top: 28px;
+    border-bottom: 9px solid #5b6066;
+  }
+
+  .archive-timeline__thumb::after {
+    bottom: 28px;
+    border-top: 9px solid #5b6066;
+  }
+
+  .archive-timeline__label {
+    right: 64px;
+    max-width: min(220px, calc(100vw - 156px));
+    padding: 11px 18px;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    border-radius: 999px;
+    color: #111214;
+    background: rgba(248, 249, 252, 0.98);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    font-size: 1.1rem;
+    font-weight: 680;
+  }
+
+  .archive-timeline.is-dragging .archive-timeline__track,
+  .archive-timeline:focus-within .archive-timeline__track {
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .archive-timeline.is-dragging .archive-timeline__years,
+  .archive-timeline:focus-within .archive-timeline__years {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .archive-timeline.is-dragging .archive-timeline__tick,
+  .archive-timeline:focus-within .archive-timeline__tick {
+    background: rgba(255, 255, 255, 0.82);
+    opacity: 1;
   }
 
   .album-stack {
@@ -508,7 +930,7 @@ img {
   }
 
   .player-controls {
-    grid-template-columns: 40px 46px 40px 40px;
+    grid-template-columns: 40px 46px 40px 40px 40px;
     justify-content: center;
     width: min(calc(100% - 24px), 360px);
   }
@@ -534,7 +956,7 @@ img {
 
   .player-controls {
     bottom: max(8px, env(safe-area-inset-bottom));
-    grid-template-columns: 34px 40px 34px 34px minmax(160px, 1fr) minmax(150px, auto);
+    grid-template-columns: 34px 40px 34px 34px 34px minmax(160px, 1fr) minmax(150px, auto);
     width: min(calc(100% - 16px), 800px);
     padding: 6px;
   }
@@ -580,7 +1002,8 @@ img {
   .photo-tile::after,
   .player-topbar,
   .player-controls,
-  .player-buffer {
+  .player-buffer,
+  .archive-timeline__thumb {
     transition: none;
   }
 }
