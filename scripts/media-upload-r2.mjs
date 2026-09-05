@@ -112,7 +112,16 @@ function rcloneArgs() {
     "--checkers",
     "32",
     "--s3-no-check-bucket",
-    "--progress"
+    "--s3-region",
+    "auto",
+    "--metadata-set",
+    "cache-control=public, max-age=3600, stale-while-revalidate=86400",
+    "--immutable",
+    "--stats",
+    "30s",
+    "--stats-one-line",
+    "--stats-log-level",
+    "NOTICE"
   ];
 }
 
@@ -125,6 +134,9 @@ async function main() {
   const mediaRoot = path.resolve(MEDIA_ROOT);
   if (!(await pathExists(mediaRoot))) {
     throw new Error(`Generated media directory is missing: ${toPosix(path.relative(APP_ROOT, mediaRoot))}`);
+  }
+  if (await fs.realpath(mediaRoot) !== mediaRoot) {
+    throw new Error("Refusing a generated media root that resolves through a symlink");
   }
   if (!isInsideOrEqual(mediaRoot, path.join(ARCHIVE_ROOT, "generated", "library"))) {
     throw new Error("Refusing to use a media root outside 640/generated/library");
