@@ -935,7 +935,7 @@ function App() {
   }, [catalog, saveCurrentScrollPosition]);
 
   useEffect(() => {
-    if (!displayCollection || loadState.status !== "ready" || !selectedYear) {
+    if (!displayCollection || loadState.status !== "ready" || !selectedYear || displayCollection.year !== selectedYear) {
       return;
     }
 
@@ -1453,19 +1453,14 @@ function ArchiveTimeline({
   const previewLabel = dragLabel || (hoverAlbum ? timelineAlbumLabel(hoverAlbum) : null);
   const previewLabelTop = dragLabel ? activeLabelTop : hoverAlbum ? timelineLabelTop(hoverAlbum.top) : activeLabelTop;
   const yearLabelTop = useCallback(
-    (year: string, index: number) => {
-      const anchor = layout.yearAnchors.find((candidate) => candidate.year === year);
-      if (anchor) {
-        return timelineLabelTop(anchor.top);
-      }
-
+    (index: number) => {
       if (years.length <= 1) {
         return "50%";
       }
 
       return `${clamp(index / (years.length - 1), 0.04, 0.96) * 100}%`;
     },
-    [layout.yearAnchors, timelineLabelTop, years.length]
+    [years.length]
   );
 
   const scrollToVirtualTop = useCallback(
@@ -1583,7 +1578,7 @@ function ArchiveTimeline({
             key={year}
             className={year === activeYear ? "is-active" : ""}
             type="button"
-            style={{ top: yearLabelTop(year, index) }}
+            style={{ top: yearLabelTop(index) }}
             onClick={() => onSelectYear(year)}
             aria-current={year === activeYear ? "true" : undefined}
             aria-label={`Jump to ${year}`}

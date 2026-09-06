@@ -239,35 +239,33 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
       };
 
       const markReady = () => {
+        if (cacheRef.current.get(index) !== entry) {
+          return;
+        }
         entry.ready = true;
         entry.failed = false;
-        const state = stateRef.current;
-        if (index === state.currentIndex && state.status === "loading") {
-          dispatch({ type: "READY" });
-        }
         markBufferedImageReady(index);
       };
 
       const markFailed = () => {
-        if (image.complete && image.naturalWidth > 0) {
-          markReady();
+        if (cacheRef.current.get(index) !== entry) {
           return;
         }
-
         entry.failed = true;
         markBufferedImageReady(index);
       };
 
+      cacheRef.current.set(index, entry);
       image.decoding = "async";
-      image.onload = markReady;
+      image.onload = () => {
+        if (typeof image.decode === "function") {
+          void image.decode().then(markReady, markFailed);
+        } else {
+          markReady();
+        }
+      };
       image.onerror = markFailed;
       image.src = mediaUrl(photos[index].displayKey);
-
-      if (typeof image.decode === "function") {
-        image.decode().then(markReady, markFailed);
-      }
-
-      cacheRef.current.set(index, entry);
       return entry;
     },
     [markBufferedImageReady, photos]
@@ -324,8 +322,6 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   const navigateManually = useCallback(
     (direction: -1 | 1) => {
       revealControls();
-      clearInitialDelayTimer();
-      clearResumeTimer();
 
       const fromIndex = currentIndexRef.current;
       const nextIndex = clampIndex(fromIndex + direction, photos.length);
@@ -333,6 +329,8 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
         return;
       }
 
+      clearInitialDelayTimer();
+      clearResumeTimer();
       dispatch({ type: direction > 0 ? "MANUAL_NEXT" : "MANUAL_PREVIOUS" });
       warmBuffer(nextIndex);
     },
@@ -456,7 +454,21 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   }, [photos.length, preloadPhoto]);
 
   const markVisibleImageReady = useCallback(() => {
-    dispatch({ type: "READY" });
+    const image = currentImageRef.current;
+    if (!image || !image.complete || image.naturalWidth === 0) {
+      return;
+    }
+    const source = image.src;
+    const markDecoded = () => {
+      if (image.isConnected && currentImageRef.current === image && image.src === source) {
+        dispatch({ type: "READY" });
+      }
+    };
+    if (typeof image.decode === "function") {
+      void image.decode().then(markDecoded, () => {});
+    } else {
+      markDecoded();
+    }
   }, []);
 
   useEffect(() => {
@@ -500,11 +512,8 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   }, [currentIndex, warmBuffer]);
 
   useEffect(() => {
-    const image = currentImageRef.current;
-    if (image?.complete && image.naturalWidth > 0) {
-      dispatch({ type: "READY" });
-    }
-  }, [currentPhoto?.id]);
+    markVisibleImageReady();
+  }, [currentPhoto?.id, markVisibleImageReady]);
 
   useEffect(() => {
     clearInitialDelayTimer();
@@ -600,7 +609,7 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
 
     return () => {
       isMounted = false;
-      soundCloudWidgetRef.current?.pause();
+      // Removing the iframe stops playback; its window is already gone during cleanup.
       soundCloudWidgetRef.current = null;
     };
   }, [hasMusicLoaded]);

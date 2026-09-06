@@ -1,13 +1,13 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Connect, Plugin } from "vite";
+import { resolveDeploymentConfig } from "./src/lib/deploymentConfig";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const mediaRoot = path.resolve(appRoot, "../generated/library");
-const mediaRoutePrefix = "/640/media/";
 
 function isInsideOrEqual(child: string, parent: string) {
   const relative = path.relative(parent, child);
@@ -31,7 +31,7 @@ function contentTypeFor(filePath: string) {
   return types[extension] || null;
 }
 
-function createMediaMiddleware(): Connect.NextHandleFunction {
+function createMediaMiddleware(mediaRoutePrefix: string): Connect.NextHandleFunction {
   return (request, response, next) => {
     const requestUrl = request.url || "";
     const pathname = requestUrl.split(/[?#]/, 1)[0];
@@ -105,8 +105,8 @@ function createMediaMiddleware(): Connect.NextHandleFunction {
   };
 }
 
-function localGeneratedMedia(): Plugin {
-  const middleware = createMediaMiddleware();
+function localGeneratedMedia(base: string): Plugin {
+  const middleware = createMediaMiddleware(`${base}media/`);
 
   return {
     name: "local-generated-media",
@@ -119,15 +119,19 @@ function localGeneratedMedia(): Plugin {
   };
 }
 
-export default defineConfig({
-  base: "/640/",
-  plugins: [react(), localGeneratedMedia()],
-  server: {
-    port: 5173,
-    strictPort: false
-  },
-  preview: {
-    port: 4173,
-    strictPort: false
-  }
+export default defineConfig(({ mode }) => {
+  const { base, mediaBaseUrl } = resolveDeploymentConfig(mode, loadEnv(mode, appRoot, "VITE_"));
+  return {
+    base,
+    define: { "import.meta.env.VITE_MEDIA_BASE_URL": JSON.stringify(mediaBaseUrl) },
+    plugins: [react(), ...(mode !== "production" && !mediaBaseUrl ? [localGeneratedMedia(base)] : [])],
+    server: {
+      port: 5173,
+      strictPort: false
+    },
+    preview: {
+      port: 4173,
+      strictPort: false
+    }
+  };
 });

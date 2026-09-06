@@ -739,10 +739,10 @@ img {
 
 .player-music-frame {
   position: fixed;
-  left: 0;
+  left: -10000px;
   bottom: 0;
-  width: 1px;
-  height: 1px;
+  width: 320px;
+  height: 166px;
   border: 0;
   opacity: 0;
   pointer-events: none;
