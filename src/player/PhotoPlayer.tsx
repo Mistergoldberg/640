@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Music, Pause, Play, Share2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { mediaUrl } from "../lib/assets";
 import type { Photo } from "../types";
-import { calculateImageGeometry, playerFitClearance, type ImageMode } from "./imageGeometry";
+import { exitDocumentFullscreen, fullscreenElement, requestDocumentFullscreen, subscribeToFullscreenChanges } from "./fullscreen";
+import { calculateImageGeometry, playerFitClearance } from "./imageGeometry";
+import { PlayerControls } from "./PlayerControls";
+import { createPlayerControlState, playerControlReducer, screenModeActive } from "./playerControlState";
 import { createPlayerState, playerReducer, type PlayerScope, type PlayerState } from "./playerReducer";
 import { usePlaybackClock } from "./usePlaybackClock";
 
-const SPEED_OPTIONS = [
-  { label: "0.1", value: 100 },
-  { label: "0.25", value: 250 },
-  { label: "0.5", value: 500 },
-  { label: "1", value: 1000 },
-  { label: "2", value: 2000 }
-];
 const PRELOAD_AHEAD = 30;
 const PRELOAD_BEHIND = 8;
 const INITIAL_PLAY_DELAY_MS = 3000;
@@ -56,15 +52,12 @@ interface CacheEntry {
 interface PhotoPlayerProps {
   photos: Photo[];
   initialIndex: number;
+  openInFullscreen?: boolean;
   scope: PlayerScope;
   onClose: (photoId: string) => void;
 }
 
 let soundCloudApiPromise: Promise<void> | null = null;
-
-function initialImageMode(): ImageMode {
-  return "fit";
-}
 
 function clampIndex(index: number, total: number) {
   if (total <= 0) {
@@ -141,15 +134,16 @@ async function copyShareUrl(url: string) {
   }
 }
 
-export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlayerProps) {
+export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose }: PhotoPlayerProps) {
   const [playerState, dispatch] = useReducer(playerReducer, { initialIndex, total: photos.length, scope }, createPlayerState);
+  const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [imageMode, setImageMode] = useState<ImageMode>(initialImageMode);
   const [hasMusicLoaded, setHasMusicLoaded] = useState(false);
   const [shouldPlayMusic, setShouldPlayMusic] = useState(false);
   const [isMusicWidgetReady, setIsMusicWidgetReady] = useState(false);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
+  const [nativeFullscreenActive, setNativeFullscreenActive] = useState(() => Boolean(fullscreenElement()));
   const [playerViewport, setPlayerViewport] = useState(() => ({
     width: typeof window === "undefined" ? 640 : window.innerWidth,
     height: typeof window === "undefined" ? 480 : window.innerHeight
@@ -160,6 +154,8 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   const stateRef = useRef<PlayerState>(playerState);
   const currentIndexRef = useRef(playerState.currentIndex);
   const currentImageRef = useRef<HTMLImageElement | null>(null);
+  const nativeFullscreenRef = useRef(nativeFullscreenActive);
+  const fullscreenRequestTokenRef = useRef(0);
   const controlsTimerRef = useRef<number | null>(null);
   const initialPlayTimerRef = useRef<number | null>(null);
   const resumeTimerRef = useRef<number | null>(null);
@@ -178,6 +174,8 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   const isBuffering = status === "buffering";
   const initialPlayPending = status === "loading" || status === "initial-delay";
   const temporaryResumePending = status === "temporarily-paused";
+  const imageMode = controlState.imageMode;
+  const isScreenModeActive = screenModeActive(controlState, nativeFullscreenActive);
 
   useEffect(() => {
     stateRef.current = playerState;
@@ -209,6 +207,10 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   const close = useCallback(() => {
     clearInitialDelayTimer();
     clearResumeTimer();
+    fullscreenRequestTokenRef.current += 1;
+    if (nativeFullscreenRef.current || fullscreenElement()) {
+      void exitDocumentFullscreen();
+    }
     dispatch({ type: "CLOSE" });
     onClose(photos[currentIndexRef.current]?.id || photos[initialIndex]?.id || "");
   }, [clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos]);
@@ -336,6 +338,49 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
     },
     [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
   );
+
+  const closeSpeedMenu = useCallback(() => {
+    controlDispatch({ type: "CLOSE_SPEED_MENU" });
+  }, []);
+
+  const toggleSpeedMenu = useCallback(() => {
+    controlDispatch({ type: "TOGGLE_SPEED_MENU" });
+  }, []);
+
+  const selectSpeed = useCallback(
+    (delayMs: number) => {
+      dispatch({ type: "CHANGE_SPEED", delayMs });
+      controlDispatch({ type: "SELECT_SPEED" });
+      revealControls();
+    },
+    [revealControls]
+  );
+
+  const toggleScreenMode = useCallback(() => {
+    revealControls();
+    closeSpeedMenu();
+
+    if (screenModeActive(controlState, nativeFullscreenRef.current)) {
+      fullscreenRequestTokenRef.current += 1;
+      controlDispatch({ type: "EXIT_SCREEN_MODE" });
+      if (nativeFullscreenRef.current) {
+        void exitDocumentFullscreen();
+      }
+      return;
+    }
+
+    // Keep expanded mode as the deterministic fallback. This request is also
+    // called directly by the screen control's click handler, preserving its
+    // user activation when native fullscreen is available.
+    controlDispatch({ type: "ENTER_SCREEN_MODE" });
+    const requestToken = fullscreenRequestTokenRef.current + 1;
+    fullscreenRequestTokenRef.current = requestToken;
+    void requestDocumentFullscreen().then((entered) => {
+      if (entered && fullscreenRequestTokenRef.current !== requestToken) {
+        void exitDocumentFullscreen();
+      }
+    });
+  }, [closeSpeedMenu, controlState, revealControls]);
 
   const toggleFromPrimaryControl = useCallback(() => {
     if (canPause(stateRef.current.status)) {
@@ -478,7 +523,7 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
-      setImageMode(initialImageMode());
+      controlDispatch({ type: "RESET", openExpanded: openInFullscreen });
       dispatch({
         type: "RESET",
         initialIndex,
@@ -499,6 +544,7 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
     clearInitialDelayTimer,
     clearResumeTimer,
     initialIndex,
+    openInFullscreen,
     photos.length,
     resetKey,
     revealControls,
@@ -635,6 +681,32 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
   }, []);
 
   useEffect(() => {
+    const syncFullscreenState = () => {
+      const nextActive = Boolean(fullscreenElement());
+      const wasActive = nativeFullscreenRef.current;
+      nativeFullscreenRef.current = nextActive;
+      setNativeFullscreenActive(nextActive);
+
+      if (nextActive) {
+        controlDispatch({ type: "NATIVE_FULLSCREEN_ENTERED" });
+      } else if (wasActive) {
+        controlDispatch({ type: "NATIVE_FULLSCREEN_EXITED" });
+      }
+    };
+
+    const unsubscribe = subscribeToFullscreenChanges(syncFullscreenState);
+    syncFullscreenState();
+
+    return () => {
+      fullscreenRequestTokenRef.current += 1;
+      unsubscribe();
+      if (fullscreenElement()) {
+        void exitDocumentFullscreen();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     let frame = 0;
     const updateViewport = () => {
       frame = 0;
@@ -662,10 +734,18 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
       revealControls();
 
       if (event.key === "Escape") {
         event.preventDefault();
+        if (nativeFullscreenRef.current) {
+          void exitDocumentFullscreen();
+          return;
+        }
         close();
         return;
       }
@@ -748,7 +828,6 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
       : undefined;
   const primaryActionLabel = canPause(status) ? "Pause" : "Play";
   const surfaceActionLabel = temporaryResumePending ? "Play" : primaryActionLabel;
-  const fullscreenActionLabel = imageMode === "expanded" ? "Exit full screen" : "Full screen";
   const musicIsActive = shouldPlayMusic || isMusicPlaying;
   const musicActionLabel = musicIsActive ? "Stop music" : "Play music";
   const shareActionLabel =
@@ -854,90 +933,32 @@ export function PhotoPlayer({ photos, initialIndex, scope, onClose }: PhotoPlaye
         </div>
       </div>
 
-      <div className="player-controls">
-        <button
-          className="icon-button"
-          type="button"
-          onClick={() => navigateManually(-1)}
-          disabled={atStart}
-          aria-label="Previous photo"
-          title="Previous photo"
-        >
-          <ChevronLeft size={24} strokeWidth={2.2} />
-        </button>
-        <button
-          className="icon-button icon-button--primary"
-          type="button"
-          onClick={toggleFromPrimaryControl}
-          aria-label={primaryActionLabel}
-          title={primaryActionLabel}
-        >
-          {primaryActionLabel === "Pause" ? <Pause size={22} strokeWidth={2.4} /> : <Play size={22} strokeWidth={2.4} />}
-        </button>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={() => navigateManually(1)}
-          disabled={atEnd}
-          aria-label="Next photo"
-          title="Next photo"
-        >
-          <ChevronRight size={24} strokeWidth={2.2} />
-        </button>
-        <button
-          className={`icon-button icon-button--music ${musicIsActive ? "is-selected" : ""}`}
-          type="button"
-          onClick={toggleMusic}
-          aria-label={musicActionLabel}
-          aria-pressed={musicIsActive}
-          title={musicActionLabel}
-        >
-          <Music size={21} strokeWidth={2.35} />
-        </button>
-        <button
-          className={`icon-button icon-button--share ${shareStatus === "copied" ? "is-selected" : ""}`}
-          type="button"
-          onClick={() => void shareCurrentPhoto()}
-          aria-label={shareActionLabel}
-          aria-pressed={shareStatus === "copied"}
-          title={shareActionLabel}
-        >
-          {shareStatus === "copied" ? <Check size={21} strokeWidth={2.35} /> : <Share2 size={21} strokeWidth={2.35} />}
-        </button>
-        <span className="sr-only" aria-live="polite">
-          {shareStatus === "copied" ? "Share link copied" : shareStatus === "failed" ? "Share link failed" : ""}
-        </span>
+      <PlayerControls
+        atStart={atStart}
+        atEnd={atEnd}
+        primaryActionLabel={primaryActionLabel}
+        delayMs={playerState.delayMs}
+        speedMenuOpen={controlState.speedMenuOpen}
+        musicActionLabel={musicActionLabel}
+        musicIsActive={musicIsActive}
+        shareActionLabel={shareActionLabel}
+        shareIsActive={shareStatus === "copied"}
+        screenModeActive={isScreenModeActive}
+        onPrevious={() => navigateManually(-1)}
+        onTogglePlayback={toggleFromPrimaryControl}
+        onNext={() => navigateManually(1)}
+        onToggleSpeedMenu={toggleSpeedMenu}
+        onCloseSpeedMenu={closeSpeedMenu}
+        onSelectSpeed={selectSpeed}
+        onToggleMusic={toggleMusic}
+        onShare={() => void shareCurrentPhoto()}
+        onToggleScreenMode={toggleScreenMode}
+        onReveal={revealControls}
+      />
 
-        <div className="speed-control" aria-label="Seconds per photo">
-          {SPEED_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              className={option.value === playerState.delayMs ? "is-selected" : ""}
-              type="button"
-              onClick={() => {
-                dispatch({ type: "CHANGE_SPEED", delayMs: option.value });
-                revealControls();
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="image-mode-control" role="group" aria-label="Image sizing">
-          <button
-            className={imageMode === "expanded" ? "is-selected" : ""}
-            type="button"
-            onClick={() => {
-              setImageMode((currentMode) => (currentMode === "expanded" ? "fit" : "expanded"));
-              revealControls();
-            }}
-            aria-pressed={imageMode === "expanded"}
-          >
-            {fullscreenActionLabel}
-          </button>
-        </div>
-      </div>
+      <span className="sr-only" aria-live="polite">
+        {shareStatus === "copied" ? "Share link copied" : shareStatus === "failed" ? "Share link failed" : ""}
+      </span>
 
       <div className="player-progress" aria-hidden="true">
         <span style={{ transform: `scaleX(${photos.length <= 1 ? 1 : currentIndex / (photos.length - 1)})` }} />

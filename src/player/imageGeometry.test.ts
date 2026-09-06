@@ -61,6 +61,7 @@ describe("calculateImageGeometry", () => {
 
   it("keeps fit mode inside the player control clearance", () => {
     const clearance = playerFitClearance(390, 844);
+    expect(clearance).toEqual({ vertical: 134, horizontal: 24 });
     const geometry = calculateImageGeometry({
       sourceWidth: 640,
       sourceHeight: 480,
@@ -72,6 +73,6 @@ describe("calculateImageGeometry", () => {
     });
 
     expect(geometry.renderedWidth).toBeLessThanOrEqual(366);
-    expect(geometry.renderedHeight).toBeLessThanOrEqual(642);
+    expect(geometry.renderedHeight).toBeLessThanOrEqual(710);
   });
 });

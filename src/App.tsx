@@ -4,6 +4,7 @@ import { buildJustifiedRows, type JustifiedItem } from "./lib/justifiedRows";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { validateCatalog } from "./data/manifestValidation";
 import { type LoadedAlbumSummary, type YearCollection, useYearCollection } from "./data/useYearCollection";
+import { exitDocumentFullscreen, requestDocumentFullscreen } from "./player/fullscreen";
 import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog, CatalogYear, Photo } from "./types";
 
@@ -844,6 +845,7 @@ function App() {
   const [restorePhotoId, setRestorePhotoId] = useState<string | null>(null);
   const selectedYearRef = useRef<string | null>(null);
   const activePhotoIdRef = useRef<string | null>(null);
+  const fullscreenLaunchPhotoIdRef = useRef<string | null>(null);
   const pendingClosePhotoIdRef = useRef<string | null>(null);
   const initializedYearRef = useRef(false);
 
@@ -903,6 +905,7 @@ function App() {
     }
 
     const handlePopState = () => {
+      fullscreenLaunchPhotoIdRef.current = null;
       const nextYear = readUrlYear(catalog) || selectedYearRef.current || readStoredYear(catalog) || newestCatalogYear(catalog);
       const nextPhotoId = readUrlPhotoId();
       const previousActivePhotoId = activePhotoIdRef.current;
@@ -992,6 +995,7 @@ function App() {
       }
 
       saveCurrentScrollPosition();
+      fullscreenLaunchPhotoIdRef.current = null;
       setActivePhotoId(null);
       setRestorePhotoId(null);
       setSelectedYear(year);
@@ -1014,6 +1018,14 @@ function App() {
       }
 
       const photoYear = displayCollection.year;
+      fullscreenLaunchPhotoIdRef.current = photo.id;
+      // The native request must start inside the originating grid click. The
+      // player still opens expanded when this API is unsupported or rejected.
+      void requestDocumentFullscreen().then((entered) => {
+        if (entered && fullscreenLaunchPhotoIdRef.current !== photo.id) {
+          void exitDocumentFullscreen();
+        }
+      });
       setRestorePhotoId(photo.id);
       setActivePhotoId(photo.id);
       setSelectedYear(photoYear);
@@ -1024,6 +1036,7 @@ function App() {
   );
 
   const closePlayer = useCallback((photoId: string) => {
+    fullscreenLaunchPhotoIdRef.current = null;
     const restoreId = photoId || activePhotoIdRef.current;
     pendingClosePhotoIdRef.current = restoreId;
     const historyState = window.history.state as AppHistoryState | null;
@@ -1103,6 +1116,7 @@ function App() {
           key={`${displayCollection.year}:${activePhotoId}`}
           photos={displayCollection.photos}
           initialIndex={activePhotoIndex}
+          openInFullscreen={fullscreenLaunchPhotoIdRef.current === activePhotoId}
           scope={{ type: "year", year: displayCollection.year }}
           onClose={closePlayer}
         />

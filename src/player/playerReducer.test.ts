@@ -85,3 +85,32 @@ describe("playerReducer initial delay", () => {
     expect(duplicateReopenedReady.initialDelayToken).toBe(1);
   });
 });
+
+describe("playerReducer speed changes", () => {
+  it("changes only delay during the initial startup delay", () => {
+    const before = decoded(openPlayer());
+
+    expect(playerReducer(before, { type: "CHANGE_SPEED", delayMs: 500 })).toEqual({
+      ...before,
+      delayMs: 500
+    });
+  });
+
+  it("does not reset a temporary resume or move the current photo", () => {
+    const before = playerReducer(decoded(openPlayer()), { type: "MANUAL_NEXT" });
+    const changed = playerReducer(before, { type: "CHANGE_SPEED", delayMs: 1000 });
+
+    expect(changed).toEqual({ ...before, delayMs: 1000 });
+    expect(playerReducer(changed, { type: "TEMPORARY_RESUME" }).status).toBe("playing");
+  });
+
+  it("preserves active playback and natural end behavior", () => {
+    const playing = playerReducer(decoded(openPlayer(10, 12)), { type: "INITIAL_DELAY_COMPLETE" });
+    const changed = playerReducer(playing, { type: "CHANGE_SPEED", delayMs: 2000 });
+    const ended = playerReducer(playerReducer(changed, { type: "ADVANCE" }), { type: "ADVANCE" });
+
+    expect(changed).toEqual({ ...playing, delayMs: 2000 });
+    expect(ended.currentIndex).toBe(11);
+    expect(ended.status).toBe("ended");
+  });
+});

@@ -71,7 +71,7 @@ export function playerFitClearance(viewportWidth: number, viewportHeight: number
   if (viewportWidth <= 620) {
     return viewportWidth > viewportHeight && viewportHeight <= 460
       ? { vertical: 108, horizontal: 24 }
-      : { vertical: 202, horizontal: 24 };
+      : { vertical: 134, horizontal: 24 };
   }
 
   if (viewportWidth > viewportHeight && viewportHeight <= 460) {
