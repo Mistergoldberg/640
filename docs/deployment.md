@@ -21,34 +21,40 @@ time. All 22,722 updates completed with unchanged ETags. Public samples now retu
 `Cache-Control: public, max-age=14400, must-revalidate`. The uploader now uses the
 supported upload-header option and ordered filters for future publication.
 
-Phase 6 root-build and browser validation passed using public R2 media. No application release has been uploaded
-to the server and no live traffic has switched.
+Production deployment completed on 2026-09-06 from commit
+`d8aff6f18de93b1065eb4d7671b33e133357844a`. The exact 21-file root build is
+active through `/var/www/insertcatchytitlehere.com/current`, which points to
+`releases/20260906T150000Z-d8aff6f`. Nothing was pushed. Unrelated local website
+changes remain outside the deployment commit and were not staged or changed.
 
-The OAuth credential receives HTTP 403 for DNS record and zone SSL-setting reads;
-those checks still require an appropriately scoped credential or verified
-dashboard values. Only the dedicated R2 bucket, its generated derivative objects/cache metadata,
-and media custom-domain configuration have been changed remotely. No server files, apex or `www` DNS records,
-origin certificates, or live web-server configuration have been changed.
-The obsolete site has not been quarantined or deleted.
+Authenticated Cloudflare inspection confirmed the zone is active and uses its
+assigned Cloudflare nameservers. The apex remains a proxied A record to
+`5.161.223.134`. `www` was changed from a proxied A record to a proxied CNAME to
+`insertcatchytitlehere.com`. SSL/TLS was changed from Full to Full (strict) after
+validating the Cloudflare Origin Certificate. The R2-managed media record, mail
+records, nameservers and unrelated records were not modified. DNSSEC is disabled
+and was recorded without changing it.
 
-The initial remediation checkpoint is
-`fb345800b73bb612260c368f858c1201337a4034`
-(`refactor: stabilize 640x480 player and navigation`). It was built locally after
-commit; nothing was pushed. Unrelated website changes remain outside that commit.
+The former domain-only document root was quarantined during cutover and deleted
+only after origin and public validation passed. It contained 605 regular files
+and 164,609,161 bytes. The content was not backed up and is no longer
+recoverable. A root-only administrative inventory and the previous Nginx virtual
+host remain under the domain-specific server backup.
 
-Verified preflight results:
+Verified deployment results:
 
 - 26 Vitest tests passed; TypeScript and the production root build passed.
-- Browser checks with local derivatives passed selected-year metadata loading,
-  all year totals, direct photo refresh, Back/Forward, share-link copying,
-  fit/expanded modes, grid virtualization and desktop/mobile timeline navigation.
-  Measured opening delay was about 3.12 seconds after a deliberately delayed
-  decode. Five-second manual resume and persistent explicit pause passed.
-  The same timing and sharing checks passed with public R2 media. SoundCloud
-  loads its playlist. A SoundCloud cleanup crash and zero-size iframe canvas
-  errors were corrected; history, refresh and console regression checks passed.
-  Mobile touch navigation, portrait fit geometry and touch timeline scrubbing
-  also passed. Production application-origin checks remain pending.
+- A clean production browser run passed 27 of 27 checks on desktop and mobile.
+  It covered selected-year-only metadata loading, all year totals, direct photo
+  refresh, Back/Forward, sharing, fit/expanded modes, timeline navigation,
+  portrait and landscape media, SoundCloud, and browser errors. The measured
+  opening delay was 3.307 seconds after decoded readiness; manual resume was
+  5.364 seconds; explicit pause remained paused.
+- A 12-second production playback sample at 0.1 seconds per photograph advanced
+  from photograph 10 to 130 with no buffering observations, failed application
+  or media requests, console errors or page errors. Production behavior did not
+  differ materially from the previously completed clean five-minute local test,
+  so the five-minute test was not repeated.
 - Release audit: 22,722 JPG derivatives, 605,516,997 bytes, 11,361 photographs.
 - No missing or unreferenced assets, decode failures, embedded metadata, unsafe
   asset keys, private manifest fields, or local source paths.
@@ -57,19 +63,20 @@ Verified preflight results:
 - Upload dry run: 22,722 objects, 577.47 MiB, zero deletions, no upload.
 - Validated root build: 21 files, 4,625,870 bytes; HTML, JS, CSS and JSON only.
   There is no generated photo library, source map, original image or secret.
-- Server: Ubuntu 24.04.2 LTS, Nginx 1.24.0, approximately 14 GiB available.
-- The domain root was resolved from effective Nginx configuration, canonicalized,
-  and inventoried. It contains 605 regular files totaling 164,609,161 bytes. One
-  internal dependency symlink resolves within that root. Its parent contains
-  unrelated material and must never be cleaned as part of this deployment.
-- The configured Cloudflare Origin Certificate covers the apex and wildcard and
-  has validity dates through December 2040. Cloudflare's actual SSL mode and
-  origin DNS target still require authenticated verification.
-- Public apex HTTPS returns 200 and HTTP redirects to HTTPS. `www` currently
-  returns 200 rather than redirecting to apex. Cloudflare nameservers and proxy
-  responses are present. Authenticated zone status is active. The media hostname
-  is now attached to the new R2 bucket with active SSL. Apex and `www` DNS record
-  contents and zone SSL mode remain unverified because of the API responses above.
+- Server: Ubuntu 24.04.2 LTS, Nginx 1.24.0, approximately 14 GB available after
+  deployment. Nginx remained active and reported no new journal or error-log
+  entries during production validation.
+- The former root was resolved from effective Nginx configuration,
+  canonicalized and inventoried before deletion. Its parent contains unrelated
+  material that was not touched. The new exact document root is the `current`
+  release symlink above.
+- The configured Cloudflare Origin Certificate covers the apex and wildcard,
+  remains valid through December 2040, and verifies against Cloudflare's official
+  Origin CA root. Full (strict) reports an active certificate with no validation
+  errors.
+- Public apex HTTPS returns the exact release HTML. HTTP redirects to HTTPS and
+  `www` redirects to the apex while preserving paths and query strings. The
+  media hostname remains attached to R2 with active ownership and SSL.
 
 The exact server inventory and effective configuration are stored only in ignored
 local `640/generated/reports/deployment-*` files with restricted permissions.
@@ -77,9 +84,9 @@ They are not part of the public build or Git checkpoint.
 
 ## Architecture and public/private boundary
 
-The target is a static React/Vite application at
+The deployed site is a static React/Vite application at
 `https://insertcatchytitlehere.com/`, served by the existing Nginx server.
-`https://www.insertcatchytitlehere.com/` must redirect to the apex.
+`https://www.insertcatchytitlehere.com/` redirects to the apex.
 Generated media belongs in the dedicated R2 Standard bucket
 `insertcatchytitlehere-media`, exposed through
 `https://media.insertcatchytitlehere.com/`.
@@ -183,74 +190,70 @@ Compare the authenticated remote count and bytes against the local audit. Check
 representative checksums and public thumbnail/display URLs from every year.
 Never upload a broader directory and never use `sync --delete`.
 
-## Server release and rollback: pending
+## Server release and rollback
 
-Re-read effective Nginx configuration immediately before mutation. Reconfirm the
-domain's exclusive canonical root and save its exact inventory, byte count and
-configuration privately. Never substitute its parent or follow an unexplained
-symlink. Retain certificates, keys, configuration, logs, databases and other sites.
+The release was built outside the server root, uploaded to
+`/var/www/insertcatchytitlehere.com/releases/20260906T150000Z-d8aff6f`, and
+verified as 21 files and 4,625,870 bytes with an exact SHA-256 manifest match.
+Only HTML, JavaScript, CSS and JSON were uploaded. Directories are mode 0755 and
+files are mode 0644, owned by root; `www-data` can read and cannot write them.
 
-Prepare a fresh domain-specific `releases/<timestamp>-<commit>/` directory outside
-the live root on the same filesystem. Upload only the validated static `dist`.
-Compare every uploaded file against the local build inventory and hashes. Use
-readable, non-writable permissions for the web-server process.
+The Nginx virtual host was tested both in an isolated loopback listener and with
+the complete enabled-site configuration. Cutover moved the former root into a
+same-filesystem quarantine, activated the verified `current` release, installed
+the prepared domain-specific virtual host, tested syntax and reloaded Nginx. The
+quarantine remained available until all public checks passed, then was
+permanently removed as authorized.
 
-Prepare the minimum domain-specific Nginx change and test it before reload. Use an
-atomic `current` symlink switch if compatible with the verified arrangement, or
-an atomic same-filesystem rename of an adjacent staging directory. Do not copy
-incrementally over the live site. Keep old content in a timestamped, domain-only
-quarantine until public health checks pass.
+The active release is the known-good baseline for the next deployment. Future
+deployments must upload a new `releases/<timestamp>-<commit>/` directory, verify
+it, atomically change `current`, test Nginx and reload. Keep this release until
+the next release passes. Rollback then repoints `current` to this directory and
+reloads the validated Nginx configuration. The server backup retains the
+pre-deployment virtual host and former-site inventory, but not the deleted site
+content.
 
-Rollback before quarantine deletion restores the previous release pointer or
-quarantined directory and the saved domain configuration; validate Nginx and
-reload. Do not restart shared services. Delete only the exact verified quarantine
-after successful production checks. Record its former size and acknowledge that
-server recovery is unavailable after deletion unless a separate backup exists.
+## Hosting, caches and security
 
-## Hosting, caches and security: pending
-
-Use apex canonical HTTPS, HTTP-to-HTTPS and `www`-to-apex redirects, and Cloudflare
-Full (strict) with validated origin TLS. Preserve nameservers, mail and unrelated
-DNS records. Serve application routes statically with refresh support. Missing
-static assets and manifests must return 404, not the application HTML. Disable
-directory listing and access to private or obsolete paths. No Node proxy is needed.
+Nginx serves the Vite application directly from `current` at the apex. It
+provides SPA fallback for application routes, while missing static assets,
+manifests, Markdown, PHP and dotfiles return 404. HTTP redirects to canonical
+HTTPS and `www` redirects to the apex. Directory listing is disabled and no Node
+service or shared PHP change was introduced. Cloudflare uses Full (strict) with
+the validated origin certificate. Nameservers, mail and unrelated DNS records
+remain unchanged.
 
 - `index.html`: no-cache or must-revalidate.
 - Catalogue and JSON manifests: short cache or must-revalidate.
 - Content-hashed JS/CSS: long-lived immutable cache.
 - Stable media keys: conservative cache as described above.
 
-Test security headers against actual browser requests. The app currently uses
-R2 images, a SoundCloud iframe and widget API, Google Fonts, and React inline
-styles for image geometry and virtualization. Any future CSP must explicitly account for
-these resources and styles. The prepared domain configuration uses nosniff,
-frame denial and a strict-origin-when-cross-origin referrer policy without a CSP. Preserve clipboard/native sharing behavior. Verify
-the effective policy in the browser; configuration syntax alone is insufficient.
+Production responses include `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` and a
+Permissions Policy disabling camera, microphone and geolocation. No CSP was
+introduced. Browser validation confirmed that R2 images, SoundCloud, inline
+geometry, clipboard sharing and application controls remain functional.
 
-## Release validation: pending
+## Release validation
 
-Preview the exact root build locally with production R2 media before server
-mutation. Then repeat through the public Cloudflare URL on desktop and mobile:
-all year totals, selected-year-only metadata loading, album failure isolation,
-grid virtualization, timeline scrubbing, scroll restoration, direct year/photo
-URL refresh, Back/Forward, fit/expanded modes, portrait/landscape images,
-SoundCloud, sharing, 404 behavior, public/private boundaries and browser errors.
+The public Cloudflare path passed deterministic HTTP checks for exact release
+HTML, SPA refreshes, apex and `www` redirects, MIME types, 404s, public/private
+boundaries and cache/security headers. Representative thumbnail and display
+objects from 2001, 2002 and 2013 returned HTTPS 200 with `image/jpeg` and the
+expected conservative cache policy.
 
-Measure the three-second opening delay from the first decoded image, five-second
-manual resume, and persistent explicit pause. The existing reducer unit tests
-cover state transitions; they do not establish real browser timing. Also verify
-decoded readiness before setting the rolling-buffer ready flag.
+The production browser run passed all 27 recorded assertions in Chrome 150 at
+desktop and mobile viewports. Totals were 4,213 for 2013, 479 for 2002 and 6,669
+for 2001. Each selected year requested only its own index and album manifests.
+Direct year/photo refreshes, Back/Forward, desktop and mobile timeline controls,
+fit/expanded views, portrait/landscape decoding, sharing and SoundCloud passed
+without app/media request failures, console errors or page errors.
 
-Run at least five minutes of 2013 playback at 0.1 seconds per photograph where
-practical. Record failed image requests, buffering, R2/cache behavior, Nginx errors
-and server resource use. The first preview run loaded public R2 images smoothly for over four minutes
-before the Mac suspended network activity. It is not a successful five-minute
-result. The clean rerun completed 300 seconds and reached photograph 2,971 at the
-default 0.1-second speed, with 3,057 image responses, no failed image requests,
-no page errors and zero buffering observations at one-second sampling. Idle
-sleep was inhibited only for the test process.
-The application is still local in these tests; a separate public apex run is
-required after the eventual server switch.
+The existing clean five-minute local playback result remains the long playback
+baseline: 300 seconds, photograph 2,971 at 0.1 seconds per photograph, 3,057
+image responses, no failed image requests, no page errors and zero sampled
+buffering. The short production run advanced 120 photographs in 12 seconds with
+the same clean result, so the five-minute test was not repeated.
 
 ## Adding future years and curator corrections
 
