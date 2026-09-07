@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { assetUrl, mediaUrl } from "./lib/assets";
 import { buildJustifiedRows, type JustifiedItem } from "./lib/justifiedRows";
 import { useElementWidth } from "./hooks/useElementWidth";
@@ -8,6 +8,24 @@ import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
 import { historyModeForIntent } from "./archive/archiveHistory";
+import {
+  ARCHIVE_HISTORY_APP,
+  archiveCatalogueIdentity,
+  archiveRestorationReducer,
+  createArchiveRestorationState,
+  createArchiveRestorationTarget,
+  createHistoryEntryId,
+  createStoredArchiveAnchor,
+  ownedLegacyRestorationKeys,
+  readArchiveHistoryState,
+  resolveAnchorAgainstStableIds,
+  resolveNavigationRestoration,
+  restorationIsPending,
+  type ArchiveHistoryState,
+  type ArchiveRestorationState,
+  type ArchiveRestorationTarget,
+  type StoredArchiveAnchor
+} from "./archive/archiveRestoration";
 import {
   buildArchiveGeometry,
   activeYearAtScroll,
@@ -30,10 +48,6 @@ const STREAM_MOSAIC_MIN_WINDOW_PHOTOS = 24;
 const STREAM_MOSAIC_MAX_WINDOW_PHOTOS = 44;
 const RESTORE_OFFSET_PX = 112;
 const ARCHIVE_JUMP_OFFSET_PX = 196;
-const APP_HISTORY_KEY = "640x480";
-const SELECTED_YEAR_STORAGE_KEY = "640x480-selected-year";
-const YEAR_SCROLL_STORAGE_PREFIX = "640x480-scroll";
-const ARCHIVE_ANCHOR_STORAGE_PREFIX = "640x480-anchor";
 
 type PreviewShape = "square" | "landscape" | "portrait";
 
@@ -145,14 +159,6 @@ type CatalogLoadState =
   | { status: "error"; message: string }
   | { status: "ready"; catalog: Catalog };
 
-interface AppHistoryState {
-  app?: string;
-  year?: string;
-  photoId?: string | null;
-  view?: "grid" | "photo";
-  fromGrid?: boolean;
-}
-
 function sortPhotos(photos: Photo[]) {
   return [...photos].sort((left, right) => left.sortPosition - right.sortPosition);
 }
@@ -200,19 +206,6 @@ function folderLabelFromName(name: string, year: string) {
   return displayName;
 }
 
-function newestCatalogYear(catalog: Catalog) {
-  return orderedArchiveYears(catalog)[0]?.year || null;
-}
-
-function readUrlYear(catalog: Catalog) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const year = new URL(window.location.href).searchParams.get("year");
-  return yearExists(catalog, year) ? year : null;
-}
-
 function readUrlPhotoId() {
   if (typeof window === "undefined") {
     return null;
@@ -225,7 +218,14 @@ function currentPath() {
   return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
-function updateUrlState(year: string, photoId: string | null, mode: "push" | "replace", fromGrid = false) {
+function updateUrlState(
+  year: string,
+  photoId: string | null,
+  mode: "push" | "replace",
+  catalogueId: string,
+  fromGrid = false,
+  anchor?: Partial<Pick<StoredArchiveAnchor, "entryId" | "albumId" | "photoId" | "adjustmentPx">>
+) {
   const nextUrl = new URL(window.location.href);
   nextUrl.searchParams.set("year", year);
 
@@ -236,59 +236,61 @@ function updateUrlState(year: string, photoId: string | null, mode: "push" | "re
   }
 
   const nextPath = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
-  const nextState: AppHistoryState = {
-    app: APP_HISTORY_KEY,
+  const currentState = readArchiveHistoryState(window.history.state);
+  const entryId = anchor?.entryId || (mode === "replace" ? currentState?.entryId : null) || createHistoryEntryId();
+  const restoration = createStoredArchiveAnchor({
+    catalogueId,
+    entryId,
+    year,
+    albumId: anchor?.albumId || null,
+    photoId: anchor?.photoId === undefined ? photoId : anchor.photoId,
+    adjustmentPx: anchor?.adjustmentPx || 0
+  });
+  const nextState: ArchiveHistoryState = {
+    app: ARCHIVE_HISTORY_APP,
+    entryId,
     year,
     photoId,
     view: photoId ? "photo" : "grid",
-    fromGrid: Boolean(photoId && fromGrid)
+    fromGrid: Boolean(photoId && fromGrid),
+    restoration
   };
 
   if (mode === "replace") {
     window.history.replaceState(nextState, "", nextPath);
-    return;
+    return restoration;
   }
 
   if (nextPath !== currentPath()) {
     window.history.pushState(nextState, "", nextPath);
   }
+
+  return restoration;
 }
 
-function readStoredYear(catalog: Catalog) {
-  if (typeof window === "undefined") {
-    return null;
-  }
+function replaceCurrentHistoryAnchor(catalogueId: string, anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) {
+  const state = readArchiveHistoryState(window.history.state);
+  if (!state || state.restoration.catalogueId !== catalogueId || state.view !== "grid") return;
+  const restoration = createStoredArchiveAnchor({ ...anchor, catalogueId, entryId: state.entryId });
+  window.history.replaceState({ ...state, year: anchor.year, restoration }, "", currentPath());
+}
 
+function clearOwnedLegacyRestorationState(years: readonly string[]) {
   try {
-    const year = window.localStorage.getItem(SELECTED_YEAR_STORAGE_KEY);
-    return yearExists(catalog, year) ? year : null;
+    window.localStorage.removeItem("640x480-selected-year");
   } catch {
-    return null;
+    // Storage may be disabled; legacy values are ignored regardless.
   }
-}
-
-function resolveInitialYear(catalog: Catalog) {
-  return readUrlYear(catalog) || readStoredYear(catalog) || newestCatalogYear(catalog);
-}
-
-function writeStoredYear(year: string) {
   try {
-    window.localStorage.setItem(SELECTED_YEAR_STORAGE_KEY, year);
+    for (const key of ownedLegacyRestorationKeys(years).slice(1)) window.sessionStorage.removeItem(key);
   } catch {
-    // Local storage may be disabled; URL state still carries the selected year.
+    // Storage may be disabled; legacy values are ignored regardless.
   }
 }
 
-function scrollStorageKey(year: string) {
-  return `${YEAR_SCROLL_STORAGE_PREFIX}:${year}`;
-}
-
-function writeStoredScrollPosition(year: string, scrollY: number) {
-  try {
-    window.sessionStorage.setItem(scrollStorageKey(year), String(Math.max(0, Math.round(scrollY))));
-  } catch {
-    // Session storage may be disabled; year switching still works.
-  }
+function navigationType() {
+  const entry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  return entry?.type || "navigate";
 }
 
 async function fetchJson(url: string): Promise<unknown> {
@@ -904,7 +906,7 @@ function findAlbumAtTop(layout: GridLayout, virtualTop: number) {
   }
 
   const boundedTop = clamp(virtualTop, 0, Math.max(0, layout.totalHeight));
-  let activeAlbum = layout.albumAnchors[0];
+  let activeAlbum: AlbumAnchor | null = null;
 
   for (const album of layout.albumAnchors) {
     if (boundedTop < album.top) {
@@ -920,48 +922,32 @@ function findAlbumAtTop(layout: GridLayout, virtualTop: number) {
   return activeAlbum;
 }
 
+function findStableAlbumAtTop(layout: GridLayout, virtualTop: number) {
+  return layout.albumAnchors.find((album) => virtualTop >= album.top && virtualTop <= album.bottom) || null;
+}
+
+function findStablePhotoAtTop(layout: GridLayout, virtualTop: number) {
+  const entry = layout.entries.find((candidate) =>
+    (candidate.type === "row" || candidate.type === "mosaic") &&
+    virtualTop >= candidate.top &&
+    virtualTop <= candidate.top + candidate.height
+  );
+  return entry && (entry.type === "row" || entry.type === "mosaic") ? entry.items[0]?.photo.id || null : null;
+}
+
 function escapeCssAttribute(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-interface StoredArchiveAnchor {
-  year: string;
-  albumId?: string | null;
-  photoId?: string | null;
-}
-
-function archiveAnchorStorageKey(year: string) {
-  return `${ARCHIVE_ANCHOR_STORAGE_PREFIX}:${year}`;
-}
-
-function readStoredArchiveAnchor(year: string): StoredArchiveAnchor | null {
-  try {
-    const value = window.sessionStorage.getItem(archiveAnchorStorageKey(year));
-    if (!value) return null;
-    const parsed = JSON.parse(value) as StoredArchiveAnchor;
-    return parsed.year === year ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredArchiveAnchor(anchor: StoredArchiveAnchor) {
-  try {
-    window.sessionStorage.setItem(archiveAnchorStorageKey(anchor.year), JSON.stringify(anchor));
-  } catch {
-    // URL state remains available when session storage is disabled.
-  }
 }
 
 function App() {
   const catalogState = useCatalog();
   const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
+  const catalogueId = useMemo(() => catalog ? archiveCatalogueIdentity(catalog) : "", [catalog]);
   const [archiveStartYear, setArchiveStartYear] = useState<string | null>(null);
   const [activeYear, setActiveYear] = useState<string | null>(null);
-  const [scrollTarget, setScrollTarget] = useState<StoredArchiveAnchor | null>(null);
+  const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [activePhotoYear, setActivePhotoYear] = useState<string | null>(null);
-  const [restorePhotoId, setRestorePhotoId] = useState<string | null>(null);
   const activeYearRef = useRef<string | null>(null);
   const activePhotoIdRef = useRef<string | null>(null);
   const activePhotoYearRef = useRef<string | null>(null);
@@ -987,50 +973,61 @@ function App() {
 
   useEffect(() => {
     if (!catalog || initializedRef.current) return;
-    const year = resolveInitialYear(catalog);
-    if (!year) return;
-    initializedRef.current = true;
+    const target = resolveNavigationRestoration({
+      catalog,
+      href: window.location.href,
+      historyState: window.history.state,
+      navigationType: navigationType()
+    });
     const photoId = readUrlPhotoId();
-    const urlHasYear = new URL(window.location.href).searchParams.has("year");
-    const storedAnchor = !photoId && !urlHasYear ? readStoredArchiveAnchor(year) : null;
-    setArchiveStartYear(year);
-    setActiveYear(year);
-    setScrollTarget(photoId ? { year, photoId } : storedAnchor || { year });
+    initializedRef.current = true;
+    clearOwnedLegacyRestorationState(catalog.years.map(({ year }) => year));
+    setArchiveStartYear(target.year);
+    setActiveYear(target.year);
+    dispatchRestoration({ type: "request", target });
     if (photoId) {
       setActivePhotoId(photoId);
-      setActivePhotoYear(year);
-      setRestorePhotoId(photoId);
+      setActivePhotoYear(target.year);
     }
-    writeStoredYear(year);
-    updateUrlState(year, photoId, "replace", Boolean((window.history.state as AppHistoryState | null)?.fromGrid));
+    const previousState = readArchiveHistoryState(window.history.state);
+    updateUrlState(target.year, photoId, "replace", catalogueId, Boolean(previousState?.fromGrid), target);
   }, [catalog]);
 
   useEffect(() => {
     if (!catalog) return;
     const handlePopState = () => {
       fullscreenLaunchPhotoIdRef.current = null;
-      const year = readUrlYear(catalog) || activeYearRef.current || newestCatalogYear(catalog);
-      if (!year) return;
       const photoId = readUrlPhotoId();
-      loadYear(year, "history");
-      setActiveYear(year);
-      setScrollTarget(photoId ? { year, photoId } : readStoredArchiveAnchor(year) || { year });
+      let target = resolveNavigationRestoration({
+        catalog,
+        href: window.location.href,
+        historyState: window.history.state,
+        navigationType: "back_forward"
+      });
+      const restoreId = !photoId ? pendingClosePhotoIdRef.current || activePhotoIdRef.current : null;
+      if (restoreId) {
+        target = createArchiveRestorationTarget(createStoredArchiveAnchor({
+          catalogueId,
+          entryId: target.entryId,
+          year: target.year,
+          photoId: restoreId
+        }), "photo-close", true);
+      }
+      loadYear(target.year, "history");
+      setActiveYear(target.year);
+      dispatchRestoration({ type: "request", target });
       if (photoId) {
         setActivePhotoId(photoId);
-        setActivePhotoYear(year);
-        setRestorePhotoId(photoId);
+        setActivePhotoYear(target.year);
       } else {
-        const restoreId = pendingClosePhotoIdRef.current || activePhotoIdRef.current;
         setActivePhotoId(null);
         setActivePhotoYear(null);
-        setRestorePhotoId(restoreId);
       }
       pendingClosePhotoIdRef.current = null;
-      writeStoredYear(year);
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [catalog, loadYear]);
+  }, [catalog, catalogueId, loadYear]);
 
   useEffect(() => {
     if (!activePhotoId || !activePhotoYear) return;
@@ -1043,21 +1040,19 @@ function App() {
     if (!state.collection.photos.some((photo) => photo.id === activePhotoId)) {
       setActivePhotoId(null);
       setActivePhotoYear(null);
-      setRestorePhotoId(null);
-      updateUrlState(activePhotoYear, null, "replace");
+      updateUrlState(activePhotoYear, null, "replace", catalogueId);
     }
-  }, [activePhotoId, activePhotoYear, loadYear, states]);
+  }, [activePhotoId, activePhotoYear, catalogueId, loadYear, states]);
 
   const handleVisibleYearChange = useCallback((year: string, shouldLoad = true) => {
     if (!catalog || !yearExists(catalog, year)) return;
     if (year !== activeYearRef.current) {
       activeYearRef.current = year;
       setActiveYear(year);
-      writeStoredYear(year);
-      if (!readUrlPhotoId()) updateUrlState(year, null, "replace");
+      if (!readUrlPhotoId()) updateUrlState(year, null, "replace", catalogueId);
     }
     if (shouldLoad) loadYear(year, "adjacent");
-  }, [catalog, loadYear]);
+  }, [catalog, catalogueId, loadYear]);
 
   const openPhoto = useCallback((year: string, photoId: string) => {
     const collection = collections.get(year);
@@ -1066,29 +1061,29 @@ function App() {
     void requestDocumentFullscreen().then((entered) => {
       if (entered && fullscreenLaunchPhotoIdRef.current !== photoId) void exitDocumentFullscreen();
     });
-    setRestorePhotoId(photoId);
     setActivePhotoId(photoId);
     setActivePhotoYear(year);
-    writeStoredYear(year);
-    updateUrlState(year, photoId, historyModeForIntent("photo"), true);
-  }, [collections]);
+    updateUrlState(year, photoId, historyModeForIntent("photo"), catalogueId, true, { photoId });
+  }, [catalogueId, collections]);
 
   const closePlayer = useCallback((photoId: string) => {
     fullscreenLaunchPhotoIdRef.current = null;
     const restoreId = photoId || activePhotoIdRef.current;
     const year = activePhotoYearRef.current || activeYearRef.current;
     pendingClosePhotoIdRef.current = restoreId;
-    const historyState = window.history.state as AppHistoryState | null;
-    if (readUrlPhotoId() && historyState?.app === APP_HISTORY_KEY && historyState.view === "photo" && historyState.fromGrid) {
+    const historyState = readArchiveHistoryState(window.history.state);
+    if (readUrlPhotoId() && historyState?.view === "photo" && historyState.fromGrid) {
       window.history.back();
       return;
     }
-    if (year) updateUrlState(year, null, "replace");
+    if (year) {
+      const anchor = updateUrlState(year, null, "replace", catalogueId, false, { photoId: restoreId });
+      dispatchRestoration({ type: "request", target: createArchiveRestorationTarget(anchor, "photo-close", true) });
+    }
     setActivePhotoId(null);
     setActivePhotoYear(null);
-    setRestorePhotoId(restoreId);
     pendingClosePhotoIdRef.current = null;
-  }, []);
+  }, [catalogueId]);
 
   if (catalogState.status === "loading") return <SystemState title="640×480" message={catalogState.message} />;
   if (catalogState.status === "error") return <SystemState title="640×480" message={catalogState.message} />;
@@ -1101,10 +1096,21 @@ function App() {
         states={states}
         timelineModel={timelineModel}
         activeYear={activeYear}
-        scrollTarget={scrollTarget}
-        restorePhotoId={restorePhotoId}
-        onScrollTargetComplete={() => setScrollTarget(null)}
-        onRestoreComplete={() => setRestorePhotoId(null)}
+        restoration={restoration}
+        onRestorationWait={(generation) => dispatchRestoration({ type: "wait-for-layout", generation })}
+        onRestorationApply={(generation) => dispatchRestoration({ type: "apply", generation })}
+        onRestorationSettle={(generation, visibleYear) => {
+          dispatchRestoration({ type: "settle", generation, visibleYear });
+          handleVisibleYearChange(visibleYear, false);
+        }}
+        onRestorationCancel={(generation) => dispatchRestoration({ type: "cancel", generation })}
+        onPersistAnchor={(anchor) => {
+          if (!activePhotoIdRef.current) replaceCurrentHistoryAnchor(catalogueId, anchor);
+        }}
+        onPushArchiveTarget={(target) => updateUrlState(target.year, null, historyModeForIntent("jump"), catalogueId, false, {
+          albumId: target.albumId,
+          photoId: null
+        })}
         onVisibleYearChange={handleVisibleYearChange}
         onOpenPhoto={openPhoto}
         onRequestYear={(year, reason) => loadYear(year, reason)}
@@ -1140,10 +1146,13 @@ function ContinuousCollectionGrid({
   states,
   timelineModel,
   activeYear,
-  scrollTarget,
-  restorePhotoId,
-  onScrollTargetComplete,
-  onRestoreComplete,
+  restoration,
+  onRestorationWait,
+  onRestorationApply,
+  onRestorationSettle,
+  onRestorationCancel,
+  onPersistAnchor,
+  onPushArchiveTarget,
   onVisibleYearChange,
   onOpenPhoto,
   onRequestYear,
@@ -1154,10 +1163,13 @@ function ContinuousCollectionGrid({
   states: Map<string, ArchiveYearState>;
   timelineModel: ReturnType<typeof buildArchiveTimelineModel>;
   activeYear: string;
-  scrollTarget: StoredArchiveAnchor | null;
-  restorePhotoId: string | null;
-  onScrollTargetComplete: () => void;
-  onRestoreComplete: () => void;
+  restoration: ArchiveRestorationState;
+  onRestorationWait: (generation: number) => void;
+  onRestorationApply: (generation: number) => void;
+  onRestorationSettle: (generation: number, visibleYear: string) => void;
+  onRestorationCancel: (generation: number) => void;
+  onPersistAnchor: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
+  onPushArchiveTarget: (target: ArchiveTarget) => void;
   onVisibleYearChange: (year: string, shouldLoad?: boolean) => void;
   onOpenPhoto: (year: string, photoId: string) => void;
   onRequestYear: (year: string, reason: "adjacent" | "scrub" | "history") => void;
@@ -1167,6 +1179,7 @@ function ContinuousCollectionGrid({
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const viewport = useViewport();
   const previousLayoutRef = useRef<GridLayout | null>(null);
+  const restorationRef = useRef(restoration);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const targetHeight = width < 520 ? 118 : width < 900 ? 146 : 174;
   const gap = width < 520 ? 3 : 4;
@@ -1203,23 +1216,33 @@ function ContinuousCollectionGrid({
     ? Math.max(0, Math.min(1, (localViewportTop + ARCHIVE_JUMP_OFFSET_PX - currentAlbum.top) / Math.max(1, currentAlbum.bottom - currentAlbum.top)))
     : 0;
   const activeRatio = archiveRatioForLocation(timelineModel, currentYear, currentAlbum?.id || null, activeAlbumProgress);
+  const restorationPending = restorationIsPending(restoration);
+  const allIndexesSettled = years.every((year) => states.get(year)?.status !== "index-loading");
+
+  useLayoutEffect(() => {
+    restorationRef.current = restoration;
+  }, [restoration]);
 
   useLayoutEffect(() => {
     const previous = previousLayoutRef.current;
     previousLayoutRef.current = layout;
-    if (!previous || !ref.current || previous.totalHeight === layout.totalHeight) return;
+    // Partial indexes can put the first known album in a later year. Until the
+    // authoritative target settles, those estimates are not a visible anchor.
+    if (restorationPending || !width || !previous || !ref.current || previous.totalHeight === layout.totalHeight) return;
     const oldLocalTop = window.scrollY - (ref.current.getBoundingClientRect().top + window.scrollY) + ARCHIVE_JUMP_OFFSET_PX;
-    const oldAlbum = findAlbumAtTop(previous, oldLocalTop);
-    const oldPhoto = [...previous.photoTops].find(([, top]) => top >= oldLocalTop - 20)?.[0];
+    const oldAlbum = findStableAlbumAtTop(previous, oldLocalTop);
+    const oldPhoto = findStablePhotoAtTop(previous, oldLocalTop);
     const previousTop = oldPhoto ? previous.photoTops.get(oldPhoto) : oldAlbum?.top;
-    const nextTop = oldPhoto ? layout.photoTops.get(oldPhoto) : layout.albumAnchors.find((album) => album.year === oldAlbum?.year && album.id === oldAlbum.id)?.top;
+    const nextTop = oldPhoto ? layout.photoTops.get(oldPhoto) : oldAlbum
+      ? layout.albumAnchors.find((album) => album.year === oldAlbum.year && album.id === oldAlbum.id)?.top
+      : undefined;
     const correction = stableAnchorCorrection(previousTop, nextTop);
     if (Math.abs(correction) > 0.5) window.scrollBy({ top: correction, behavior: "auto" });
-  }, [layout]);
+  }, [layout, restorationPending, width]);
 
   useEffect(() => {
-    if (currentYear && !scrollTarget) onVisibleYearChange(currentYear, !isScrubbing);
-  }, [currentYear, isScrubbing, onVisibleYearChange, scrollTarget]);
+    if (currentYear && !restorationPending) onVisibleYearChange(currentYear, !isScrubbing);
+  }, [currentYear, isScrubbing, onVisibleYearChange, restorationPending]);
 
   useEffect(() => {
     if (!width) return;
@@ -1235,46 +1258,85 @@ function ContinuousCollectionGrid({
     if (previous && distanceFromTop >= 0 && distanceFromTop < preloadDistance) onRequestYear(previous.year, "adjacent");
   }, [currentYear, geometry.years, localViewportTop, onRequestYear, states, viewport.height, width]);
 
-  useEffect(() => {
-    if (!scrollTarget || !ref.current || !width) return;
+  useLayoutEffect(() => {
+    if (restoration.phase === "pending-target") onRestorationWait(restoration.generation);
+  }, [onRestorationWait, restoration.generation, restoration.phase]);
+
+  useLayoutEffect(() => {
+    if (restoration.phase !== "waiting-for-layout" || !restoration.target || !ref.current || !width || !allIndexesSettled) return;
+    const sourceTarget = restoration.target;
+    const targetState = states.get(sourceTarget.year);
+    const layoutReady = targetState?.status === "ready" || targetState?.status === "error";
+    const resolved = resolveAnchorAgainstStableIds(sourceTarget, {
+      layoutReady,
+      albumIds: new Set(targetState?.index?.albums.map(({ id }) => id) || []),
+      photoIds: new Set(targetState?.collection?.photos.map(({ id }) => id) || [])
+    });
+    if (resolved.status === "waiting") return;
+    const target = resolved.anchor;
     let virtualTop: number | undefined;
-    if (scrollTarget.photoId) virtualTop = layout.photoTops.get(scrollTarget.photoId);
-    if (virtualTop === undefined && scrollTarget.albumId) {
-      virtualTop = layout.albumAnchors.find((album) => album.year === scrollTarget.year && album.id === scrollTarget.albumId)?.top;
+    if (target.photoId) virtualTop = layout.photoTops.get(target.photoId);
+    if (virtualTop === undefined && target.albumId) {
+      virtualTop = layout.albumAnchors.find((album) => album.year === target.year && album.id === target.albumId)?.top;
     }
-    if (virtualTop === undefined && !scrollTarget.photoId) virtualTop = layout.yearAnchors.find((year) => year.year === scrollTarget.year)?.top;
+    if (virtualTop === undefined) virtualTop = layout.yearAnchors.find((year) => year.year === target.year)?.top;
     if (virtualTop === undefined) return;
-    const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - (scrollTarget.photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX);
-    window.requestAnimationFrame(() => {
+    const generation = restoration.generation;
+    const baseOffset = target.photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
+    const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
+    const frame = window.requestAnimationFrame(() => {
+      if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
+      onRestorationApply(generation);
       window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled" || !ref.current) return;
+        const settledContainerTop = ref.current.getBoundingClientRect().top + window.scrollY;
+        const settledLocalTop = window.scrollY - settledContainerTop;
+        const visibleYear = activeYearAtScroll(geometry.years, settledLocalTop + ARCHIVE_JUMP_OFFSET_PX) || target.year;
+        if (sourceTarget.focusPhoto && target.photoId) {
+          ref.current.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(target.photoId)}"]`)?.focus({ preventScroll: true });
+        }
+        onRestorationSettle(generation, visibleYear);
+      }));
     });
-  }, [layout, scrollTarget, width]);
-
-  useEffect(() => {
-    if (!scrollTarget || currentYear !== scrollTarget.year) return;
-    if (scrollTarget.photoId && !layout.photoTops.has(scrollTarget.photoId)) return;
-    const frame = window.requestAnimationFrame(onScrollTargetComplete);
     return () => window.cancelAnimationFrame(frame);
-  }, [currentYear, layout.photoTops, onScrollTargetComplete, scrollTarget]);
+  }, [allIndexesSettled, geometry.years, layout.albumAnchors, layout.photoTops, layout.yearAnchors, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, states, width]);
 
   useEffect(() => {
-    if (!restorePhotoId || !ref.current || !layout.photoTops.has(restorePhotoId)) return;
-    const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + (layout.photoTops.get(restorePhotoId) || 0) - RESTORE_OFFSET_PX;
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
-      window.requestAnimationFrame(() => {
-        ref.current?.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(restorePhotoId)}"]`)?.focus({ preventScroll: true });
-        onRestoreComplete();
-      });
+    if (!restorationPending) return;
+    const generation = restoration.generation;
+    const cancel = () => onRestorationCancel(generation);
+    const cancelFromKey = (event: KeyboardEvent) => {
+      if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) cancel();
+    };
+    window.addEventListener("wheel", cancel, { passive: true });
+    window.addEventListener("touchstart", cancel, { passive: true });
+    window.addEventListener("pointerdown", cancel, { passive: true });
+    window.addEventListener("keydown", cancelFromKey);
+    return () => {
+      window.removeEventListener("wheel", cancel);
+      window.removeEventListener("touchstart", cancel);
+      window.removeEventListener("pointerdown", cancel);
+      window.removeEventListener("keydown", cancelFromKey);
+    };
+  }, [onRestorationCancel, restoration.generation, restorationPending]);
+
+  useEffect(() => {
+    if (!currentYear || (restoration.phase !== "settled" && restoration.phase !== "cancelled")) return;
+    const yearPhotos = indexByYear.get(currentYear);
+    const nearestPhoto = [...layout.photoTops]
+      .filter(([photoId]) => yearPhotos?.has(photoId))
+      .sort((left, right) => Math.abs(left[1] - (localViewportTop + RESTORE_OFFSET_PX)) - Math.abs(right[1] - (localViewportTop + RESTORE_OFFSET_PX)))[0];
+    const photoId = nearestPhoto?.[0] || null;
+    const anchorTop = nearestPhoto?.[1] ?? currentAlbum?.top ?? currentYearAnchor?.top ?? 0;
+    const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
+    onPersistAnchor({
+      year: currentYear,
+      albumId: currentAlbum?.id || null,
+      photoId,
+      adjustmentPx: localViewportTop - (anchorTop - baseOffset)
     });
-  }, [layout.photoTops, onRestoreComplete, restorePhotoId]);
-
-  useEffect(() => {
-    if (!currentYear) return;
-    const firstPhoto = [...layout.photoTops].find(([, top]) => top >= localViewportTop)?.[0] || null;
-    writeStoredArchiveAnchor({ year: currentYear, albumId: currentAlbum?.id || null, photoId: firstPhoto });
-    writeStoredScrollPosition(currentYear, viewport.scrollY);
-  }, [currentAlbum?.id, currentYear, layout.photoTops, localViewportTop, viewport.scrollY]);
+  }, [currentAlbum?.id, currentAlbum?.top, currentYear, currentYearAnchor?.top, indexByYear, layout.photoTops, localViewportTop, onPersistAnchor, restoration.phase]);
 
   const navigateToTarget = useCallback((target: ArchiveTarget, intent: "scrub" | "jump") => {
     if (!ref.current) return;
@@ -1292,11 +1354,11 @@ function ContinuousCollectionGrid({
     }
     const absoluteTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - ARCHIVE_JUMP_OFFSET_PX;
     window.scrollTo({ top: Math.max(0, absoluteTop), behavior: "auto" });
-    if (intent === "jump") updateUrlState(target.year, null, historyModeForIntent("jump"));
-  }, [geometry.years, timelineModel.years, viewport.height]);
+    if (intent === "jump") onPushArchiveTarget(target);
+  }, [geometry.years, onPushArchiveTarget, timelineModel.years, viewport.height]);
 
   return (
-    <main className="collection-shell">
+    <main className="collection-shell" data-restoration-phase={restoration.phase}>
       <header className="collection-chrome">
         <div className="app-bar">
           <div className="app-bar__identity">
@@ -1388,7 +1450,10 @@ function ContinuousCollectionGrid({
         formatAlbumName={folderLabelFromName}
         onNavigate={navigateToTarget}
         onRequestYear={(year) => onRequestYear(year, "scrub")}
-        onScrubStateChange={setIsScrubbing}
+        onScrubStateChange={(next) => {
+          setIsScrubbing(next);
+          if (next && restorationPending) onRestorationCancel(restoration.generation);
+        }}
       />
     </main>
   );
