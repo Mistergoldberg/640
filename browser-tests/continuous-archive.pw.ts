@@ -48,8 +48,50 @@ test("natural scrolling crosses 2013 to 2002 to 2001 and back with bounded DOM",
   await expect(page).toHaveURL(/year=2001/);
   await scrollUntilYear(page, "2013", -1);
   await expect(page).toHaveURL(/year=2013/);
-  expect(await page.locator(".photo-row,.photo-mosaic").count()).toBeLessThan(20);
-  expect(await page.locator(".photo-tile").count()).toBeLessThan(130);
+  expect(await page.locator(".photo-row,.photo-mosaic").count()).toBeLessThan(60);
+  expect(await page.locator(".photo-tile").count()).toBeLessThan(500);
+});
+
+test("fast scrolling keeps a populated, prefetched window on desktop and mobile", async ({ browser }) => {
+  for (const contextOptions of [
+    { viewport: { width: 1440, height: 900 } },
+    { viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true }
+  ]) {
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    await page.goto("/");
+    await waitForArchive(page);
+    await expect.poll(() => page.locator(".photo-tile img").evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth > 0)), { timeout: 20_000 }).toBe(true);
+
+    for (const delta of [1200, 1200, 1200]) {
+      const coverage = await page.evaluate(async (amount) => {
+        window.scrollBy(0, amount);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const visible = [...document.querySelectorAll<HTMLImageElement>(".photo-tile img")].filter((image) => {
+          const rect = image.getBoundingClientRect();
+          return rect.bottom > 0 && rect.top < innerHeight;
+        });
+        return {
+          count: visible.length,
+          ready: visible.filter((image) => image.complete && image.naturalWidth > 0).length
+        };
+      }, delta);
+      expect(coverage.count).toBeGreaterThan(0);
+      expect(coverage.ready).toBe(coverage.count);
+    }
+
+    const coverageAfterJump = await page.evaluate(async () => {
+      window.scrollBy(0, 5000);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      return [...document.querySelectorAll(".photo-tile")].filter((tile) => {
+        const rect = tile.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < innerHeight;
+      }).length;
+    });
+    expect(coverageAfterJump).toBeGreaterThan(0);
+    expect(await page.locator(".photo-tile").count()).toBeLessThan(500);
+    await context.close();
+  }
 });
 
 test("one gesture reaches an unloaded year, reverse scrub returns, and rapid movement prioritizes the final year", async ({ page }) => {

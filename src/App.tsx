@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { assetUrl, mediaUrl } from "./lib/assets";
 import { buildJustifiedRows, type JustifiedItem } from "./lib/justifiedRows";
 import { useElementWidth } from "./hooks/useElementWidth";
@@ -38,7 +38,9 @@ import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog, Photo } from "./types";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
-const GRID_OVERSCAN_PX = 1100;
+// WebKit scrolls the document on a compositor thread. Keep enough real rows on
+// either side of the viewport that a momentum gesture cannot outrun React.
+const GRID_OVERSCAN_PX = 4000;
 const ALBUM_GAP_PX = 18;
 const ALBUM_HEADING_HEIGHT_PX = 24;
 const ALBUM_HEADING_GAP_PX = 9;
@@ -343,45 +345,35 @@ function useCatalog(): CatalogLoadState {
   return state;
 }
 
+interface ViewportSnapshot {
+  scrollY: number;
+  height: number;
+}
+
+const serverViewport: ViewportSnapshot = { scrollY: 0, height: 800 };
+let viewportSnapshot = serverViewport;
+
+function readViewportSnapshot() {
+  if (typeof window === "undefined") return serverViewport;
+  const scrollY = window.scrollY;
+  const height = window.innerHeight;
+  if (viewportSnapshot.scrollY !== scrollY || viewportSnapshot.height !== height) {
+    viewportSnapshot = { scrollY, height };
+  }
+  return viewportSnapshot;
+}
+
+function subscribeViewport(onStoreChange: () => void) {
+  window.addEventListener("scroll", onStoreChange, { passive: true });
+  window.addEventListener("resize", onStoreChange);
+  return () => {
+    window.removeEventListener("scroll", onStoreChange);
+    window.removeEventListener("resize", onStoreChange);
+  };
+}
+
 function useViewport() {
-  const [viewport, setViewport] = useState(() => ({
-    scrollY: typeof window === "undefined" ? 0 : window.scrollY,
-    height: typeof window === "undefined" ? 800 : window.innerHeight
-  }));
-
-  useEffect(() => {
-    let frame = 0;
-
-    const update = () => {
-      frame = 0;
-      setViewport({
-        scrollY: window.scrollY,
-        height: window.innerHeight
-      });
-    };
-
-    const schedule = () => {
-      if (frame) {
-        return;
-      }
-
-      frame = window.requestAnimationFrame(update);
-    };
-
-    schedule();
-    window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("resize", schedule);
-
-    return () => {
-      if (frame) {
-        window.cancelAnimationFrame(frame);
-      }
-      window.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", schedule);
-    };
-  }, []);
-
-  return viewport;
+  return useSyncExternalStore(subscribeViewport, readViewportSnapshot, () => serverViewport);
 }
 
 function normalizeMosaicSlots(slots: MosaicSlot[]) {
@@ -1425,7 +1417,7 @@ function ContinuousCollectionGrid({
               <div className="photo-mosaic virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 {entry.items.map((item) => (
                   <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open featured photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="lazy" decoding="async" width={item.photo.width} height={item.photo.height} />
+                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
                   </button>
                 ))}
               </div>
@@ -1435,7 +1427,7 @@ function ContinuousCollectionGrid({
             <div className="photo-row virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
                 <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="lazy" decoding="async" width={item.photo.width} height={item.photo.height} />
+                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
                 </button>
               ))}
             </div>
