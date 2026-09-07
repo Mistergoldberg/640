@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { assetUrl } from "../lib/assets";
-import type { AlbumManifest, AlbumSummary, Catalog, Photo, YearIndex } from "../types";
-import { validateAlbumManifest, validateYearIndex } from "./manifestValidation";
+import type { AlbumManifest, AlbumSummary, Photo, YearIndex } from "../types";
+import { validateAlbumManifest } from "./manifestValidation";
 
 export interface LoadedAlbumSummary extends AlbumSummary {
   year: string;
@@ -34,18 +33,7 @@ export interface YearCollection {
   isIncomplete: boolean;
 }
 
-export type YearLoadState =
-  | { status: "loading"; message: string; collection: YearCollection | null }
-  | { status: "error"; message: string; collection: YearCollection | null }
-  | { status: "ready"; collection: YearCollection };
-
-export interface YearLoaderState {
-  state: YearLoadState;
-  retry: () => void;
-  retryAlbum: (albumId: string) => void;
-}
-
-async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
+export async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(url, { cache: "no-store", signal });
   if (!response.ok) {
     throw new Error(`${response.status}`);
@@ -54,11 +42,11 @@ async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
   return response.json();
 }
 
-function isAbortError(error: unknown) {
+export function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-function publicAlbumError(error: unknown) {
+export function publicAlbumError(error: unknown) {
   if (isAbortError(error)) {
     return "Request was cancelled";
   }
@@ -112,7 +100,7 @@ export function buildYearCollection(years: string[], sourceIndex: YearIndex, alb
   };
 }
 
-async function loadAlbum(album: AlbumSummary, signal: AbortSignal): Promise<AlbumLoadResult> {
+export async function loadAlbum(album: AlbumSummary, signal: AbortSignal): Promise<AlbumLoadResult> {
   const manifest = validateAlbumManifest(await fetchJson(assetUrl(album.manifestUrl), signal));
   return {
     status: "ready",
@@ -121,183 +109,10 @@ async function loadAlbum(album: AlbumSummary, signal: AbortSignal): Promise<Albu
   };
 }
 
-function replaceAlbumResult(collection: YearCollection, albumId: string, nextResult: AlbumLoadResult) {
+export function replaceAlbumResult(collection: YearCollection, albumId: string, nextResult: AlbumLoadResult) {
   return buildYearCollection(
     collection.years,
     collection.sourceIndex,
     collection.albumResults.map((result) => (result.album.id === albumId ? nextResult : result))
   );
-}
-
-export function useYearCollection(catalog: Catalog | null, selectedYear: string | null): YearLoaderState {
-  const [retryNonce, setRetryNonce] = useState(0);
-  const requestIdRef = useRef(0);
-  const stateRef = useRef<YearLoadState>({
-    status: "loading",
-    message: "Loading year",
-    collection: null
-  });
-  const retryControllersRef = useRef(new Set<AbortController>());
-  const [state, setStateValue] = useState<YearLoadState>(stateRef.current);
-
-  const setState = useCallback((nextState: YearLoadState | ((current: YearLoadState) => YearLoadState)) => {
-    setStateValue((current) => {
-      const resolved = typeof nextState === "function" ? nextState(current) : nextState;
-      stateRef.current = resolved;
-      return resolved;
-    });
-  }, []);
-
-  useEffect(() => {
-    let isCancelled = false;
-    const controller = new AbortController();
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    const isCurrentRequest = () => !isCancelled && requestId === requestIdRef.current && !controller.signal.aborted;
-
-    async function loadYear() {
-      if (!catalog || !selectedYear) {
-        setState({ status: "loading", message: "Loading year", collection: null });
-        return;
-      }
-
-      const years = catalog.years.map((year) => year.year);
-      const yearSummary = catalog.years.find((year) => year.year === selectedYear);
-      if (!yearSummary) {
-        setState({ status: "error", message: "Year is not available", collection: null });
-        return;
-      }
-
-      setState({ status: "loading", message: `Loading ${selectedYear}`, collection: null });
-      const sourceIndex = validateYearIndex(await fetchJson(assetUrl(yearSummary.indexUrl), controller.signal));
-      if (!isCurrentRequest()) {
-        return;
-      }
-
-      const loadingCollection = buildYearCollection(
-        years,
-        sourceIndex,
-        sourceIndex.albums.map((album) => ({ status: "loading", album }))
-      );
-      setState({ status: "loading", message: `Loading ${selectedYear} albums`, collection: loadingCollection });
-
-      const settledAlbums = await Promise.allSettled(sourceIndex.albums.map((album) => loadAlbum(album, controller.signal)));
-      if (!isCurrentRequest()) {
-        return;
-      }
-
-      const albumResults = settledAlbums.map((result, index): AlbumLoadResult => {
-        if (result.status === "fulfilled") {
-          return result.value;
-        }
-
-        return {
-          status: "error",
-          album: sourceIndex.albums[index],
-          errorMessage: publicAlbumError(result.reason)
-        };
-      });
-      const collection = buildYearCollection(years, sourceIndex, albumResults);
-      setState({ status: "ready", collection });
-    }
-
-    loadYear().catch((error: unknown) => {
-      if (isAbortError(error) || !isCurrentRequest()) {
-        return;
-      }
-
-      setState({
-        status: "error",
-        message: error instanceof Error ? error.message : "Year could not be loaded",
-        collection: null
-      });
-    });
-
-    return () => {
-      isCancelled = true;
-      controller.abort();
-    };
-  }, [catalog, retryNonce, selectedYear, setState]);
-
-  useEffect(() => {
-    return () => {
-      for (const controller of retryControllersRef.current) {
-        controller.abort();
-      }
-      retryControllersRef.current.clear();
-    };
-  }, []);
-
-  const retry = useCallback(() => {
-    setRetryNonce((current) => current + 1);
-  }, []);
-
-  const retryAlbum = useCallback(
-    (albumId: string) => {
-      const activeCollection = stateRef.current.collection;
-      const target = activeCollection?.albumResults.find((result) => result.album.id === albumId);
-      if (!activeCollection || !target || target.status !== "error") {
-        return;
-      }
-
-      const controller = new AbortController();
-      retryControllersRef.current.add(controller);
-      setState((current) => {
-        if (!current.collection || current.collection.year !== activeCollection.year) {
-          return current;
-        }
-
-        const collection = replaceAlbumResult(current.collection, albumId, { status: "loading", album: target.album });
-        return {
-          status: "loading",
-          message: "Retrying album",
-          collection
-        };
-      });
-
-      loadAlbum(target.album, controller.signal)
-        .then((result) => {
-          setState((current) => {
-            if (!current.collection || current.collection.year !== activeCollection.year) {
-              return current;
-            }
-
-            return {
-              status: "ready",
-              collection: replaceAlbumResult(current.collection, albumId, result)
-            };
-          });
-        })
-        .catch((error: unknown) => {
-          if (isAbortError(error)) {
-            return;
-          }
-
-          setState((current) => {
-            if (!current.collection || current.collection.year !== activeCollection.year) {
-              return current;
-            }
-
-            return {
-              status: "ready",
-              collection: replaceAlbumResult(current.collection, albumId, {
-                status: "error",
-                album: target.album,
-                errorMessage: publicAlbumError(error)
-              })
-            };
-          });
-        })
-        .finally(() => {
-          retryControllersRef.current.delete(controller);
-        });
-    },
-    [setState]
-  );
-
-  return {
-    state,
-    retry,
-    retryAlbum
-  };
 }
