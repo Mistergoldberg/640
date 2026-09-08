@@ -1232,3 +1232,256 @@ img {
     animation: none;
   }
 }
+
+.archive-diagnostics {
+  position: fixed;
+  right: max(8px, env(safe-area-inset-right));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 100;
+  width: min(210px, calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid rgba(137, 194, 255, 0.72);
+  border-radius: 8px;
+  color: #f7fbff;
+  background: rgba(7, 14, 22, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+  font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  backdrop-filter: blur(12px);
+}
+
+.archive-diagnostics.is-expanded {
+  width: min(390px, calc(100vw - 16px));
+}
+
+.archive-diagnostics button,
+.archive-diagnostics summary,
+.archive-diagnostics label {
+  font: inherit;
+}
+
+.archive-diagnostics button {
+  min-height: 30px;
+  border: 1px solid rgba(137, 194, 255, 0.34);
+  border-radius: 5px;
+  color: inherit;
+  background: rgba(137, 194, 255, 0.12);
+}
+
+.archive-diagnostics__toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 9px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  font-weight: 800 !important;
+}
+
+.archive-diagnostics__body {
+  max-height: min(72dvh, 680px);
+  overflow: auto;
+  padding: 7px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.archive-diagnostics__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.archive-diagnostics__status {
+  display: block;
+  min-height: 18px;
+  padding: 5px 1px 2px;
+  color: #a8caec;
+}
+
+.archive-diagnostics details {
+  margin: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 5px;
+}
+
+.archive-diagnostics summary {
+  min-height: 26px;
+  cursor: pointer;
+}
+
+.archive-diagnostics__overlays {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  padding: 4px 0 7px;
+}
+
+.archive-diagnostics__overlays label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+}
+
+.archive-diagnostics__overlays input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.archive-diagnostics dl {
+  margin: 5px 0;
+}
+
+.archive-diagnostics dl > div {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 7px;
+  padding: 3px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.archive-diagnostics dt {
+  color: #8ec5fa;
+}
+
+.archive-diagnostics dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #fff;
+  font-weight: 500;
+}
+
+.archive-diagnostics__events {
+  margin: 4px 0 0;
+  padding-left: 22px;
+}
+
+.archive-diagnostics__events li {
+  margin: 0 0 5px;
+  overflow-wrap: anywhere;
+  font-weight: 450;
+}
+
+.archive-diagnostics__events time {
+  color: #8ec5fa;
+}
+
+.archive-diagnostic-overlays,
+.archive-diagnostic-boundary,
+.archive-diagnostic-anchor,
+.archive-diagnostic-safe-area,
+.archive-diagnostic-scrubber-target {
+  pointer-events: none;
+}
+
+.archive-diagnostic-overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+
+.archive-diagnostic-boundary {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: none;
+  border: 1px dashed rgba(255, 214, 70, 0.72);
+}
+
+.archive-diagnostic-boundary > span,
+.archive-diagnostic-anchor > span {
+  position: sticky;
+  top: 96px;
+  display: inline-block;
+  padding: 1px 4px;
+  color: #111;
+  background: rgba(255, 222, 75, 0.92);
+  font: 700 10px/1.4 ui-monospace, monospace;
+}
+
+html[data-debug-year] .archive-diagnostic-boundary--year,
+html[data-debug-album] .archive-diagnostic-boundary--album,
+html[data-debug-measurement] .archive-diagnostic-boundary--year {
+  display: block;
+}
+
+.archive-diagnostic-boundary--album {
+  left: 5px;
+  border-color: rgba(117, 219, 255, 0.72);
+}
+
+.archive-diagnostic-boundary--album > span {
+  margin-left: 80px;
+  color: #071016;
+  background: rgba(117, 219, 255, 0.9);
+}
+
+html[data-debug-measurement] .archive-diagnostic-boundary--estimated {
+  background: repeating-linear-gradient(135deg, rgba(255, 158, 71, 0.05) 0 8px, rgba(255, 158, 71, 0.16) 8px 16px);
+}
+
+html[data-debug-measurement] .archive-diagnostic-boundary--measured {
+  background: repeating-linear-gradient(135deg, rgba(90, 235, 155, 0.035) 0 8px, rgba(90, 235, 155, 0.11) 8px 16px);
+}
+
+html[data-debug-rows] .virtual-entry {
+  outline: 1px solid rgba(255, 91, 213, 0.82);
+  outline-offset: -1px;
+}
+
+.archive-diagnostic-anchor {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: none;
+  height: 2px;
+  background: #ff4a4a;
+}
+
+.archive-diagnostic-anchor > span {
+  position: absolute;
+  top: 2px;
+  right: 90px;
+  background: #ff7777;
+}
+
+html[data-debug-anchor] .archive-diagnostic-anchor {
+  display: block;
+}
+
+html[data-debug-scrubber-hit] .archive-timeline__scrubber {
+  outline: 2px solid rgba(81, 218, 255, 0.9);
+  outline-offset: -2px;
+  background: rgba(81, 218, 255, 0.11);
+}
+
+.archive-diagnostic-scrubber-target {
+  position: absolute;
+  left: -7px;
+  display: none;
+  width: 17px;
+  height: 2px;
+  background: #ff5a50;
+  transform: translateY(-50%);
+}
+
+html[data-debug-scrubber-target] .archive-diagnostic-scrubber-target {
+  display: block;
+}
+
+.archive-diagnostic-safe-area {
+  position: fixed;
+  z-index: 99;
+  top: env(safe-area-inset-top);
+  right: env(safe-area-inset-right);
+  bottom: env(safe-area-inset-bottom);
+  left: env(safe-area-inset-left);
+  display: none;
+  border: 2px dotted rgba(92, 255, 142, 0.9);
+}
+
+html[data-debug-safe-area] .archive-diagnostic-safe-area {
+  display: block;
+}

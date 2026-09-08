@@ -14,6 +14,7 @@ import {
 import type { Catalog, YearIndex } from "../types";
 import { orderedArchiveYears } from "./archiveTimelineModel";
 import { requestIsCurrent } from "./archiveYearCache";
+import { recordDiagnostic } from "../debug/archiveDiagnostics";
 
 export type ArchiveYearStatus = "index-loading" | "unloaded" | "loading" | "ready" | "error";
 
@@ -94,6 +95,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
     requestsRef.current.set(year, { controller, generation, reason });
     const years = [...statesRef.current.keys()];
     const sourceIndex = state.index;
+    recordDiagnostic("manifest-load-start", { year, reason, albumCount: sourceIndex.albums.length });
     setStates((current) => {
       const next = new Map(current);
       next.set(year, { ...state, status: "loading", collection: null, message: `Loading ${year}` });
@@ -107,6 +109,13 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
           ? result.value
           : { status: "error", album: sourceIndex.albums[index], errorMessage: publicAlbumError(result.reason) });
         const collection = buildYearCollection(years, sourceIndex, results);
+        recordDiagnostic("manifest-load-complete", {
+          year,
+          reason,
+          albumCount: sourceIndex.albums.length,
+          photoCount: collection.photos.length,
+          failedAlbumCount: collection.failedAlbumIds.length
+        });
         setStates((current) => {
           const latest = current.get(year);
           if (!latest || !requestIsCurrent(generationRef.current.get(year) || 0, generation)) return current;
@@ -117,6 +126,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
       })
       .catch((error: unknown) => {
         if (isAbortError(error) || !requestIsCurrent(generationRef.current.get(year) || 0, generation)) return;
+        recordDiagnostic("manifest-load-error", { year, reason, message: error instanceof Error ? error.message : "Year could not be loaded" });
         setStates((current) => {
           const latest = current.get(year);
           if (!latest) return current;
@@ -149,9 +159,11 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
     const indexController = new AbortController();
 
     for (const summary of ordered) {
+      recordDiagnostic("year-index-load-start", { year: summary.year });
       void fetchJson(assetUrl(summary.indexUrl), indexController.signal)
         .then(validateYearIndex)
         .then((index) => {
+          recordDiagnostic("year-index-load-complete", { year: summary.year, albumCount: index.albums.length });
           setStates((current) => {
             const previous = current.get(summary.year);
             if (!previous) return current;
@@ -162,6 +174,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
         })
         .catch((error: unknown) => {
           if (isAbortError(error)) return;
+          recordDiagnostic("year-index-load-error", { year: summary.year, message: error instanceof Error ? error.message : "Year index could not be loaded" });
           setStates((current) => {
             const previous = current.get(summary.year);
             if (!previous) return current;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { registerArchiveObserver } from "../debug/archiveDiagnostics";
 
 export function useElementWidth<T extends HTMLElement>() {
   const ref = useRef<T | null>(null);
@@ -17,13 +18,21 @@ export function useElementWidth<T extends HTMLElement>() {
     updateWidth();
 
     if (typeof ResizeObserver === "undefined") {
+      const unregister = registerArchiveObserver("element-width-window-resize");
       window.addEventListener("resize", updateWidth);
-      return () => window.removeEventListener("resize", updateWidth);
+      return () => {
+        window.removeEventListener("resize", updateWidth);
+        unregister();
+      };
     }
 
     const observer = new ResizeObserver(updateWidth);
+    const unregister = registerArchiveObserver("element-width-resize-observer");
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      unregister();
+    };
   }, []);
 
   return { ref, width };

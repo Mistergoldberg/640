@@ -36,6 +36,7 @@ import {
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "./player/fullscreen";
 import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog, Photo } from "./types";
+import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
 // WebKit scrolls the document on a compositor thread. Keep enough real rows on
@@ -309,6 +310,7 @@ function useCatalog(): CatalogLoadState {
 
   useEffect(() => {
     let isMounted = true;
+    recordDiagnostic("catalogue-load-start");
 
     async function loadCatalog() {
       const catalog = validateCatalog(await fetchJson(CATALOG_URL));
@@ -318,6 +320,7 @@ function useCatalog(): CatalogLoadState {
       }
 
       if (isMounted) {
+        recordDiagnostic("catalogue-load-complete", { yearCount: years.length });
         setState({
           status: "ready",
           catalog: {
@@ -330,6 +333,7 @@ function useCatalog(): CatalogLoadState {
 
     loadCatalog().catch((error: unknown) => {
       if (isMounted) {
+        recordDiagnostic("catalogue-load-error", { message: error instanceof Error ? error.message : "Catalogue could not be loaded" });
         setState({
           status: "error",
           message: error instanceof Error ? error.message : "Catalogue could not be loaded"
@@ -364,11 +368,13 @@ function readViewportSnapshot() {
 }
 
 function subscribeViewport(onStoreChange: () => void) {
+  const unregister = registerArchiveObserver("archive-viewport");
   window.addEventListener("scroll", onStoreChange, { passive: true });
   window.addEventListener("resize", onStoreChange);
   return () => {
     window.removeEventListener("scroll", onStoreChange);
     window.removeEventListener("resize", onStoreChange);
+    unregister();
   };
 }
 
@@ -970,6 +976,35 @@ function App() {
   useEffect(() => { activePhotoYearRef.current = activePhotoYear; }, [activePhotoYear]);
 
   useEffect(() => {
+    const yearStates = Object.fromEntries([...states].map(([year, state]) => [year, state.status]));
+    updateDiagnostics({
+      activeYear,
+      loadedYears: [...states].filter(([, state]) => state.status === "ready").map(([year]) => year),
+      yearStates,
+      restoration: { phase: restoration.phase, generation: restoration.generation, settledYear: restoration.settledYear },
+      restorationTarget: restoration.target ? {
+        year: restoration.target.year,
+        albumId: restoration.target.albumId,
+        photoId: restoration.target.photoId,
+        adjustmentPx: restoration.target.adjustmentPx,
+        source: restoration.target.source,
+        focusPhoto: restoration.target.focusPhoto
+      } : null
+    });
+  }, [activeYear, restoration, states]);
+
+  useEffect(() => {
+    recordDiagnostic("restoration-transition", {
+      phase: restoration.phase,
+      generation: restoration.generation,
+      targetYear: restoration.target?.year || null,
+      targetAlbumId: restoration.target?.albumId || null,
+      targetPhotoId: restoration.target?.photoId || null,
+      source: restoration.target?.source || null
+    });
+  }, [restoration.generation, restoration.phase, restoration.settledYear, restoration.target]);
+
+  useEffect(() => {
     if (!catalog || initializedRef.current) return;
     const target = resolveNavigationRestoration({
       catalog,
@@ -1045,6 +1080,7 @@ function App() {
   const handleVisibleYearChange = useCallback((year: string, shouldLoad = true) => {
     if (!catalog || !yearExists(catalog, year)) return;
     if (year !== activeYearRef.current) {
+      recordDiagnostic("year-activation", { previousYear: activeYearRef.current, year, shouldLoad });
       activeYearRef.current = year;
       setActiveYear(year);
       if (!readUrlPhotoId()) updateUrlState(year, null, "replace", catalogueId);
@@ -1055,6 +1091,7 @@ function App() {
   const openPhoto = useCallback((year: string, photoId: string) => {
     const collection = collections.get(year);
     if (!collection?.photos.some((photo) => photo.id === photoId)) return;
+    recordDiagnostic("player-open", { year, photoId });
     fullscreenLaunchPhotoIdRef.current = photoId;
     void requestDocumentFullscreen().then((entered) => {
       if (entered && fullscreenLaunchPhotoIdRef.current !== photoId) void exitDocumentFullscreen();
@@ -1068,6 +1105,7 @@ function App() {
     fullscreenLaunchPhotoIdRef.current = null;
     const restoreId = photoId || activePhotoIdRef.current;
     const year = activePhotoYearRef.current || activeYearRef.current;
+    recordDiagnostic("player-close", { year, photoId: restoreId });
     pendingClosePhotoIdRef.current = restoreId;
     const historyState = readArchiveHistoryState(window.history.state);
     if (readUrlPhotoId() && historyState?.view === "photo" && historyState.fromGrid) {
@@ -1180,6 +1218,8 @@ function ContinuousCollectionGrid({
   const previousLayoutRef = useRef<GridLayout | null>(null);
   const restorationRef = useRef(restoration);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const diagnosticLayoutSignatureRef = useRef("");
+  const diagnosticRangeSignatureRef = useRef("");
   const targetHeight = width < 520 ? 118 : width < 900 ? 146 : 174;
   const gap = width < 520 ? 3 : 4;
   const { layout, geometry } = useMemo(
@@ -1222,6 +1262,45 @@ function ContinuousCollectionGrid({
   const allIndexesSettled = years.every((year) => states.get(year)?.status !== "index-loading");
 
   useLayoutEffect(() => {
+    if (!diagnosticsEnabled()) return;
+    const first = visibleEntries[0];
+    const last = visibleEntries[visibleEntries.length - 1];
+    const virtualRange = {
+      mode: stableArchiveDom ? "stable" : "windowed",
+      first: first ? { id: first.id, type: first.type, top: Math.round(first.top) } : null,
+      last: last ? { id: last.id, type: last.type, bottom: Math.round(last.top + last.height) } : null,
+      renderedEntries: visibleEntries.length,
+      totalEntries: layout.entries.length,
+      totalHeight: Math.round(layout.totalHeight)
+    };
+    const rangeSignature = JSON.stringify(virtualRange);
+    const rows = ref.current?.querySelectorAll(".photo-row,.photo-mosaic").length || 0;
+    const photos = ref.current?.querySelectorAll(".photo-tile").length || 0;
+    updateDiagnostics({
+      activeYear: currentYear,
+      activeAlbum: currentAlbum ? { year: currentAlbum.year, id: currentAlbum.id } : null,
+      virtualRange,
+      mountedRows: rows,
+      mountedPhotos: photos,
+      scrubber: { ...getDiagnostics().scrubber, dragging: isScrubbing, activeRatio: Math.round(activeRatio * 100000) / 100000 }
+    });
+    if (rangeSignature !== diagnosticRangeSignatureRef.current) {
+      diagnosticRangeSignatureRef.current = rangeSignature;
+      recordDiagnostic("virtual-range-change", virtualRange);
+    }
+    const layoutSignature = `${width}:${layout.totalHeight}:${layout.entries.length}:${geometry.years.map((year) => `${year.year}:${year.isEstimated ? "e" : "m"}:${year.bottom}`).join("|")}`;
+    if (layoutSignature !== diagnosticLayoutSignatureRef.current) {
+      diagnosticLayoutSignatureRef.current = layoutSignature;
+      recordDiagnostic("layout-construction", {
+        width,
+        totalHeight: Math.round(layout.totalHeight),
+        entryCount: layout.entries.length,
+        years: geometry.years.map((year) => ({ year: year.year, top: Math.round(year.top), bottom: Math.round(year.bottom), measurement: year.isEstimated ? "estimated" : "measured" }))
+      });
+    }
+  }, [activeRatio, currentAlbum, currentYear, geometry.years, isScrubbing, layout.entries.length, layout.totalHeight, stableArchiveDom, visibleEntries, width]);
+
+  useLayoutEffect(() => {
     restorationRef.current = restoration;
   }, [restoration]);
 
@@ -1239,7 +1318,11 @@ function ContinuousCollectionGrid({
       ? layout.albumAnchors.find((album) => album.year === oldAlbum.year && album.id === oldAlbum.id)?.top
       : undefined;
     const correction = stableAnchorCorrection(previousTop, nextTop);
-    if (Math.abs(correction) > 0.5) window.scrollBy({ top: correction, behavior: "auto" });
+    if (Math.abs(correction) > 0.5) {
+      const detail = { at: new Date().toISOString(), top: correction, anchorPhotoId: oldPhoto, anchorAlbumId: oldAlbum?.id || null };
+      updateDiagnostics({ lastLayoutCorrection: detail, lastProgrammaticScroll: { ...detail, kind: "scrollBy" } }, "layout-correction", detail);
+      window.scrollBy({ top: correction, behavior: "auto" });
+    }
   }, [layout, restorationPending, width]);
 
   useEffect(() => {
@@ -1289,6 +1372,7 @@ function ContinuousCollectionGrid({
     const frame = window.requestAnimationFrame(() => {
       if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
       onRestorationApply(generation);
+      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "restoration", top: Math.max(0, nextTop), generation } }, "programmatic-scroll", { kind: "restoration", top: Math.max(0, nextTop), generation });
       window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
         if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled" || !ref.current) return;
@@ -1355,6 +1439,7 @@ function ContinuousCollectionGrid({
       virtualTop = yearGeometry.headingBottom + target.sectionRatio * Math.max(0, yearGeometry.bottom - yearGeometry.headingBottom - viewport.height * 0.35);
     }
     const absoluteTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - ARCHIVE_JUMP_OFFSET_PX;
+    updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: `archive-${intent}`, top: Math.max(0, absoluteTop), year: target.year, albumId: target.albumId } }, "programmatic-scroll", { kind: `archive-${intent}`, top: Math.max(0, absoluteTop), year: target.year, albumId: target.albumId });
     window.scrollTo({ top: Math.max(0, absoluteTop), behavior: "auto" });
     if (intent === "jump") onPushArchiveTarget(target);
   }, [geometry.years, onPushArchiveTarget, timelineModel.years, viewport.height]);
@@ -1383,10 +1468,25 @@ function ContinuousCollectionGrid({
       </header>
 
       <div id="photo-grid" className="virtual-album-stack" ref={ref} style={{ height: layout.totalHeight || undefined }}>
+        {diagnosticsEnabled() ? (
+          <div className="archive-diagnostic-overlays" aria-hidden="true">
+            {geometry.years.map((year) => (
+              <div className={`archive-diagnostic-boundary archive-diagnostic-boundary--year archive-diagnostic-boundary--${year.isEstimated ? "estimated" : "measured"}`} key={`debug-year-${year.year}`} style={{ top: year.top, height: Math.max(1, year.bottom - year.top) }}>
+                <span>{year.year} · {year.isEstimated ? "estimated" : "measured"}</span>
+              </div>
+            ))}
+            {geometry.albums.map((album) => (
+              <div className="archive-diagnostic-boundary archive-diagnostic-boundary--album" key={`debug-album-${album.year}-${album.id}`} style={{ top: album.top, height: Math.max(1, album.bottom - album.top) }}>
+                <span>{album.year} · {album.id}</span>
+              </div>
+            ))}
+            <div className="archive-diagnostic-anchor" style={{ top: Math.max(0, localViewportTop + ARCHIVE_JUMP_OFFSET_PX) }}><span>current anchor</span></div>
+          </div>
+        ) : null}
         {visibleEntries.map((entry) => {
           if (entry.type === "year-heading") {
             return (
-              <section className="archive-year-heading virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height }} aria-labelledby={`${entry.id}-title`}>
+              <section className="archive-year-heading virtual-entry" data-entry-type={entry.type} data-year={entry.year} key={entry.id} style={{ top: entry.top, height: entry.height }} aria-labelledby={`${entry.id}-title`}>
                 <h1 id={`${entry.id}-title`}>{entry.year}</h1><span>{entry.count.toLocaleString()} photographs</span>
               </section>
             );
@@ -1396,7 +1496,7 @@ function ContinuousCollectionGrid({
               : entry.status === "error" ? entry.message || "Could not load"
                 : entry.status === "index-loading" ? "Indexing" : "Loads on demand";
             return (
-              <div className={`archive-year-placeholder archive-year-placeholder--${entry.status} virtual-entry`} key={entry.id} style={{ top: entry.top, height: entry.height }}>
+              <div className={`archive-year-placeholder archive-year-placeholder--${entry.status} virtual-entry`} data-entry-type={entry.type} data-year={entry.year} key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 <div className="archive-year-placeholder__context">
                   <span><strong>{entry.folderLabel}</strong> · {stateLabel}</span>
                   {entry.status === "error" ? <button type="button" onClick={() => onRetryYear(entry.year)}>Retry year</button> : null}
@@ -1406,7 +1506,7 @@ function ContinuousCollectionGrid({
           }
           if (entry.type === "heading") {
             return (
-              <div className="album-group__heading virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height }}>
+              <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2><span>{entry.album.count}</span>
               </div>
             );
@@ -1414,7 +1514,7 @@ function ContinuousCollectionGrid({
           if (entry.type === "album-error") {
             const loading = entry.album.loadState === "loading";
             return (
-              <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} key={entry.id} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
+              <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
                 <span>{loading ? "Loading album" : entry.album.errorMessage || "Album could not be loaded"}</span>
                 {!loading ? <button type="button" onClick={() => onRetryAlbum(entry.year, entry.album.id)}>Retry</button> : null}
               </div>
@@ -1424,7 +1524,7 @@ function ContinuousCollectionGrid({
           const indexById = indexByYear.get(entry.year);
           if (entry.type === "mosaic") {
             return (
-              <div className="photo-mosaic virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height }}>
+              <div className="photo-mosaic virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 {entry.items.map((item) => (
                   <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open featured photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
                     <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />
@@ -1434,7 +1534,7 @@ function ContinuousCollectionGrid({
             );
           }
           return (
-            <div className="photo-row virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
+            <div className="photo-row virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
                 <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
                   <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />

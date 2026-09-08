@@ -3,4 +3,5 @@
 interface ImportMetaEnv {
   readonly VITE_APP_BASE_PATH?: string;
   readonly VITE_MEDIA_BASE_URL?: string;
+  readonly VITE_BUILD_COMMIT?: string;
 }

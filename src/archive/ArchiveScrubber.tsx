@@ -5,6 +5,7 @@ import {
   type ArchiveTarget,
   type ArchiveTimelineModel
 } from "./archiveTimelineModel";
+import { recordDiagnostic, updateDiagnostics } from "../debug/archiveDiagnostics";
 
 interface ArchiveScrubberProps {
   model: ArchiveTimelineModel;
@@ -64,7 +65,15 @@ export function ArchiveScrubber({
   const flushPointer = useCallback(() => {
     frameRef.current = 0;
     if (pendingRatioRef.current === null) return;
-    applyTarget(archiveTargetAtRatio(model, pendingRatioRef.current));
+    const ratio = pendingRatioRef.current;
+    const next = archiveTargetAtRatio(model, ratio);
+    updateDiagnostics({ scrubber: { dragging: true, target: next ? { year: next.year, albumId: next.albumId, ratio: next.ratio } : null } }, "scrubber-pointer-move", {
+      pointerId: pointerIdRef.current,
+      ratio: Math.round(ratio * 1000) / 1000,
+      year: next?.year || null,
+      albumId: next?.albumId || null
+    });
+    applyTarget(next);
   }, [applyTarget, model]);
 
   const settle = useCallback((event: React.PointerEvent<HTMLDivElement>, cancelled = false) => {
@@ -78,6 +87,13 @@ export function ArchiveScrubber({
       loadTimerRef.current = null;
     }
     const finalTarget = cancelled ? target : targetFromClientY(event.clientY, true);
+    recordDiagnostic(cancelled ? "scrubber-pointer-cancel" : "scrubber-pointer-up", {
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      year: finalTarget?.year || null,
+      albumId: finalTarget?.albumId || null,
+      ratio: finalTarget?.ratio || null
+    });
     if (!cancelled && finalTarget) {
       setTarget(finalTarget);
       onRequestYear(finalTarget.year, true);
@@ -85,10 +101,12 @@ export function ArchiveScrubber({
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+      updateDiagnostics({ pointerCapture: { active: false, pointerId: event.pointerId, at: new Date().toISOString() } }, "scrubber-pointer-release", { pointerId: event.pointerId });
     }
     pointerIdRef.current = null;
     pendingRatioRef.current = null;
     setIsDragging(false);
+    updateDiagnostics({ scrubber: { dragging: false, target: finalTarget ? { year: finalTarget.year, albumId: finalTarget.albumId, ratio: finalTarget.ratio } : null } });
     onScrubStateChange?.(false);
     if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
     hideTimerRef.current = window.setTimeout(() => setTarget(null), cancelled ? 0 : 700);
@@ -172,10 +190,16 @@ export function ArchiveScrubber({
           event.preventDefault();
           if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
           event.currentTarget.setPointerCapture(event.pointerId);
+          const nextTarget = targetFromClientY(event.clientY, event.pointerType === "mouse");
+          updateDiagnostics({
+            pointerCapture: { active: true, pointerId: event.pointerId, pointerType: event.pointerType, at: new Date().toISOString() },
+            scrubber: { dragging: true, target: nextTarget ? { year: nextTarget.year, albumId: nextTarget.albumId, ratio: nextTarget.ratio } : null }
+          }, "scrubber-pointer-down", { pointerId: event.pointerId, pointerType: event.pointerType, clientY: Math.round(event.clientY) });
+          recordDiagnostic("scrubber-pointer-capture", { pointerId: event.pointerId });
           pointerIdRef.current = event.pointerId;
           setIsDragging(true);
           onScrubStateChange?.(true);
-          applyTarget(targetFromClientY(event.clientY, event.pointerType === "mouse"));
+          applyTarget(nextTarget);
         }}
         onPointerMove={(event) => {
           if (pointerIdRef.current === event.pointerId) {
@@ -188,6 +212,10 @@ export function ArchiveScrubber({
         }}
         onPointerUp={(event) => settle(event)}
         onPointerCancel={(event) => settle(event, true)}
+        onLostPointerCapture={(event) => {
+          if (pointerIdRef.current !== event.pointerId) return;
+          updateDiagnostics({ pointerCapture: { active: false, pointerId: event.pointerId, at: new Date().toISOString(), reason: "lost" } }, "scrubber-pointer-capture-lost", { pointerId: event.pointerId });
+        }}
         onPointerLeave={(event) => {
           if (event.pointerType === "mouse" && pointerIdRef.current === null) setTarget(null);
         }}
@@ -202,6 +230,7 @@ export function ArchiveScrubber({
             />
           )))}
           <span className="archive-timeline__thumb" style={{ top: `${clamp(activeRatio, 0, 1) * 100}%` }} />
+          <span className="archive-diagnostic-scrubber-target" style={{ top: `${clamp(labelTarget?.ratio ?? activeRatio, 0, 1) * 100}%` }} />
         </div>
         {isDragging || target ? (
           <div className="archive-timeline__label" style={{ top: `${clamp(labelTarget?.ratio ?? activeRatio, 0.06, 0.94) * 100}%` }}>
