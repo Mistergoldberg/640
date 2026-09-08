@@ -376,6 +376,12 @@ function useViewport() {
   return useSyncExternalStore(subscribeViewport, readViewportSnapshot, () => serverViewport);
 }
 
+function requiresStableArchiveDom() {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 function normalizeMosaicSlots(slots: MosaicSlot[]) {
   return [...slots].sort((left, right) => left.row - right.row || left.col - right.col);
 }
@@ -1170,6 +1176,7 @@ function ContinuousCollectionGrid({
 }) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const viewport = useViewport();
+  const stableArchiveDom = useMemo(requiresStableArchiveDom, []);
   const previousLayoutRef = useRef<GridLayout | null>(null);
   const restorationRef = useRef(restoration);
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -1191,7 +1198,10 @@ function ContinuousCollectionGrid({
   const localViewportTop = viewport.scrollY - containerTop;
   const visibleTop = localViewportTop - GRID_OVERSCAN_PX;
   const visibleBottom = localViewportTop + viewport.height + GRID_OVERSCAN_PX;
-  const visibleEntries = layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
+  const visibleEntries = stableArchiveDom
+    ? layout.entries
+    : layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
+  const thumbnailLoading = stableArchiveDom ? "lazy" : "eager";
   const currentYear = activeYearAtScroll(geometry.years, localViewportTop + ARCHIVE_JUMP_OFFSET_PX) || activeYear;
   const currentYearAnchor = layout.yearAnchors.find((year) => year.year === currentYear) || layout.yearAnchors[0] || null;
   const currentAlbum = findAlbumAtTop(layout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
@@ -1350,7 +1360,7 @@ function ContinuousCollectionGrid({
   }, [geometry.years, onPushArchiveTarget, timelineModel.years, viewport.height]);
 
   return (
-    <main className="collection-shell" data-restoration-phase={restoration.phase}>
+    <main className="collection-shell" data-restoration-phase={restoration.phase} data-render-mode={stableArchiveDom ? "stable" : "windowed"}>
       <header className="collection-chrome">
         <div className="app-bar">
           <div className="app-bar__identity">
@@ -1417,7 +1427,7 @@ function ContinuousCollectionGrid({
               <div className="photo-mosaic virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 {entry.items.map((item) => (
                   <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open featured photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
+                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />
                   </button>
                 ))}
               </div>
@@ -1427,7 +1437,7 @@ function ContinuousCollectionGrid({
             <div className="photo-row virtual-entry" key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
                 <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
+                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />
                 </button>
               ))}
             </div>

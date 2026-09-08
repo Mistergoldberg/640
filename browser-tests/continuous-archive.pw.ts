@@ -94,6 +94,67 @@ test("fast scrolling keeps a populated, prefetched window on desktop and mobile"
   }
 });
 
+test("iOS Safari and Chrome keep loaded archive rows mounted while WebKit scrolls", async ({ browser }) => {
+  const userAgents = [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/138.0.7204.156 Mobile/15E148 Safari/604.1"
+  ];
+
+  for (const userAgent of userAgents) {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      screen: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent
+    });
+    const page = await context.newPage();
+    await page.goto("/");
+    await waitForArchive(page);
+    await expect(page.locator(".collection-shell")).toHaveAttribute("data-render-mode", "stable");
+    await expect(page.locator(".photo-tile")).toHaveCount(4213);
+    await expect(page.locator(".photo-tile img").first()).toHaveAttribute("loading", "lazy");
+
+    const coverage = await page.evaluate(() => {
+      window.scrollBy(0, 5000);
+      return [...document.querySelectorAll(".photo-tile")].filter((tile) => {
+        const rect = tile.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < innerHeight;
+      }).length;
+    });
+    expect(coverage).toBeGreaterThan(0);
+    await expect.poll(() => page.locator(".photo-tile img").evaluateAll((images) => images.filter((image) => {
+      const rect = image.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < innerHeight && image.complete && image.naturalWidth > 0;
+    }).length), { timeout: 20_000 }).toBeGreaterThan(0);
+    await context.close();
+  }
+});
+
+test("iOS stable rendering remains usable after every archive year is loaded", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    screen: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+  });
+  const page = await context.newPage();
+  await page.goto("/");
+  await waitForArchive(page);
+  await page.getByRole("button", { name: "Jump to 2001" }).click();
+  await expect(page).toHaveURL(/year=2001/);
+  await expect(page.locator(".photo-tile")).toHaveCount(4213 + 6669, { timeout: 20_000 });
+  await page.getByRole("button", { name: "Jump to 2002" }).click();
+  await expect(page).toHaveURL(/year=2002/);
+  await expect(page.locator(".photo-tile")).toHaveCount(4213 + 479 + 6669, { timeout: 20_000 });
+  await expect(page.locator(".photo-tile:visible").first()).toBeVisible();
+  await page.getByRole("button", { name: "Jump to 2013" }).click();
+  await expect(page).toHaveURL(/year=2013/);
+  await expect(page.getByRole("heading", { name: "2013", exact: true })).toBeVisible();
+  await context.close();
+});
+
 test("one gesture reaches an unloaded year, reverse scrub returns, and rapid movement prioritizes the final year", async ({ page }) => {
   const manifests: string[] = [];
   page.on("request", (request) => {
