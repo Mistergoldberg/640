@@ -21,11 +21,15 @@ time. All 22,722 updates completed with unchanged ETags. Public samples now retu
 `Cache-Control: public, max-age=14400, must-revalidate`. The uploader now uses the
 supported upload-header option and ordered filters for future publication.
 
-Production deployment completed on 2026-09-06 from commit
-`d8aff6f18de93b1065eb4d7671b33e133357844a`. The exact 21-file root build is
-active through `/var/www/insertcatchytitlehere.com/current`, which points to
-`releases/20260906T150000Z-d8aff6f`. Nothing was pushed. Unrelated local website
-changes remain outside the deployment commit and were not staged or changed.
+The physically accepted year-windowed release was promoted to production on
+2026-09-09 from application commit
+`76ae7305660fb3e66189266bb30a2248af819c93`. The existing accepted QA artifact
+was promoted directly: `/var/www/insertcatchytitlehere.com/current` and
+`qa-current` both point to
+`releases/20260909T221614Z-76ae730`. The previous production release,
+`releases/20260906T150000Z-d8aff6f`, remains intact as the rollback target.
+Nothing was pushed. Unrelated local website changes remained unstaged and
+untouched.
 
 Authenticated Cloudflare inspection confirmed the zone is active and uses its
 assigned Cloudflare nameservers. The apex remains a proxied A record to
@@ -43,25 +47,23 @@ host remain under the domain-specific server backup.
 
 Verified deployment results:
 
-- 26 Vitest tests passed; TypeScript and the production root build passed.
-- A clean production browser run passed 27 of 27 checks on desktop and mobile.
-  It covered selected-year-only metadata loading, all year totals, direct photo
-  refresh, Back/Forward, sharing, fit/expanded modes, timeline navigation,
-  portrait and landscape media, SoundCloud, and browser errors. The measured
-  opening delay was 3.307 seconds after decoded readiness; manual resume was
-  5.364 seconds; explicit pause remained paused.
-- A 12-second production playback sample at 0.1 seconds per photograph advanced
-  from photograph 10 to 130 with no buffering observations, failed application
-  or media requests, console errors or page errors. Production behavior did not
-  differ materially from the previously completed clean five-minute local test,
-  so the five-minute test was not repeated.
+- All 64 Vitest tests and 40 production-build Playwright tests passed before
+  cutover; TypeScript and the production root build passed.
+- Jared accepted the exact QA release on a physical iPhone 17 running iOS
+  26.6.1 in Safari and Chrome before promotion.
+- Focused public production browser checks passed on desktop and iOS Safari and
+  Chrome profiles. They covered bounded scrolling, year and photo deep links,
+  Back/Forward, the scrubber and boundaries, sharing, fit/expanded modes,
+  portrait and landscape layouts, SoundCloud, and browser errors. The measured
+  opening delay was 3.088 seconds; manual resume was 5.128 seconds; explicit
+  pause remained paused for a 5.4-second observation.
 - Release audit: 22,722 JPG derivatives, 605,516,997 bytes, 11,361 photographs.
 - No missing or unreferenced assets, decode failures, embedded metadata, unsafe
   asset keys, private manifest fields, or local source paths.
 - Two reviewed album-label notices are the existing `2013-10-09/edit` and
   `2013-10-09/pixel` display labels.
 - Upload dry run: 22,722 objects, 577.47 MiB, zero deletions, no upload.
-- Validated root build: 21 files, 4,625,870 bytes; HTML, JS, CSS and JSON only.
+- Validated root build: 21 files, 4,673,646 bytes; HTML, JS, CSS and JSON only.
   There is no generated photo library, source map, original image or secret.
 - Server: Ubuntu 24.04.2 LTS, Nginx 1.24.0, approximately 14 GB available after
   deployment. Nginx remained active and reported no new journal or error-log
@@ -192,11 +194,13 @@ Never upload a broader directory and never use `sync --delete`.
 
 ## Server release and rollback
 
-The release was built outside the server root, uploaded to
-`/var/www/insertcatchytitlehere.com/releases/20260906T150000Z-d8aff6f`, and
-verified as 21 files and 4,625,870 bytes with an exact SHA-256 manifest match.
-Only HTML, JavaScript, CSS and JSON were uploaded. Directories are mode 0755 and
-files are mode 0644, owned by root; `www-data` can read and cannot write them.
+The active release is
+`/var/www/insertcatchytitlehere.com/releases/20260909T221614Z-76ae730`. Its 21
+files and 4,673,646 bytes matched the deterministic local SHA-256 manifest
+exactly. Only HTML, JavaScript, CSS and JSON are present. The accepted artifact
+retains its consistent QA-release ownership, with directories mode 0755 and
+files mode 0644; `www-data` can read and cannot write them. The prior
+`20260906T150000Z-d8aff6f` release remains unchanged for atomic rollback.
 
 The Nginx virtual host was tested both in an isolated loopback listener and with
 the complete enabled-site configuration. Cutover moved the former root into a
@@ -207,11 +211,11 @@ permanently removed as authorized.
 
 The active release is the known-good baseline for the next deployment. Future
 deployments must upload a new `releases/<timestamp>-<commit>/` directory, verify
-it, atomically change `current`, test Nginx and reload. Keep this release until
-the next release passes. Rollback then repoints `current` to this directory and
-reloads the validated Nginx configuration. The server backup retains the
-pre-deployment virtual host and former-site inventory, but not the deleted site
-content.
+it, atomically change `current`, and test Nginx. Reload Nginx only when its
+configuration changes. Keep this release until the next release passes. Atomic
+rollback repoints `current` to the prior release; a symlink-only rollback does
+not require an Nginx reload. The server backup retains the pre-deployment virtual
+host and former-site inventory, but not the deleted site content.
 
 ## Hosting, caches and security
 
@@ -242,18 +246,26 @@ boundaries and cache/security headers. Representative thumbnail and display
 objects from 2001, 2002 and 2013 returned HTTPS 200 with `image/jpeg` and the
 expected conservative cache policy.
 
-The production browser run passed all 27 recorded assertions in Chrome 150 at
-desktop and mobile viewports. Totals were 4,213 for 2013, 479 for 2002 and 6,669
-for 2001. Each selected year requested only its own index and album manifests.
-Direct year/photo refreshes, Back/Forward, desktop and mobile timeline controls,
-fit/expanded views, portrait/landscape decoding, sharing and SoundCloud passed
-without app/media request failures, console errors or page errors.
+The production browser run confirmed totals of 4,213 for 2013, 479 for 2002 and
+6,669 for 2001. Direct year/photo loads, Back/Forward, normal scrolling, the
+56px scrubber target and 18×28px visible thumb, single-commit drag behavior,
+directional year boundaries, fit/expanded views, portrait/landscape decoding,
+sharing and SoundCloud passed. After six year traversals and 30 orientation
+changes, production retained one mounted year, one year layout, two cache
+entries, two observers, 18 rows, 61 photo tiles, zero inactive-year images and
+242 DOM nodes. There were no application/media request failures, console errors,
+page errors, diagnostic bound warnings or new Nginx error-log bytes.
+
+The promotion changed only the existing `current` symlink. QA remained on the
+same accepted artifact. Nginx configuration, DNS, Cloudflare settings, TLS and
+R2 were unchanged; the R2 dry run again reported 22,722 objects and zero
+deletions with no upload.
 
 The existing clean five-minute local playback result remains the long playback
 baseline: 300 seconds, photograph 2,971 at 0.1 seconds per photograph, 3,057
 image responses, no failed image requests, no page errors and zero sampled
-buffering. The short production run advanced 120 photographs in 12 seconds with
-the same clean result, so the five-minute test was not repeated.
+buffering. The accepted artifact was promoted unchanged after physical QA, so
+the long playback test was not repeated during the symlink-only promotion.
 
 ## Adding future years and curator corrections
 
