@@ -13,7 +13,11 @@ import {
 } from "../data/useYearCollection";
 import type { Catalog, YearIndex } from "../types";
 import { orderedArchiveYears } from "./archiveTimelineModel";
-import { requestIsCurrent } from "./archiveYearCache";
+import {
+  requestIsCurrent,
+  shouldCancelYearRequest,
+  touchBoundedYearCache
+} from "./archiveYearCache";
 import { recordDiagnostic } from "../debug/archiveDiagnostics";
 
 export type ArchiveYearStatus = "index-loading" | "unloaded" | "loading" | "ready" | "error";
@@ -26,12 +30,14 @@ export interface ArchiveYearState {
   message?: string;
 }
 
-export type ArchiveLoadReason = "initial" | "adjacent" | "scrub" | "history" | "retry";
+export type ArchiveLoadReason = "initial" | "scrub" | "jump" | "boundary" | "history" | "retry";
 
 export interface ArchiveYearCache {
   states: Map<string, ArchiveYearState>;
   indexes: Map<string, YearIndex>;
   collections: Map<string, YearCollection>;
+  cachedYears: string[];
+  loadingYears: string[];
   loadYear: (year: string, reason?: ArchiveLoadReason) => void;
   retryYear: (year: string) => void;
   retryAlbum: (year: string, albumId: string) => void;
@@ -43,13 +49,20 @@ interface ActiveRequest {
   reason: ArchiveLoadReason;
 }
 
+interface RetryRequest {
+  year: string;
+  controller: AbortController;
+  restore: () => void;
+}
+
 export function useArchiveYearCache(catalog: Catalog | null, initialYear: string | null): ArchiveYearCache {
   const [states, setStatesValue] = useState<Map<string, ArchiveYearState>>(new Map());
   const statesRef = useRef(states);
+  const lruRef = useRef<string[]>([]);
   const pendingRef = useRef(new Map<string, ArchiveLoadReason>());
   const requestsRef = useRef(new Map<string, ActiveRequest>());
   const generationRef = useRef(new Map<string, number>());
-  const retryControllersRef = useRef(new Set<AbortController>());
+  const retryRequestsRef = useRef(new Map<AbortController, RetryRequest>());
 
   const setStates = useCallback((updater: (current: Map<string, ArchiveYearState>) => Map<string, ArchiveYearState>) => {
     setStatesValue((current) => {
@@ -65,6 +78,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
     active.controller.abort();
     generationRef.current.set(year, active.generation + 1);
     requestsRef.current.delete(year);
+    recordDiagnostic("manifest-load-abort", { year, reason: active.reason });
     setStates((current) => {
       const state = current.get(year);
       if (!state || state.status !== "loading") return current;
@@ -74,31 +88,89 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
     });
   }, [setStates]);
 
-  const loadYear = useCallback((year: string, reason: ArchiveLoadReason = "adjacent") => {
+  const cancelObsoleteRequests = useCallback((targetYear: string) => {
+    for (const pendingYear of [...pendingRef.current.keys()]) {
+      if (shouldCancelYearRequest(pendingYear, targetYear)) pendingRef.current.delete(pendingYear);
+    }
+    for (const requestYear of [...requestsRef.current.keys()]) {
+      if (shouldCancelYearRequest(requestYear, targetYear)) cancelRequest(requestYear);
+    }
+    for (const [controller, retry] of [...retryRequestsRef.current]) {
+      if (!shouldCancelYearRequest(retry.year, targetYear)) continue;
+      controller.abort();
+      retryRequestsRef.current.delete(controller);
+      retry.restore();
+      recordDiagnostic("manifest-retry-abort", { year: retry.year });
+    }
+  }, [cancelRequest]);
+
+  const retainCollection = useCallback((year: string, collection: YearCollection) => {
+    const cacheUpdate = touchBoundedYearCache(lruRef.current, year);
+    lruRef.current = cacheUpdate.order;
+    setStates((current) => {
+      const latest = current.get(year);
+      if (!latest) return current;
+      const next = new Map(current);
+      next.set(year, { ...latest, status: "ready", collection, message: undefined });
+      for (const evictedYear of cacheUpdate.evicted) {
+        const evicted = next.get(evictedYear);
+        if (!evicted?.collection) continue;
+        next.set(evictedYear, {
+          ...evicted,
+          collection: null,
+          status: evicted.index ? "unloaded" : "index-loading",
+          message: undefined
+        });
+      }
+      return next;
+    });
+    for (const evictedYear of cacheUpdate.evicted) {
+      recordDiagnostic("year-cache-evict", { year: evictedYear, retainedYears: cacheUpdate.order });
+    }
+  }, [setStates]);
+
+  const touchReadyCollection = useCallback((year: string) => {
     const state = statesRef.current.get(year);
-    if (requestsRef.current.has(year)) return;
-    if (!state || state.status === "ready" || state.status === "loading") return;
+    if (!state?.collection) return;
+    const cacheUpdate = touchBoundedYearCache(lruRef.current, year);
+    lruRef.current = cacheUpdate.order;
+    if (!cacheUpdate.evicted.length) return;
+    setStates((current) => {
+      const next = new Map(current);
+      for (const evictedYear of cacheUpdate.evicted) {
+        const evicted = next.get(evictedYear);
+        if (!evicted?.collection) continue;
+        next.set(evictedYear, { ...evicted, collection: null, status: "unloaded", message: undefined });
+      }
+      return next;
+    });
+  }, [setStates]);
+
+  const loadYear = useCallback((year: string, reason: ArchiveLoadReason = "jump") => {
+    cancelObsoleteRequests(year);
+    const state = statesRef.current.get(year);
+    if (!state || requestsRef.current.has(year) || state.status === "loading") return;
+    if (state.status === "ready" && state.collection) {
+      touchReadyCollection(year);
+      return;
+    }
     if (!state.index) {
       pendingRef.current.set(year, reason);
       return;
-    }
-
-    if (reason === "scrub" || reason === "history") {
-      for (const [requestYear, request] of requestsRef.current) {
-        if (requestYear !== year && request.reason === "scrub") cancelRequest(requestYear);
-      }
     }
 
     const generation = (generationRef.current.get(year) || 0) + 1;
     generationRef.current.set(year, generation);
     const controller = new AbortController();
     requestsRef.current.set(year, { controller, generation, reason });
-    const years = [...statesRef.current.keys()];
     const sourceIndex = state.index;
+    const years = [...statesRef.current.keys()];
     recordDiagnostic("manifest-load-start", { year, reason, albumCount: sourceIndex.albums.length });
     setStates((current) => {
+      const latest = current.get(year);
+      if (!latest) return current;
       const next = new Map(current);
-      next.set(year, { ...state, status: "loading", collection: null, message: `Loading ${year}` });
+      next.set(year, { ...latest, status: "loading", collection: null, message: `Loading ${year}` });
       return next;
     });
 
@@ -116,13 +188,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
           photoCount: collection.photos.length,
           failedAlbumCount: collection.failedAlbumIds.length
         });
-        setStates((current) => {
-          const latest = current.get(year);
-          if (!latest || !requestIsCurrent(generationRef.current.get(year) || 0, generation)) return current;
-          const next = new Map(current);
-          next.set(year, { ...latest, status: "ready", collection, message: undefined });
-          return next;
-        });
+        retainCollection(year, collection);
       })
       .catch((error: unknown) => {
         if (isAbortError(error) || !requestIsCurrent(generationRef.current.get(year) || 0, generation)) return;
@@ -139,14 +205,17 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
         const current = requestsRef.current.get(year);
         if (current?.generation === generation) requestsRef.current.delete(year);
       });
-  }, [cancelRequest, setStates]);
+  }, [cancelObsoleteRequests, retainCollection, setStates, touchReadyCollection]);
 
   useEffect(() => {
     if (!catalog) return;
     for (const request of requestsRef.current.values()) request.controller.abort();
+    for (const retry of retryRequestsRef.current.values()) retry.controller.abort();
     requestsRef.current.clear();
+    retryRequestsRef.current.clear();
     generationRef.current.clear();
     pendingRef.current.clear();
+    lruRef.current = [];
     const ordered = orderedArchiveYears(catalog);
     const initial = new Map(ordered.map(({ year }) => [year, {
       year,
@@ -168,7 +237,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
             const previous = current.get(summary.year);
             if (!previous) return current;
             const next = new Map(current);
-            next.set(summary.year, { ...previous, index, status: "unloaded" });
+            next.set(summary.year, { ...previous, index, status: "unloaded", message: undefined });
             return next;
           });
         })
@@ -189,7 +258,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
   }, [catalog, setStates]);
 
   useEffect(() => {
-    if (initialYear) pendingRef.current.set(initialYear, "initial");
+    if (initialYear && !pendingRef.current.has(initialYear)) pendingRef.current.set(initialYear, "initial");
     for (const [year, reason] of [...pendingRef.current]) {
       const state = states.get(year);
       if (state?.index && state.status !== "index-loading") {
@@ -201,19 +270,30 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
 
   useEffect(() => () => {
     for (const request of requestsRef.current.values()) request.controller.abort();
-    for (const controller of retryControllersRef.current) controller.abort();
+    for (const retry of retryRequestsRef.current.values()) retry.controller.abort();
     requestsRef.current.clear();
-    retryControllersRef.current.clear();
+    retryRequestsRef.current.clear();
   }, []);
 
   const retryYear = useCallback((year: string) => {
     const currentState = statesRef.current.get(year);
     const summary = catalog?.years.find((candidate) => candidate.year === year);
     if (!currentState || !summary) return;
+    cancelObsoleteRequests(year);
     pendingRef.current.set(year, "retry");
     if (!currentState.index) {
       const controller = new AbortController();
-      retryControllersRef.current.add(controller);
+      retryRequestsRef.current.set(controller, {
+        year,
+        controller,
+        restore: () => setStates((current) => {
+          const state = current.get(year);
+          if (!state || state.index) return current;
+          const next = new Map(current);
+          next.set(year, { ...state, status: "error", message: "Year index could not be loaded" });
+          return next;
+        })
+      });
       setStates((current) => {
         const state = current.get(year);
         if (!state) return current;
@@ -243,56 +323,50 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
             return next;
           });
         })
-        .finally(() => retryControllersRef.current.delete(controller));
+        .finally(() => retryRequestsRef.current.delete(controller));
       return;
     }
     setStates((current) => {
       const state = current.get(year);
       if (!state) return current;
       const next = new Map(current);
-      next.set(year, { ...state, status: state.index ? "unloaded" : "index-loading", message: undefined });
+      next.set(year, { ...state, status: "unloaded", collection: null, message: undefined });
       return next;
     });
-  }, [catalog, setStates]);
+  }, [cancelObsoleteRequests, catalog, setStates]);
 
   const retryAlbum = useCallback((year: string, albumId: string) => {
     const state = statesRef.current.get(year);
     const target = state?.collection?.albumResults.find((result) => result.album.id === albumId);
     if (!state?.collection || !target || target.status !== "error") return;
     const controller = new AbortController();
-    retryControllersRef.current.add(controller);
-    const loadingCollection = replaceAlbumResult(state.collection, albumId, { status: "loading", album: target.album });
-    setStates((current) => {
-      const latest = current.get(year);
-      if (!latest) return current;
-      const next = new Map(current);
-      next.set(year, { ...latest, collection: loadingCollection });
-      return next;
+    retryRequestsRef.current.set(controller, {
+      year,
+      controller,
+      restore: () => {
+        const latest = statesRef.current.get(year);
+        const latestTarget = latest?.collection?.albumResults.find((result) => result.album.id === albumId);
+        if (!latest?.collection || latestTarget?.status !== "loading") return;
+        retainCollection(year, replaceAlbumResult(latest.collection, albumId, target));
+      }
     });
+    retainCollection(year, replaceAlbumResult(state.collection, albumId, { status: "loading", album: target.album }));
     void loadAlbum(target.album, controller.signal)
       .then((result) => {
-        setStates((current) => {
-          const latest = current.get(year);
-          if (!latest?.collection) return current;
-          const next = new Map(current);
-          next.set(year, { ...latest, collection: replaceAlbumResult(latest.collection, albumId, result) });
-          return next;
-        });
+        const latest = statesRef.current.get(year);
+        if (!latest?.collection) return;
+        retainCollection(year, replaceAlbumResult(latest.collection, albumId, result));
       })
       .catch((error: unknown) => {
         if (isAbortError(error)) return;
-        setStates((current) => {
-          const latest = current.get(year);
-          if (!latest?.collection) return current;
-          const next = new Map(current);
-          next.set(year, { ...latest, collection: replaceAlbumResult(latest.collection, albumId, {
-            status: "error", album: target.album, errorMessage: publicAlbumError(error)
-          }) });
-          return next;
-        });
+        const latest = statesRef.current.get(year);
+        if (!latest?.collection) return;
+        retainCollection(year, replaceAlbumResult(latest.collection, albumId, {
+          status: "error", album: target.album, errorMessage: publicAlbumError(error)
+        }));
       })
-      .finally(() => retryControllersRef.current.delete(controller));
-  }, [setStates]);
+      .finally(() => retryRequestsRef.current.delete(controller));
+  }, [retainCollection]);
 
   const indexes = new Map<string, YearIndex>();
   const collections = new Map<string, YearCollection>();
@@ -300,6 +374,8 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
     if (state.index) indexes.set(year, state.index);
     if (state.collection) collections.set(year, state.collection);
   }
+  const cachedYears = lruRef.current.filter((year) => collections.has(year));
+  const loadingYears = [...states].filter(([, state]) => state.status === "loading").map(([year]) => year);
 
-  return { states, indexes, collections, loadYear, retryYear, retryAlbum };
+  return { states, indexes, collections, cachedYears, loadingYears, loadYear, retryYear, retryAlbum };
 }

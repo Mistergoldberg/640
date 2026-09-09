@@ -1,6 +1,6 @@
 import type { Catalog } from "../types";
 
-export const ARCHIVE_RESTORATION_SCHEMA = "continuous-archive-v1";
+export const ARCHIVE_RESTORATION_SCHEMA = "year-window-archive-v1";
 export const ARCHIVE_HISTORY_APP = "640x480";
 export const MAX_ARCHIVE_ANCHOR_ADJUSTMENT_PX = 160;
 
@@ -12,7 +12,7 @@ export type ArchiveRestorationPhase =
   | "settled"
   | "cancelled";
 
-export type ArchiveRestorationSource = "root" | "url" | "history" | "photo-close";
+export type ArchiveRestorationSource = "root" | "url" | "history" | "scrub" | "jump" | "boundary" | "photo-close";
 
 export interface StoredArchiveAnchor {
   schema: typeof ARCHIVE_RESTORATION_SCHEMA;

@@ -94,7 +94,7 @@ test("explicit 2013 URL wins over unrelated current-schema history", async ({ pa
   await page.evaluate(() => history.replaceState(history.state, "", "/?year=2013"));
   await page.reload();
   await expectRootAt2013(page);
-  expect(await page.evaluate(() => history.state.restoration.schema)).toBe("continuous-archive-v1");
+  expect(await page.evaluate(() => history.state.restoration.schema)).toBe("year-window-archive-v1");
 });
 
 test("explicit 2001 URL loads and positions its year heading", async ({ page }) => {
@@ -110,7 +110,7 @@ test("reload deep inside 2001 restores the current-schema stable anchor", async 
   await waitForRestoration(page);
   await scrollWithinYear(page, "2001");
   const before = await page.evaluate(() => ({ y: scrollY, anchor: history.state.restoration }));
-  expect(before.anchor.schema).toBe("continuous-archive-v1");
+  expect(before.anchor.schema).toBe("year-window-archive-v1");
   expect(Math.abs(before.anchor.adjustmentPx)).toBeLessThanOrEqual(160);
   await page.reload();
   await waitForRestoration(page);
@@ -195,7 +195,7 @@ test("a delayed non-current year cannot apply an obsolete target", async ({ page
   expect(await page.evaluate(() => scrollY)).toBeLessThanOrEqual(240);
 });
 
-test("user scrolling cancels a pending restoration before delayed layout settles", async ({ page }) => {
+test("user scrolling cancels positioning while the selected year remains authoritative", async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let requested = 0;
@@ -216,7 +216,8 @@ test("user scrolling cancels a pending restoration before delayed layout settles
   release();
   await expect.poll(() => completed).toBe(3);
   await afterLayoutFrames(page);
-  await expect(page).toHaveURL(/year=2013/);
-  await expect(page.locator(".app-bar__year")).toHaveText("2013");
+  await expect(page).toHaveURL(/year=2001/);
+  await expect(page.locator(".app-bar__year")).toHaveText("2001");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", "2001");
   expect(await page.evaluate(() => scrollY)).toBeLessThan(5000);
 });

@@ -256,42 +256,79 @@ img {
   font-weight: 680;
 }
 
-.archive-year-placeholder {
+.archive-year-heading--inline {
+  min-height: 58px;
+  margin-top: 6px;
+}
+
+.year-window-loading {
+  display: grid;
+  min-height: min(54vh, 420px);
+  align-content: center;
+  justify-items: center;
+  gap: 7px;
   border-top: 1px solid rgba(244, 241, 234, 0.08);
-  color: rgba(244, 241, 234, 0.45);
-  font-size: 0.75rem;
+  color: rgba(244, 241, 234, 0.48);
+  font-size: 0.76rem;
 }
 
-.archive-year-placeholder__context {
-  position: sticky;
-  top: 132px;
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 10px;
-  background: rgba(9, 9, 9, 0.86);
+.year-window-loading strong {
+  color: rgba(244, 241, 234, 0.82);
+  font-size: 1.1rem;
 }
 
-.archive-year-placeholder strong {
-  color: rgba(244, 241, 234, 0.67);
-  font-weight: 690;
-}
-
-.archive-year-placeholder--loading {
-  background: linear-gradient(90deg, rgba(244, 241, 234, 0.02), rgba(244, 241, 234, 0.07), rgba(244, 241, 234, 0.02));
-  background-size: 220% 100%;
-  animation: archive-loading 1.6s ease-in-out infinite;
-}
-
-.archive-year-placeholder button {
-  min-height: 28px;
-  padding: 0 9px;
+.year-window-loading button {
+  min-height: 32px;
+  padding: 0 12px;
   border: 1px solid rgba(255, 184, 184, 0.3);
   border-radius: 5px;
   color: #ffd3d3;
   background: rgba(255, 184, 184, 0.08);
+  cursor: pointer;
+}
+
+.year-window-loading--loading,
+.year-window-loading--index-loading,
+.year-window-loading--unloaded {
+  background: linear-gradient(90deg, rgba(244, 241, 234, 0.01), rgba(244, 241, 234, 0.04), rgba(244, 241, 234, 0.01));
+  background-size: 220% 100%;
+  animation: archive-loading 1.6s ease-in-out infinite;
+}
+
+.archive-year-boundary {
+  margin: 12px 0;
+}
+
+.archive-year-boundary button {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  place-content: center;
+  gap: 3px;
+  padding: 9px 16px;
+  border: 1px solid rgba(244, 241, 234, 0.12);
+  border-radius: 7px;
+  color: rgba(244, 241, 234, 0.82);
+  background: rgba(244, 241, 234, 0.035);
+  cursor: pointer;
+  text-align: center;
+}
+
+.archive-year-boundary button:hover,
+.archive-year-boundary button:focus-visible {
+  border-color: rgba(244, 241, 234, 0.38);
+  background: rgba(244, 241, 234, 0.08);
+}
+
+.archive-year-boundary span {
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.archive-year-boundary small {
+  color: rgba(244, 241, 234, 0.46);
+  font-size: 0.68rem;
+  font-weight: 600;
 }
 
 @keyframes archive-loading {
@@ -1227,7 +1264,7 @@ img {
   .player-buffer,
   .archive-timeline__thumb,
   .app-bar__year,
-  .archive-year-placeholder--loading {
+  .year-window-loading {
     transition: none;
     animation: none;
   }

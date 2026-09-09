@@ -76,6 +76,6 @@ describe("archive restoration policy", () => {
 
   it("only identifies obsolete storage keys owned by this application", () => {
     expect(ownedLegacyRestorationKeys(["2013"])).toEqual(["640x480-selected-year", "640x480-scroll:2013", "640x480-anchor:2013"]);
-    expect(ARCHIVE_RESTORATION_SCHEMA).toBe("continuous-archive-v1");
+    expect(ARCHIVE_RESTORATION_SCHEMA).toBe("year-window-archive-v1");
   });
 });

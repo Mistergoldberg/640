@@ -7,7 +7,13 @@ import { type LoadedAlbumSummary, type YearCollection } from "./data/useYearColl
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
-import { historyModeForIntent } from "./archive/archiveHistory";
+import {
+  archiveWindowWarnings,
+  boundaryArchiveTarget,
+  createArchiveNavigationPlan,
+  stableYearLocalCorrection,
+  type ArchiveNavigationIntent
+} from "./archive/archiveNavigation";
 import {
   ARCHIVE_HISTORY_APP,
   archiveCatalogueIdentity,
@@ -26,22 +32,14 @@ import {
   type ArchiveRestorationTarget,
   type StoredArchiveAnchor
 } from "./archive/archiveRestoration";
-import {
-  buildArchiveGeometry,
-  activeYearAtScroll,
-  stableAnchorCorrection,
-  YEAR_HEADING_HEIGHT_PX,
-  type ArchiveGeometry
-} from "./archive/continuousArchiveLayout";
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "./player/fullscreen";
 import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog, Photo } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
-// WebKit scrolls the document on a compositor thread. Keep enough real rows on
-// either side of the viewport that a momentum gesture cannot outrun React.
-const GRID_OVERSCAN_PX = 4000;
+const GRID_MIN_OVERSCAN_PX = 320;
+const GRID_SCROLL_AHEAD_PX = 900;
 const ALBUM_GAP_PX = 18;
 const ALBUM_HEADING_HEIGHT_PX = 24;
 const ALBUM_HEADING_GAP_PX = 9;
@@ -102,27 +100,6 @@ interface LayoutAlbumError {
   album: LoadedAlbumSummary;
 }
 
-interface LayoutYearHeading {
-  type: "year-heading";
-  id: string;
-  top: number;
-  height: number;
-  year: string;
-  count: number;
-}
-
-interface LayoutYearPlaceholder {
-  type: "year-placeholder";
-  id: string;
-  top: number;
-  height: number;
-  year: string;
-  albumId: string | null;
-  folderLabel: string;
-  status: ArchiveYearState["status"];
-  message?: string;
-}
-
 interface MosaicSlot {
   col: number;
   row: number;
@@ -131,7 +108,7 @@ interface MosaicSlot {
   shape: PreviewShape;
 }
 
-type LayoutEntry = LayoutHeading | LayoutRow | LayoutMosaic | LayoutAlbumError | LayoutYearHeading | LayoutYearPlaceholder;
+type LayoutEntry = LayoutHeading | LayoutRow | LayoutMosaic | LayoutAlbumError;
 
 interface AlbumAnchor {
   id: string;
@@ -264,10 +241,14 @@ function updateUrlState(
     return restoration;
   }
 
-  if (nextPath !== currentPath()) {
-    window.history.pushState(nextState, "", nextPath);
-  }
-
+  const currentAnchor = currentState?.restoration;
+  const isSettledDuplicate = nextPath === currentPath()
+    && currentState?.view === nextState.view
+    && currentAnchor?.year === restoration.year
+    && currentAnchor?.albumId === restoration.albumId
+    && currentAnchor?.photoId === restoration.photoId;
+  if (isSettledDuplicate && currentAnchor) return currentAnchor;
+  window.history.pushState(nextState, "", nextPath);
   return restoration;
 }
 
@@ -380,12 +361,6 @@ function subscribeViewport(onStoreChange: () => void) {
 
 function useViewport() {
   return useSyncExternalStore(subscribeViewport, readViewportSnapshot, () => serverViewport);
-}
-
-function requiresStableArchiveDom() {
-  if (typeof navigator === "undefined") return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent)
-    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
 function normalizeMosaicSlots(slots: MosaicSlot[]) {
@@ -809,97 +784,6 @@ function buildGridLayout(collection: YearCollection, width: number, targetRowHei
   };
 }
 
-function buildContinuousGridLayout(
-  years: string[],
-  states: Map<string, ArchiveYearState>,
-  width: number,
-  targetRowHeight: number,
-  gap: number
-): { layout: GridLayout; geometry: ArchiveGeometry } {
-  const loadedLayouts = new Map<string, GridLayout>();
-  for (const year of years) {
-    const state = states.get(year);
-    if (state?.status === "ready" && state.collection) {
-      loadedLayouts.set(year, buildGridLayout(state.collection, width, targetRowHeight, gap));
-    }
-  }
-
-  const geometry = buildArchiveGeometry(years.map((year) => {
-    const state = states.get(year);
-    const loaded = loadedLayouts.get(year);
-    return {
-      year,
-      index: state?.index || null,
-      loadedHeight: loaded?.totalHeight,
-      loadedAlbums: loaded?.albumAnchors.map((album) => ({
-        id: album.id,
-        folderLabel: album.folderLabel,
-        top: album.top,
-        bottom: album.bottom,
-        count: album.count
-      }))
-    };
-  }), width, targetRowHeight);
-
-  const entries: LayoutEntry[] = [];
-  const photoTops = new Map<string, number>();
-  for (const yearGeometry of geometry.years) {
-    const state = states.get(yearGeometry.year);
-    const loaded = loadedLayouts.get(yearGeometry.year);
-    entries.push({
-      type: "year-heading",
-      id: `year-${yearGeometry.year}`,
-      top: yearGeometry.top,
-      height: YEAR_HEADING_HEIGHT_PX,
-      year: yearGeometry.year,
-      count: state?.index?.sequence.length || state?.index?.scannedCount || 0
-    });
-
-    if (loaded) {
-      for (const entry of loaded.entries) entries.push({ ...entry, top: yearGeometry.headingBottom + entry.top });
-      for (const [photoId, top] of loaded.photoTops) photoTops.set(photoId, yearGeometry.headingBottom + top);
-    } else if (yearGeometry.albums.length) {
-      for (const album of yearGeometry.albums) {
-        entries.push({
-          type: "year-placeholder",
-          id: `placeholder-${yearGeometry.year}-${album.id}`,
-          top: album.top,
-          height: Math.max(54, album.bottom - album.top),
-          year: yearGeometry.year,
-          albumId: album.id,
-          folderLabel: folderLabelFromName(album.folderLabel, yearGeometry.year),
-          status: state?.status || "index-loading",
-          message: state?.message
-        });
-      }
-    } else {
-      entries.push({
-        type: "year-placeholder",
-        id: `placeholder-${yearGeometry.year}`,
-        top: yearGeometry.headingBottom,
-        height: 54,
-        year: yearGeometry.year,
-        albumId: null,
-        folderLabel: "Archive index",
-        status: state?.status || "index-loading",
-        message: state?.message
-      });
-    }
-  }
-
-  const albumAnchors: AlbumAnchor[] = geometry.albums.map((album) => ({ ...album }));
-  const yearAnchors: YearAnchor[] = geometry.years.map((year) => ({
-    year: year.year,
-    top: year.top,
-    bottom: year.bottom,
-    albums: albumAnchors.filter((album) => album.year === year.year)
-  }));
-  return {
-    geometry,
-    layout: { entries, totalHeight: geometry.totalHeight, photoTops, albumAnchors, yearAnchors }
-  };
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -930,24 +814,38 @@ function findStableAlbumAtTop(layout: GridLayout, virtualTop: number) {
   return layout.albumAnchors.find((album) => virtualTop >= album.top && virtualTop <= album.bottom) || null;
 }
 
-function findStablePhotoAtTop(layout: GridLayout, virtualTop: number) {
-  const entry = layout.entries.find((candidate) =>
-    (candidate.type === "row" || candidate.type === "mosaic") &&
-    virtualTop >= candidate.top &&
-    virtualTop <= candidate.top + candidate.height
-  );
-  return entry && (entry.type === "row" || entry.type === "mosaic") ? entry.items[0]?.photo.id || null : null;
-}
-
 function escapeCssAttribute(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function archiveTargetFromRestoration(target: ArchiveRestorationTarget): ArchiveTarget {
+  return {
+    year: target.year,
+    albumId: target.albumId,
+    albumName: null,
+    ratio: 0,
+    sectionRatio: 0
+  };
+}
+
+function nearestPhotoAnchor(photoTops: Array<[string, number]>, targetTop: number) {
+  if (!photoTops.length) return null;
+  let low = 0;
+  let high = photoTops.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (photoTops[middle][1] < targetTop) low = middle + 1;
+    else high = middle;
+  }
+  const after = photoTops[low];
+  const before = photoTops[Math.max(0, low - 1)];
+  return Math.abs(before[1] - targetTop) <= Math.abs(after[1] - targetTop) ? before : after;
 }
 
 function App() {
   const catalogState = useCatalog();
   const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
   const catalogueId = useMemo(() => catalog ? archiveCatalogueIdentity(catalog) : "", [catalog]);
-  const [archiveStartYear, setArchiveStartYear] = useState<string | null>(null);
   const [activeYear, setActiveYear] = useState<string | null>(null);
   const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
@@ -958,7 +856,8 @@ function App() {
   const fullscreenLaunchPhotoIdRef = useRef<string | null>(null);
   const pendingClosePhotoIdRef = useRef<string | null>(null);
   const initializedRef = useRef(false);
-  const { states, indexes, collections, loadYear, retryYear, retryAlbum } = useArchiveYearCache(catalog, archiveStartYear);
+  const savedAnchorsRef = useRef(new Map<string, Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">>());
+  const { states, indexes, collections, cachedYears, loadingYears, loadYear, retryYear, retryAlbum } = useArchiveYearCache(catalog, activeYear);
   const years = useMemo(() => catalog ? orderedArchiveYears(catalog).map((year) => year.year) : [], [catalog]);
   const timelineModel = useMemo(
     () => catalog ? buildArchiveTimelineModel(catalog, indexes) : { years: [], anchors: [] },
@@ -975,11 +874,67 @@ function App() {
   useEffect(() => { activePhotoIdRef.current = activePhotoId; }, [activePhotoId]);
   useEffect(() => { activePhotoYearRef.current = activePhotoYear; }, [activePhotoYear]);
 
+  const navigateToArchiveTarget = useCallback((input: ArchiveTarget | ArchiveRestorationTarget, intent: ArchiveNavigationIntent) => {
+    if (!catalog || !yearExists(catalog, input.year)) return;
+    const target = "source" in input ? archiveTargetFromRestoration(input) : input;
+    const plan = createArchiveNavigationPlan(target, intent);
+    const previousYear = activeYearRef.current;
+    const storedInput = "entryId" in input ? input : null;
+    const savedBoundaryAnchor = intent === "boundary" && target.sectionRatio >= 0.999
+      ? savedAnchorsRef.current.get(target.year) || null
+      : null;
+    const preferredAnchor = savedBoundaryAnchor || {
+      year: target.year,
+      albumId: storedInput?.albumId ?? target.albumId,
+      photoId: storedInput?.photoId ?? null,
+      adjustmentPx: storedInput?.adjustmentPx ?? 0
+    };
+    let restorationTarget: ArchiveRestorationTarget;
+
+    if (intent === "history" && storedInput) {
+      restorationTarget = storedInput;
+    } else {
+      const stored = updateUrlState(
+        target.year,
+        null,
+        plan.historyMode || "replace",
+        catalogueId,
+        false,
+        preferredAnchor
+      );
+      const source = storedInput?.source || (intent === "initial" ? "url" : intent);
+      restorationTarget = createArchiveRestorationTarget(stored, source, Boolean(storedInput?.focusPhoto));
+    }
+
+    recordDiagnostic("archive-navigation", {
+      intent,
+      previousYear,
+      year: target.year,
+      albumId: restorationTarget.albumId,
+      photoId: restorationTarget.photoId,
+      historyMode: plan.historyMode,
+      loadReason: plan.loadReason
+    });
+    activeYearRef.current = target.year;
+    setActiveYear(target.year);
+    loadYear(target.year, plan.loadReason);
+    dispatchRestoration({ type: "request", target: restorationTarget });
+    if (previousYear && previousYear !== target.year) {
+      const detail = { at: new Date().toISOString(), kind: "year-window-replace", top: 0, previousYear, year: target.year };
+      updateDiagnostics({ lastProgrammaticScroll: detail }, "programmatic-scroll", detail);
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [catalog, catalogueId, loadYear]);
+
   useEffect(() => {
     const yearStates = Object.fromEntries([...states].map(([year, state]) => [year, state.status]));
     updateDiagnostics({
       activeYear,
-      loadedYears: [...states].filter(([, state]) => state.status === "ready").map(([year]) => year),
+      loadedYears: cachedYears,
+      cachedYears,
+      prefetchedYears: cachedYears.filter((year) => year !== activeYear),
+      yearCacheEntries: cachedYears.length,
+      loadingYears,
       yearStates,
       restoration: { phase: restoration.phase, generation: restoration.generation, settledYear: restoration.settledYear },
       restorationTarget: restoration.target ? {
@@ -991,7 +946,7 @@ function App() {
         focusPhoto: restoration.target.focusPhoto
       } : null
     });
-  }, [activeYear, restoration, states]);
+  }, [activeYear, cachedYears, loadingYears, restoration, states]);
 
   useEffect(() => {
     recordDiagnostic("restoration-transition", {
@@ -1015,16 +970,12 @@ function App() {
     const photoId = readUrlPhotoId();
     initializedRef.current = true;
     clearOwnedLegacyRestorationState(catalog.years.map(({ year }) => year));
-    setArchiveStartYear(target.year);
-    setActiveYear(target.year);
-    dispatchRestoration({ type: "request", target });
+    navigateToArchiveTarget(target, "initial");
     if (photoId) {
       setActivePhotoId(photoId);
       setActivePhotoYear(target.year);
     }
-    const previousState = readArchiveHistoryState(window.history.state);
-    updateUrlState(target.year, photoId, "replace", catalogueId, Boolean(previousState?.fromGrid), target);
-  }, [catalog]);
+  }, [catalog, navigateToArchiveTarget]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -1046,9 +997,7 @@ function App() {
           photoId: restoreId
         }), "photo-close", true);
       }
-      loadYear(target.year, "history");
-      setActiveYear(target.year);
-      dispatchRestoration({ type: "request", target });
+      navigateToArchiveTarget(target, "history");
       if (photoId) {
         setActivePhotoId(photoId);
         setActivePhotoYear(target.year);
@@ -1060,7 +1009,7 @@ function App() {
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [catalog, catalogueId, loadYear]);
+  }, [catalog, catalogueId, navigateToArchiveTarget]);
 
   useEffect(() => {
     if (!activePhotoId || !activePhotoYear) return;
@@ -1077,17 +1026,6 @@ function App() {
     }
   }, [activePhotoId, activePhotoYear, catalogueId, loadYear, states]);
 
-  const handleVisibleYearChange = useCallback((year: string, shouldLoad = true) => {
-    if (!catalog || !yearExists(catalog, year)) return;
-    if (year !== activeYearRef.current) {
-      recordDiagnostic("year-activation", { previousYear: activeYearRef.current, year, shouldLoad });
-      activeYearRef.current = year;
-      setActiveYear(year);
-      if (!readUrlPhotoId()) updateUrlState(year, null, "replace", catalogueId);
-    }
-    if (shouldLoad) loadYear(year, "adjacent");
-  }, [catalog, catalogueId, loadYear]);
-
   const openPhoto = useCallback((year: string, photoId: string) => {
     const collection = collections.get(year);
     if (!collection?.photos.some((photo) => photo.id === photoId)) return;
@@ -1098,7 +1036,7 @@ function App() {
     });
     setActivePhotoId(photoId);
     setActivePhotoYear(year);
-    updateUrlState(year, photoId, historyModeForIntent("photo"), catalogueId, true, { photoId });
+    updateUrlState(year, photoId, "push", catalogueId, true, { photoId });
   }, [catalogueId, collections]);
 
   const closePlayer = useCallback((photoId: string) => {
@@ -1113,43 +1051,37 @@ function App() {
       return;
     }
     if (year) {
-      const anchor = updateUrlState(year, null, "replace", catalogueId, false, { photoId: restoreId });
-      dispatchRestoration({ type: "request", target: createArchiveRestorationTarget(anchor, "photo-close", true) });
+      const entryId = historyState?.entryId || createHistoryEntryId();
+      const anchor = createStoredArchiveAnchor({ catalogueId, entryId, year, photoId: restoreId });
+      navigateToArchiveTarget(createArchiveRestorationTarget(anchor, "photo-close", true), "photo-close");
     }
     setActivePhotoId(null);
     setActivePhotoYear(null);
     pendingClosePhotoIdRef.current = null;
-  }, [catalogueId]);
+  }, [catalogueId, navigateToArchiveTarget]);
 
   if (catalogState.status === "loading") return <SystemState title="640×480" message={catalogState.message} />;
   if (catalogState.status === "error") return <SystemState title="640×480" message={catalogState.message} />;
-  if (!archiveStartYear || !activeYear || !states.size) return <SystemState title="640×480" message="Building archive index" />;
+  if (!activeYear || !states.size) return <SystemState title="640×480" message="Building archive index" />;
 
   return (
     <>
-      <ContinuousCollectionGrid
+      <YearWindowGrid
         years={years}
         states={states}
         timelineModel={timelineModel}
         activeYear={activeYear}
         restoration={restoration}
+        onNavigate={navigateToArchiveTarget}
         onRestorationWait={(generation) => dispatchRestoration({ type: "wait-for-layout", generation })}
         onRestorationApply={(generation) => dispatchRestoration({ type: "apply", generation })}
-        onRestorationSettle={(generation, visibleYear) => {
-          dispatchRestoration({ type: "settle", generation, visibleYear });
-          handleVisibleYearChange(visibleYear, false);
-        }}
+        onRestorationSettle={(generation, visibleYear) => dispatchRestoration({ type: "settle", generation, visibleYear })}
         onRestorationCancel={(generation) => dispatchRestoration({ type: "cancel", generation })}
         onPersistAnchor={(anchor) => {
+          savedAnchorsRef.current.set(anchor.year, anchor);
           if (!activePhotoIdRef.current) replaceCurrentHistoryAnchor(catalogueId, anchor);
         }}
-        onPushArchiveTarget={(target) => updateUrlState(target.year, null, historyModeForIntent("jump"), catalogueId, false, {
-          albumId: target.albumId,
-          photoId: null
-        })}
-        onVisibleYearChange={handleVisibleYearChange}
         onOpenPhoto={openPhoto}
-        onRequestYear={(year, reason) => loadYear(year, reason)}
         onRetryYear={retryYear}
         onRetryAlbum={retryAlbum}
       />
@@ -1177,21 +1109,19 @@ function SystemState({ title, message, actionLabel, onAction }: { title: string;
   );
 }
 
-function ContinuousCollectionGrid({
+function YearWindowGrid({
   years,
   states,
   timelineModel,
   activeYear,
   restoration,
+  onNavigate,
   onRestorationWait,
   onRestorationApply,
   onRestorationSettle,
   onRestorationCancel,
   onPersistAnchor,
-  onPushArchiveTarget,
-  onVisibleYearChange,
   onOpenPhoto,
-  onRequestYear,
   onRetryYear,
   onRetryAlbum
 }: {
@@ -1200,105 +1130,63 @@ function ContinuousCollectionGrid({
   timelineModel: ReturnType<typeof buildArchiveTimelineModel>;
   activeYear: string;
   restoration: ArchiveRestorationState;
+  onNavigate: (target: ArchiveTarget | ArchiveRestorationTarget, intent: ArchiveNavigationIntent) => void;
   onRestorationWait: (generation: number) => void;
   onRestorationApply: (generation: number) => void;
   onRestorationSettle: (generation: number, visibleYear: string) => void;
   onRestorationCancel: (generation: number) => void;
   onPersistAnchor: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
-  onPushArchiveTarget: (target: ArchiveTarget) => void;
-  onVisibleYearChange: (year: string, shouldLoad?: boolean) => void;
   onOpenPhoto: (year: string, photoId: string) => void;
-  onRequestYear: (year: string, reason: "adjacent" | "scrub" | "history") => void;
   onRetryYear: (year: string) => void;
   onRetryAlbum: (year: string, albumId: string) => void;
 }) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const viewport = useViewport();
-  const stableArchiveDom = useMemo(requiresStableArchiveDom, []);
-  const previousLayoutRef = useRef<GridLayout | null>(null);
+  const previousLayoutRef = useRef<{ year: string; layout: GridLayout } | null>(null);
+  const previousScrollYRef = useRef(0);
   const restorationRef = useRef(restoration);
-  const [isScrubbing, setIsScrubbing] = useState(false);
   const diagnosticLayoutSignatureRef = useRef("");
   const diagnosticRangeSignatureRef = useRef("");
+  const activeWarningsRef = useRef(new Set<string>());
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const state = states.get(activeYear);
+  const collection = state?.status === "ready" ? state.collection : null;
   const targetHeight = width < 520 ? 118 : width < 900 ? 146 : 174;
   const gap = width < 520 ? 3 : 4;
-  const { layout, geometry } = useMemo(
-    () => buildContinuousGridLayout(years, states, width, targetHeight, gap),
-    [gap, states, targetHeight, width, years]
-  );
-  const indexByYear = useMemo(() => {
-    const result = new Map<string, Map<string, number>>();
-    for (const [year, state] of states) {
-      if (!state.collection) continue;
-      result.set(year, new Map(state.collection.photos.map((photo, index) => [photo.id, index])));
-    }
-    return result;
-  }, [states]);
+  const layout = useMemo(() => collection
+    ? buildGridLayout(collection, width, targetHeight, gap)
+    : { entries: [], totalHeight: 0, photoTops: new Map<string, number>(), albumAnchors: [], yearAnchors: [] },
+  [collection, gap, targetHeight, width]);
+  const photoAnchors = useMemo(() => [...layout.photoTops].sort((left, right) => left[1] - right[1]), [layout.photoTops]);
+  const indexById = useMemo(() => new Map(collection?.photos.map((photo, index) => [photo.id, index]) || []), [collection]);
   const containerTop = ref.current ? ref.current.getBoundingClientRect().top + viewport.scrollY : 0;
   const localViewportTop = viewport.scrollY - containerTop;
-  const visibleTop = localViewportTop - GRID_OVERSCAN_PX;
-  const visibleBottom = localViewportTop + viewport.height + GRID_OVERSCAN_PX;
-  const visibleEntries = stableArchiveDom
-    ? layout.entries
-    : layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
-  const thumbnailLoading = stableArchiveDom ? "lazy" : "eager";
-  const currentYear = activeYearAtScroll(geometry.years, localViewportTop + ARCHIVE_JUMP_OFFSET_PX) || activeYear;
-  const currentYearAnchor = layout.yearAnchors.find((year) => year.year === currentYear) || layout.yearAnchors[0] || null;
+  const scrollingDown = viewport.scrollY >= previousScrollYRef.current;
+  previousScrollYRef.current = viewport.scrollY;
+  const trailingOverscan = Math.max(GRID_MIN_OVERSCAN_PX, viewport.height * 0.4);
+  const leadingOverscan = Math.max(GRID_SCROLL_AHEAD_PX, viewport.height);
+  const visibleTop = localViewportTop - (scrollingDown ? trailingOverscan : leadingOverscan);
+  const visibleBottom = localViewportTop + viewport.height + (scrollingDown ? leadingOverscan : trailingOverscan);
+  const visibleEntries = layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
   const currentAlbum = findAlbumAtTop(layout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
-  const yearHeadingScreenTop = currentYearAnchor ? containerTop + currentYearAnchor.top - viewport.scrollY : -1;
   const albumHeadingScreenTop = currentAlbum ? containerTop + currentAlbum.top - viewport.scrollY : -1;
-  const yearHeadingIsVisible = yearHeadingScreenTop >= 88 && yearHeadingScreenTop <= 220;
+  const yearHeadingIsVisible = localViewportTop < 36;
   const albumHeadingIsVisible = albumHeadingScreenTop >= 88 && albumHeadingScreenTop <= 240;
-  const state = states.get(currentYear);
-  const failedCount = state?.collection?.failedAlbumIds.length || 0;
-  const statusMessage = state?.status === "loading" ? `Loading ${currentYear}`
-    : state?.status === "error" ? state.message || `${currentYear} could not load`
-      : failedCount ? `${failedCount} album${failedCount === 1 ? "" : "s"} could not load` : null;
+  const failedCount = collection?.failedAlbumIds.length || 0;
+  const statusMessage = state?.status === "index-loading" ? `Loading ${activeYear} index`
+    : state?.status === "unloaded" || state?.status === "loading" ? `Loading ${activeYear}`
+      : state?.status === "error" ? state.message || `${activeYear} could not load`
+        : failedCount ? `${failedCount} album${failedCount === 1 ? "" : "s"} could not load` : null;
   const activeAlbumProgress = currentAlbum
-    ? Math.max(0, Math.min(1, (localViewportTop + ARCHIVE_JUMP_OFFSET_PX - currentAlbum.top) / Math.max(1, currentAlbum.bottom - currentAlbum.top)))
+    ? clamp((localViewportTop + ARCHIVE_JUMP_OFFSET_PX - currentAlbum.top) / Math.max(1, currentAlbum.bottom - currentAlbum.top), 0, 1)
     : 0;
-  const activeRatio = archiveRatioForLocation(timelineModel, currentYear, currentAlbum?.id || null, activeAlbumProgress);
+  const activeRatio = archiveRatioForLocation(timelineModel, activeYear, currentAlbum?.id || null, activeAlbumProgress);
   const restorationPending = restorationIsPending(restoration);
-  const allIndexesSettled = years.every((year) => states.get(year)?.status !== "index-loading");
-
-  useLayoutEffect(() => {
-    if (!diagnosticsEnabled()) return;
-    const first = visibleEntries[0];
-    const last = visibleEntries[visibleEntries.length - 1];
-    const virtualRange = {
-      mode: stableArchiveDom ? "stable" : "windowed",
-      first: first ? { id: first.id, type: first.type, top: Math.round(first.top) } : null,
-      last: last ? { id: last.id, type: last.type, bottom: Math.round(last.top + last.height) } : null,
-      renderedEntries: visibleEntries.length,
-      totalEntries: layout.entries.length,
-      totalHeight: Math.round(layout.totalHeight)
-    };
-    const rangeSignature = JSON.stringify(virtualRange);
-    const rows = ref.current?.querySelectorAll(".photo-row,.photo-mosaic").length || 0;
-    const photos = ref.current?.querySelectorAll(".photo-tile").length || 0;
-    updateDiagnostics({
-      activeYear: currentYear,
-      activeAlbum: currentAlbum ? { year: currentAlbum.year, id: currentAlbum.id } : null,
-      virtualRange,
-      mountedRows: rows,
-      mountedPhotos: photos,
-      scrubber: { ...getDiagnostics().scrubber, dragging: isScrubbing, activeRatio: Math.round(activeRatio * 100000) / 100000 }
-    });
-    if (rangeSignature !== diagnosticRangeSignatureRef.current) {
-      diagnosticRangeSignatureRef.current = rangeSignature;
-      recordDiagnostic("virtual-range-change", virtualRange);
-    }
-    const layoutSignature = `${width}:${layout.totalHeight}:${layout.entries.length}:${geometry.years.map((year) => `${year.year}:${year.isEstimated ? "e" : "m"}:${year.bottom}`).join("|")}`;
-    if (layoutSignature !== diagnosticLayoutSignatureRef.current) {
-      diagnosticLayoutSignatureRef.current = layoutSignature;
-      recordDiagnostic("layout-construction", {
-        width,
-        totalHeight: Math.round(layout.totalHeight),
-        entryCount: layout.entries.length,
-        years: geometry.years.map((year) => ({ year: year.year, top: Math.round(year.top), bottom: Math.round(year.bottom), measurement: year.isEstimated ? "estimated" : "measured" }))
-      });
-    }
-  }, [activeRatio, currentAlbum, currentYear, geometry.years, isScrubbing, layout.entries.length, layout.totalHeight, stableArchiveDom, visibleEntries, width]);
+  const targetAlbum = restoration.target?.year === activeYear && restoration.target.albumId
+    ? state?.index?.albums.find((album) => album.id === restoration.target?.albumId) || null
+    : null;
+  const olderTarget = boundaryArchiveTarget(timelineModel, activeYear, "older");
+  const newerTarget = boundaryArchiveTarget(timelineModel, activeYear, "newer");
 
   useLayoutEffect(() => {
     restorationRef.current = restoration;
@@ -1306,87 +1194,60 @@ function ContinuousCollectionGrid({
 
   useLayoutEffect(() => {
     const previous = previousLayoutRef.current;
-    previousLayoutRef.current = layout;
-    // Partial indexes can put the first known album in a later year. Until the
-    // authoritative target settles, those estimates are not a visible anchor.
-    if (restorationPending || !width || !previous || !ref.current || previous.totalHeight === layout.totalHeight) return;
-    const oldLocalTop = window.scrollY - (ref.current.getBoundingClientRect().top + window.scrollY) + ARCHIVE_JUMP_OFFSET_PX;
-    const oldAlbum = findStableAlbumAtTop(previous, oldLocalTop);
-    const oldPhoto = findStablePhotoAtTop(previous, oldLocalTop);
-    const previousTop = oldPhoto ? previous.photoTops.get(oldPhoto) : oldAlbum?.top;
+    previousLayoutRef.current = { year: activeYear, layout };
+    if (restorationPending || !width || !previous || previous.year !== activeYear || !ref.current || previous.layout.totalHeight === layout.totalHeight) return;
+    const oldLocalTop = window.scrollY - (ref.current.getBoundingClientRect().top + window.scrollY) + RESTORE_OFFSET_PX;
+    const oldAlbum = findStableAlbumAtTop(previous.layout, oldLocalTop);
+    const oldPhoto = nearestPhotoAnchor([...previous.layout.photoTops].sort((left, right) => left[1] - right[1]), oldLocalTop)?.[0] || null;
+    const previousTop = oldPhoto ? previous.layout.photoTops.get(oldPhoto) : oldAlbum?.top;
     const nextTop = oldPhoto ? layout.photoTops.get(oldPhoto) : oldAlbum
-      ? layout.albumAnchors.find((album) => album.year === oldAlbum.year && album.id === oldAlbum.id)?.top
+      ? layout.albumAnchors.find((album) => album.id === oldAlbum.id)?.top
       : undefined;
-    const correction = stableAnchorCorrection(previousTop, nextTop);
+    const correction = stableYearLocalCorrection(previousTop, nextTop);
     if (Math.abs(correction) > 0.5) {
-      const detail = { at: new Date().toISOString(), top: correction, anchorPhotoId: oldPhoto, anchorAlbumId: oldAlbum?.id || null };
+      const detail = { at: new Date().toISOString(), top: correction, anchorPhotoId: oldPhoto, anchorAlbumId: oldAlbum?.id || null, year: activeYear };
       updateDiagnostics({ lastLayoutCorrection: detail, lastProgrammaticScroll: { ...detail, kind: "scrollBy" } }, "layout-correction", detail);
       window.scrollBy({ top: correction, behavior: "auto" });
     }
-  }, [layout, restorationPending, width]);
-
-  useEffect(() => {
-    if (currentYear && !restorationPending) onVisibleYearChange(currentYear, !isScrubbing);
-  }, [currentYear, isScrubbing, onVisibleYearChange, restorationPending]);
-
-  useEffect(() => {
-    if (!width) return;
-    const activeIndex = geometry.years.findIndex((year) => year.year === currentYear);
-    const activeGeometry = geometry.years[activeIndex];
-    if (!activeGeometry || states.get(currentYear)?.status !== "ready") return;
-    const preloadDistance = Math.max(1200, viewport.height * 1.4);
-    const next = geometry.years[activeIndex + 1];
-    const previous = geometry.years[activeIndex - 1];
-    const distanceToBottom = activeGeometry.bottom - (localViewportTop + viewport.height);
-    if (next && distanceToBottom >= 0 && distanceToBottom < preloadDistance) onRequestYear(next.year, "adjacent");
-    const distanceFromTop = localViewportTop - activeGeometry.top;
-    if (previous && distanceFromTop >= 0 && distanceFromTop < preloadDistance) onRequestYear(previous.year, "adjacent");
-  }, [currentYear, geometry.years, localViewportTop, onRequestYear, states, viewport.height, width]);
+  }, [activeYear, layout, restorationPending, width]);
 
   useLayoutEffect(() => {
     if (restoration.phase === "pending-target") onRestorationWait(restoration.generation);
   }, [onRestorationWait, restoration.generation, restoration.phase]);
 
   useLayoutEffect(() => {
-    if (restoration.phase !== "waiting-for-layout" || !restoration.target || !ref.current || !width || !allIndexesSettled) return;
+    if (restoration.phase !== "waiting-for-layout" || !restoration.target || restoration.target.year !== activeYear || !ref.current || !width) return;
     const sourceTarget = restoration.target;
-    const targetState = states.get(sourceTarget.year);
-    const layoutReady = targetState?.status === "ready" || targetState?.status === "error";
+    const layoutReady = state?.status === "ready" || state?.status === "error";
     const resolved = resolveAnchorAgainstStableIds(sourceTarget, {
       layoutReady,
-      albumIds: new Set(targetState?.index?.albums.map(({ id }) => id) || []),
-      photoIds: new Set(targetState?.collection?.photos.map(({ id }) => id) || [])
+      albumIds: new Set(state?.index?.albums.map(({ id }) => id) || []),
+      photoIds: new Set(collection?.photos.map(({ id }) => id) || [])
     });
     if (resolved.status === "waiting") return;
     const target = resolved.anchor;
     let virtualTop: number | undefined;
     if (target.photoId) virtualTop = layout.photoTops.get(target.photoId);
-    if (virtualTop === undefined && target.albumId) {
-      virtualTop = layout.albumAnchors.find((album) => album.year === target.year && album.id === target.albumId)?.top;
-    }
-    if (virtualTop === undefined) virtualTop = layout.yearAnchors.find((year) => year.year === target.year)?.top;
-    if (virtualTop === undefined) return;
+    if (virtualTop === undefined && target.albumId) virtualTop = layout.albumAnchors.find((album) => album.id === target.albumId)?.top;
+    if (virtualTop === undefined) virtualTop = 0;
     const generation = restoration.generation;
     const baseOffset = target.photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
     const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
     const frame = window.requestAnimationFrame(() => {
       if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
       onRestorationApply(generation);
-      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "restoration", top: Math.max(0, nextTop), generation } }, "programmatic-scroll", { kind: "restoration", top: Math.max(0, nextTop), generation });
+      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear } }, "programmatic-scroll", { kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear });
       window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
         if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled" || !ref.current) return;
-        const settledContainerTop = ref.current.getBoundingClientRect().top + window.scrollY;
-        const settledLocalTop = window.scrollY - settledContainerTop;
-        const visibleYear = activeYearAtScroll(geometry.years, settledLocalTop + ARCHIVE_JUMP_OFFSET_PX) || target.year;
         if (sourceTarget.focusPhoto && target.photoId) {
           ref.current.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(target.photoId)}"]`)?.focus({ preventScroll: true });
         }
-        onRestorationSettle(generation, visibleYear);
+        onRestorationSettle(generation, activeYear);
       }));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [allIndexesSettled, geometry.years, layout.albumAnchors, layout.photoTops, layout.yearAnchors, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, states, width]);
+  }, [activeYear, collection, layout.albumAnchors, layout.photoTops, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, state, width]);
 
   useEffect(() => {
     if (!restorationPending) return;
@@ -1408,105 +1269,147 @@ function ContinuousCollectionGrid({
   }, [onRestorationCancel, restoration.generation, restorationPending]);
 
   useEffect(() => {
-    if (!currentYear || (restoration.phase !== "settled" && restoration.phase !== "cancelled")) return;
-    const yearPhotos = indexByYear.get(currentYear);
-    const nearestPhoto = [...layout.photoTops]
-      .filter(([photoId]) => yearPhotos?.has(photoId))
-      .sort((left, right) => Math.abs(left[1] - (localViewportTop + RESTORE_OFFSET_PX)) - Math.abs(right[1] - (localViewportTop + RESTORE_OFFSET_PX)))[0];
-    const photoId = nearestPhoto?.[0] || null;
-    const anchorTop = nearestPhoto?.[1] ?? currentAlbum?.top ?? currentYearAnchor?.top ?? 0;
-    const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
-    onPersistAnchor({
-      year: currentYear,
-      albumId: currentAlbum?.id || null,
-      photoId,
-      adjustmentPx: localViewportTop - (anchorTop - baseOffset)
-    });
-  }, [currentAlbum?.id, currentAlbum?.top, currentYear, currentYearAnchor?.top, indexByYear, layout.photoTops, localViewportTop, onPersistAnchor, restoration.phase]);
+    if (!collection || (restoration.phase !== "settled" && restoration.phase !== "cancelled")) return;
+    const timer = window.setTimeout(() => {
+      const nearestPhoto = nearestPhotoAnchor(photoAnchors, localViewportTop + RESTORE_OFFSET_PX);
+      const photoId = nearestPhoto?.[0] || null;
+      const anchorTop = nearestPhoto?.[1] ?? currentAlbum?.top ?? 0;
+      const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
+      onPersistAnchor({
+        year: activeYear,
+        albumId: currentAlbum?.id || null,
+        photoId,
+        adjustmentPx: localViewportTop - (anchorTop - baseOffset)
+      });
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [activeYear, collection, currentAlbum?.id, currentAlbum?.top, localViewportTop, onPersistAnchor, photoAnchors, restoration.phase]);
 
-  const navigateToTarget = useCallback((target: ArchiveTarget, intent: "scrub" | "jump") => {
-    if (!ref.current) return;
-    const yearGeometry = geometry.years.find((year) => year.year === target.year);
-    if (!yearGeometry) return;
-    const modelYear = timelineModel.years.find((year) => year.year === target.year);
-    const modelAlbum = target.albumId ? modelYear?.albums.find((album) => album.id === target.albumId) : null;
-    const album = target.albumId ? yearGeometry.albums.find((candidate) => candidate.id === target.albumId) : null;
-    let virtualTop = yearGeometry.top;
-    if (album && modelAlbum) {
-      const fraction = Math.max(0, Math.min(1, (target.ratio - modelAlbum.start) / Math.max(Number.EPSILON, modelAlbum.end - modelAlbum.start)));
-      virtualTop = album.top + fraction * Math.max(0, album.bottom - album.top - viewport.height * 0.35);
-    } else if (target.sectionRatio > 0) {
-      virtualTop = yearGeometry.headingBottom + target.sectionRatio * Math.max(0, yearGeometry.bottom - yearGeometry.headingBottom - viewport.height * 0.35);
+  useLayoutEffect(() => {
+    if (!diagnosticsEnabled()) return;
+    const first = visibleEntries[0];
+    const last = visibleEntries[visibleEntries.length - 1];
+    const virtualRange = {
+      mode: "year-windowed",
+      year: activeYear,
+      first: first ? { id: first.id, type: first.type, top: Math.round(first.top) } : null,
+      last: last ? { id: last.id, type: last.type, bottom: Math.round(last.top + last.height) } : null,
+      renderedEntries: visibleEntries.length,
+      totalEntries: layout.entries.length,
+      totalHeight: Math.round(layout.totalHeight)
+    };
+    const entries = [...(ref.current?.querySelectorAll<HTMLElement>("[data-entry-type='row'],[data-entry-type='mosaic']") || [])];
+    const mountedYears = [...new Set(entries.map((entry) => entry.dataset.year).filter((year): year is string => Boolean(year)))];
+    const rows = entries.length;
+    const photos = ref.current?.querySelectorAll(".photo-tile").length || 0;
+    const images = [...(ref.current?.querySelectorAll<HTMLImageElement>(".photo-tile img") || [])];
+    const loadedImages = images.filter((image) => image.complete && image.naturalWidth > 0).length;
+    const inactiveImageElements = images.filter((image) => image.closest<HTMLElement>("[data-year]")?.dataset.year !== activeYear).length;
+    const stableAnchor = nearestPhotoAnchor(photoAnchors, localViewportTop + RESTORE_OFFSET_PX);
+    const counts = { mountedYears, mountedRows: rows, mountedPhotos: photos, inactiveImageElements, observerCount: getDiagnostics().observerCount };
+    const warnings = archiveWindowWarnings(counts);
+    updateDiagnostics({
+      activeYear,
+      activeAlbum: currentAlbum ? { year: activeYear, id: currentAlbum.id } : null,
+      mountedYears,
+      mountedRows: rows,
+      mountedPhotos: photos,
+      loadedImages,
+      inactiveImageElements,
+      retainedYearLayouts: collection ? [activeYear] : [],
+      stableAnchor: stableAnchor ? { year: activeYear, albumId: currentAlbum?.id || null, photoId: stableAnchor[0], adjustmentPx: Math.round(localViewportTop + RESTORE_OFFSET_PX - stableAnchor[1]) } : null,
+      virtualRange,
+      scrubber: { ...getDiagnostics().scrubber, dragging: isScrubbing, activeRatio: Math.round(activeRatio * 100000) / 100000 }
+    });
+    for (const warning of warnings) {
+      if (!activeWarningsRef.current.has(warning)) recordDiagnostic("archive-bound-warning", { warning, ...counts, activeYear });
     }
-    const absoluteTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - ARCHIVE_JUMP_OFFSET_PX;
-    updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: `archive-${intent}`, top: Math.max(0, absoluteTop), year: target.year, albumId: target.albumId } }, "programmatic-scroll", { kind: `archive-${intent}`, top: Math.max(0, absoluteTop), year: target.year, albumId: target.albumId });
-    window.scrollTo({ top: Math.max(0, absoluteTop), behavior: "auto" });
-    if (intent === "jump") onPushArchiveTarget(target);
-  }, [geometry.years, onPushArchiveTarget, timelineModel.years, viewport.height]);
+    activeWarningsRef.current = new Set(warnings);
+    const rangeSignature = JSON.stringify(virtualRange);
+    if (rangeSignature !== diagnosticRangeSignatureRef.current) {
+      diagnosticRangeSignatureRef.current = rangeSignature;
+      recordDiagnostic("virtual-range-change", virtualRange);
+    }
+    const layoutSignature = `${activeYear}:${width}:${layout.totalHeight}:${layout.entries.length}`;
+    if (layoutSignature !== diagnosticLayoutSignatureRef.current) {
+      diagnosticLayoutSignatureRef.current = layoutSignature;
+      recordDiagnostic("year-layout-construction", { year: activeYear, width, totalHeight: Math.round(layout.totalHeight), entryCount: layout.entries.length });
+    }
+  }, [activeRatio, activeYear, collection, currentAlbum, isScrubbing, layout.entries.length, layout.totalHeight, localViewportTop, photoAnchors, visibleEntries, width]);
+
+  const commitBoundary = (target: ArchiveTarget | null) => {
+    if (target) onNavigate(target, "boundary");
+  };
 
   return (
-    <main className="collection-shell" data-restoration-phase={restoration.phase} data-render-mode={stableArchiveDom ? "stable" : "windowed"}>
+    <main
+      className="collection-shell"
+      data-active-year={activeYear}
+      data-mounted-years={collection ? activeYear : ""}
+      data-restoration-phase={restoration.phase}
+      data-render-mode="year-windowed"
+    >
       <header className="collection-chrome">
         <div className="app-bar">
           <div className="app-bar__identity">
             <span className="app-bar__brand">640×480</span>
-            <span className={`app-bar__year ${yearHeadingIsVisible ? "is-inline" : ""}`}>{currentYear}</span>
+            <span className={`app-bar__year ${yearHeadingIsVisible ? "is-inline" : ""}`}>{activeYear}</span>
           </div>
           <span className="app-bar__range">{years[0]}-{years[years.length - 1]}</span>
         </div>
         {statusMessage ? (
           <div className={`collection-status collection-status--${state?.status === "error" || failedCount ? "error" : "loading"}`} role={state?.status === "error" || failedCount ? "alert" : "status"}>
-            <span>{statusMessage}</span>
-            {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(currentYear)}>Retry</button> : null}
+            <span>{statusMessage}{targetAlbum ? ` · ${folderLabelFromName(targetAlbum.name, activeYear)}` : ""}</span>
+            {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry</button> : null}
           </div>
         ) : (
-          <div className={`album-context ${!currentAlbum || albumHeadingIsVisible || state?.status !== "ready" ? "album-context--hidden" : ""}`} aria-live="polite" aria-hidden={!currentAlbum || albumHeadingIsVisible || state?.status !== "ready"}>
-            <span className="album-context__year">{currentAlbum?.year || currentYear}</span>
+          <div className={`album-context ${!currentAlbum || albumHeadingIsVisible ? "album-context--hidden" : ""}`} aria-live="polite" aria-hidden={!currentAlbum || albumHeadingIsVisible}>
+            <span className="album-context__year">{activeYear}</span>
             <span className="album-context__folder">{currentAlbum?.folderLabel || ""}</span>
           </div>
         )}
       </header>
 
+      {newerTarget ? (
+        <nav className="archive-year-boundary archive-year-boundary--newer" aria-label={`Beginning of ${activeYear}`}>
+          <button type="button" onClick={() => commitBoundary(newerTarget)}>
+            <span>Continue to {newerTarget.year}</span>
+            <small>Restore the last stable position, or begin at its final album</small>
+          </button>
+        </nav>
+      ) : null}
+
+      <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`}>
+        <h1 id={`year-${activeYear}-title`}>{activeYear}</h1>
+        <span>{(state?.index?.sequence.length || state?.index?.scannedCount || 0).toLocaleString()} photographs</span>
+      </section>
+
+      {!collection ? (
+        <section className={`year-window-loading year-window-loading--${state?.status || "index-loading"}`} aria-live="polite">
+          <strong>{activeYear}</strong>
+          <span>{targetAlbum ? folderLabelFromName(targetAlbum.name, activeYear) : "Preparing this year"}</span>
+          {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry year</button> : null}
+        </section>
+      ) : null}
+
       <div id="photo-grid" className="virtual-album-stack" ref={ref} style={{ height: layout.totalHeight || undefined }}>
-        {diagnosticsEnabled() ? (
+        {diagnosticsEnabled() && collection ? (
           <div className="archive-diagnostic-overlays" aria-hidden="true">
-            {geometry.years.map((year) => (
-              <div className={`archive-diagnostic-boundary archive-diagnostic-boundary--year archive-diagnostic-boundary--${year.isEstimated ? "estimated" : "measured"}`} key={`debug-year-${year.year}`} style={{ top: year.top, height: Math.max(1, year.bottom - year.top) }}>
-                <span>{year.year} · {year.isEstimated ? "estimated" : "measured"}</span>
+            <div className="archive-diagnostic-boundary archive-diagnostic-boundary--year archive-diagnostic-boundary--measured" style={{ top: 0, height: Math.max(1, layout.totalHeight) }}>
+              <span>{activeYear} · mounted year window</span>
+            </div>
+            {layout.albumAnchors.map((album) => (
+              <div className="archive-diagnostic-boundary archive-diagnostic-boundary--album" key={`debug-album-${activeYear}-${album.id}`} style={{ top: album.top, height: Math.max(1, album.bottom - album.top) }}>
+                <span>{activeYear} · {album.id}</span>
               </div>
             ))}
-            {geometry.albums.map((album) => (
-              <div className="archive-diagnostic-boundary archive-diagnostic-boundary--album" key={`debug-album-${album.year}-${album.id}`} style={{ top: album.top, height: Math.max(1, album.bottom - album.top) }}>
-                <span>{album.year} · {album.id}</span>
-              </div>
-            ))}
-            <div className="archive-diagnostic-anchor" style={{ top: Math.max(0, localViewportTop + ARCHIVE_JUMP_OFFSET_PX) }}><span>current anchor</span></div>
+            <div className="archive-diagnostic-anchor" style={{ top: Math.max(0, localViewportTop + RESTORE_OFFSET_PX) }}><span>stable local anchor</span></div>
           </div>
         ) : null}
         {visibleEntries.map((entry) => {
-          if (entry.type === "year-heading") {
-            return (
-              <section className="archive-year-heading virtual-entry" data-entry-type={entry.type} data-year={entry.year} key={entry.id} style={{ top: entry.top, height: entry.height }} aria-labelledby={`${entry.id}-title`}>
-                <h1 id={`${entry.id}-title`}>{entry.year}</h1><span>{entry.count.toLocaleString()} photographs</span>
-              </section>
-            );
-          }
-          if (entry.type === "year-placeholder") {
-            const stateLabel = entry.status === "loading" ? "Loading"
-              : entry.status === "error" ? entry.message || "Could not load"
-                : entry.status === "index-loading" ? "Indexing" : "Loads on demand";
-            return (
-              <div className={`archive-year-placeholder archive-year-placeholder--${entry.status} virtual-entry`} data-entry-type={entry.type} data-year={entry.year} key={entry.id} style={{ top: entry.top, height: entry.height }}>
-                <div className="archive-year-placeholder__context">
-                  <span><strong>{entry.folderLabel}</strong> · {stateLabel}</span>
-                  {entry.status === "error" ? <button type="button" onClick={() => onRetryYear(entry.year)}>Retry year</button> : null}
-                </div>
-              </div>
-            );
-          }
           if (entry.type === "heading") {
             return (
-              <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }}>
+              <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2><span>{entry.album.count}</span>
               </div>
             );
@@ -1514,44 +1417,51 @@ function ContinuousCollectionGrid({
           if (entry.type === "album-error") {
             const loading = entry.album.loadState === "loading";
             return (
-              <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
+              <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
                 <span>{loading ? "Loading album" : entry.album.errorMessage || "Album could not be loaded"}</span>
-                {!loading ? <button type="button" onClick={() => onRetryAlbum(entry.year, entry.album.id)}>Retry</button> : null}
+                {!loading ? <button type="button" onClick={() => onRetryAlbum(activeYear, entry.album.id)}>Retry</button> : null}
               </div>
             );
           }
-          const collection = states.get(entry.year)?.collection;
-          const indexById = indexByYear.get(entry.year);
           if (entry.type === "mosaic") {
             return (
-              <div className="photo-mosaic virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height }}>
+              <div className="photo-mosaic virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height }}>
                 {entry.items.map((item) => (
-                  <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open featured photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />
+                  <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open featured photo ${(indexById.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
+                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
                   </button>
                 ))}
               </div>
             );
           }
           return (
-            <div className="photo-row virtual-entry" data-entry-type={entry.type} data-year={entry.year} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
+            <div className="photo-row virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
-                <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(entry.year, item.photo.id)} aria-label={`Open photo ${(indexById?.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading={thumbnailLoading} decoding="async" width={item.photo.width} height={item.photo.height} />
+                <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open photo ${(indexById.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
+                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
                 </button>
               ))}
             </div>
           );
         })}
       </div>
+
+      {olderTarget ? (
+        <nav className="archive-year-boundary archive-year-boundary--older" aria-label={`End of ${activeYear}`}>
+          <button type="button" onClick={() => commitBoundary(olderTarget)}>
+            <span>Continue to {olderTarget.year}</span>
+            <small>Open the next year at its beginning</small>
+          </button>
+        </nav>
+      ) : null}
+
       <ArchiveScrubber
         model={timelineModel}
-        activeYear={currentYear}
+        activeYear={activeYear}
         activeAlbumId={currentAlbum?.id || null}
         activeRatio={activeRatio}
         formatAlbumName={folderLabelFromName}
-        onNavigate={navigateToTarget}
-        onRequestYear={(year) => onRequestYear(year, "scrub")}
+        onCommit={(target, intent) => onNavigate(target, intent)}
         onScrubStateChange={(next) => {
           setIsScrubbing(next);
           if (next && restorationPending) onRestorationCancel(restoration.generation);

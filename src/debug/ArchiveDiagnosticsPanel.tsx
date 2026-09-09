@@ -61,10 +61,18 @@ export function ArchiveDiagnosticsPanel() {
     ["Orientation", snapshot.orientation],
     ["Active year", snapshot.activeYear],
     ["Active album", snapshot.activeAlbum],
-    ["Loaded years", snapshot.loadedYears],
+    ["Cached years", snapshot.cachedYears],
+    ["Prefetched years", snapshot.prefetchedYears],
+    ["Loading years", snapshot.loadingYears],
+    ["Mounted years", snapshot.mountedYears],
     ["Year states", snapshot.yearStates],
     ["Virtual range", snapshot.virtualRange],
     ["Mounted rows / photos", `${snapshot.mountedRows} / ${snapshot.mountedPhotos}`],
+    ["Loaded images", snapshot.loadedImages],
+    ["Inactive images", snapshot.inactiveImageElements],
+    ["Year cache entries", snapshot.yearCacheEntries],
+    ["Retained year layouts", snapshot.retainedYearLayouts],
+    ["Stable anchor", snapshot.stableAnchor],
     ["Restoration", snapshot.restoration],
     ["Restoration target", snapshot.restorationTarget],
     ["Scrubber", snapshot.scrubber],
@@ -104,7 +112,7 @@ export function ArchiveDiagnosticsPanel() {
     <>
       <aside className={`archive-diagnostics ${expanded ? "is-expanded" : ""}`} aria-label="Archive diagnostics">
         <button className="archive-diagnostics__toggle" type="button" onClick={() => setExpanded((current) => !current)} aria-expanded={expanded}>
-          <span>iOS QA</span>
+          <span>Archive QA</span>
           <span>{expanded ? "Collapse" : "Expand"}</span>
         </button>
         {expanded ? (

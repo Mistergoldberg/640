@@ -19,7 +19,7 @@ export interface DiagnosticEvent {
 }
 
 export interface DiagnosticSnapshot {
-  schema: "640x480-ios-qa-v1";
+  schema: "640x480-year-window-qa-v1";
   sessionStartedAt: string;
   buildCommit: string;
   userAgent: string;
@@ -34,10 +34,19 @@ export interface DiagnosticSnapshot {
   activeYear: string | null;
   activeAlbum: { year: string; id: string } | null;
   loadedYears: string[];
+  cachedYears: string[];
+  prefetchedYears: string[];
+  loadingYears: string[];
+  mountedYears: string[];
   yearStates: Record<string, string>;
   virtualRange: Record<string, unknown> | null;
   mountedRows: number;
   mountedPhotos: number;
+  loadedImages: number;
+  inactiveImageElements: number;
+  yearCacheEntries: number;
+  retainedYearLayouts: string[];
+  stableAnchor: Record<string, unknown> | null;
   restoration: Record<string, unknown> | null;
   restorationTarget: Record<string, unknown> | null;
   scrubber: Record<string, unknown> | null;
@@ -56,7 +65,7 @@ const sessionStart = new Date();
 const sessionStartPerformance = typeof performance === "undefined" ? 0 : performance.now();
 let sequence = 0;
 let initialized = false;
-let scrollFrame = 0;
+let scrollTimer = 0;
 
 export function diagnosticModeEnabled(search = typeof window === "undefined" ? "" : window.location.search) {
   return new URLSearchParams(search).get("debug") === "1";
@@ -110,7 +119,7 @@ const initialOverlays: Record<DiagnosticOverlay, boolean> = {
 };
 
 let snapshot: DiagnosticSnapshot = typeof window === "undefined" ? {
-  schema: "640x480-ios-qa-v1",
+  schema: "640x480-year-window-qa-v1",
   sessionStartedAt: sessionStart.toISOString(),
   buildCommit: "unknown",
   userAgent: "unknown",
@@ -125,10 +134,19 @@ let snapshot: DiagnosticSnapshot = typeof window === "undefined" ? {
   activeYear: null,
   activeAlbum: null,
   loadedYears: [],
+  cachedYears: [],
+  prefetchedYears: [],
+  loadingYears: [],
+  mountedYears: [],
   yearStates: {},
   virtualRange: null,
   mountedRows: 0,
   mountedPhotos: 0,
+  loadedImages: 0,
+  inactiveImageElements: 0,
+  yearCacheEntries: 0,
+  retainedYearLayouts: [],
+  stableAnchor: null,
   restoration: null,
   restorationTarget: null,
   scrubber: null,
@@ -141,7 +159,7 @@ let snapshot: DiagnosticSnapshot = typeof window === "undefined" ? {
   overlays: initialOverlays,
   events: []
 } : {
-  schema: "640x480-ios-qa-v1",
+  schema: "640x480-year-window-qa-v1",
   sessionStartedAt: sessionStart.toISOString(),
   buildCommit: import.meta.env.VITE_BUILD_COMMIT || "local-uncommitted",
   userAgent: navigator.userAgent,
@@ -151,10 +169,19 @@ let snapshot: DiagnosticSnapshot = typeof window === "undefined" ? {
   activeYear: null,
   activeAlbum: null,
   loadedYears: [],
+  cachedYears: [],
+  prefetchedYears: [],
+  loadingYears: [],
+  mountedYears: [],
   yearStates: {},
   virtualRange: null,
   mountedRows: 0,
   mountedPhotos: 0,
+  loadedImages: 0,
+  inactiveImageElements: 0,
+  yearCacheEntries: 0,
+  retainedYearLayouts: [],
+  stableAnchor: null,
   restoration: null,
   restorationTarget: null,
   scrubber: null,
@@ -259,11 +286,11 @@ export function initializeDiagnostics() {
   recordDiagnostic("init", { buildCommit: snapshot.buildCommit, navigationType: snapshot.navigationType });
 
   const sampleScroll = () => {
-    if (scrollFrame) return;
-    scrollFrame = requestAnimationFrame(() => {
-      scrollFrame = 0;
+    if (scrollTimer) return;
+    scrollTimer = window.setTimeout(() => {
+      scrollTimer = 0;
       updateDiagnostics(readViewport(), "native-scroll", { scrollY: window.scrollY });
-    });
+    }, 250);
   };
   const viewportResize = () => {
     const fields = readViewport();
