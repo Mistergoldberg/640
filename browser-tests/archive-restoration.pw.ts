@@ -38,7 +38,7 @@ async function visiblePhotoIds(page: Page) {
 async function expectRootAt2013(page: Page) {
   await waitForRestoration(page);
   await expect(page.getByRole("heading", { name: "2013", exact: true })).toBeVisible();
-  await expect(page.locator(".app-bar__year")).toHaveText("2013");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2013");
   await expect(page).toHaveURL(/year=2013/);
   expect(await page.evaluate(() => scrollY)).toBeLessThanOrEqual(240);
   const photos = await visiblePhotoIds(page);
@@ -101,7 +101,7 @@ test("explicit 2001 URL loads and positions its year heading", async ({ page }) 
   await page.goto("/?year=2001");
   await waitForRestoration(page);
   await expect(page.getByRole("heading", { name: "2001", exact: true })).toBeVisible();
-  await expect(page.locator(".app-bar__year")).toHaveText("2001");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2001");
   expect((await visiblePhotoIds(page)).every((id) => id.startsWith("2001-"))).toBe(true);
 });
 
@@ -126,7 +126,7 @@ test("Back and Forward restore the stable anchor for each history entry", async 
   await expectRootAt2013(page);
   await page.getByRole("button", { name: "Jump to 2001" }).click();
   await expect(page).toHaveURL(/year=2001/);
-  await expect(page.locator(".app-bar__year")).toHaveText("2001");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2001");
   const entry2001 = await page.evaluate(() => history.state.entryId);
   await page.goBack();
   await expect(page).toHaveURL(/year=2013/);
@@ -136,7 +136,7 @@ test("Back and Forward restore the stable anchor for each history entry", async 
   await expect(page).toHaveURL(/year=2001/);
   await waitForRestoration(page);
   expect(await page.evaluate(() => history.state.entryId)).toBe(entry2001);
-  await expect(page.locator(".app-bar__year")).toHaveText("2001");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2001");
   await page.goto("/?year=2013");
   await waitForRestoration(page);
   await page.goBack();
@@ -190,7 +190,7 @@ test("a delayed non-current year cannot apply an obsolete target", async ({ page
   await page.getByRole("button", { name: "Jump to 2013" }).click();
   release();
   await expect(page).toHaveURL(/year=2013/);
-  await expect(page.locator(".app-bar__year")).toHaveText("2013");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2013");
   await afterLayoutFrames(page);
   expect(await page.evaluate(() => scrollY)).toBeLessThanOrEqual(240);
 });
@@ -217,7 +217,7 @@ test("user scrolling cancels positioning while the selected year remains authori
   await expect.poll(() => completed).toBe(3);
   await afterLayoutFrames(page);
   await expect(page).toHaveURL(/year=2001/);
-  await expect(page.locator(".app-bar__year")).toHaveText("2001");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2001");
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", "2001");
   expect(await page.evaluate(() => scrollY)).toBeLessThan(5000);
 });

@@ -6,7 +6,7 @@ async function waitForYear(page: Page, year: string) {
 }
 
 async function dragArchive(page: Page, fractions: number[], hold = false) {
-  const rail = page.getByRole("scrollbar", { name: "Complete archive timeline" });
+  const rail = page.getByRole("slider", { name: "Complete archive timeline" });
   const box = await rail.boundingBox();
   if (!box) throw new Error("Archive rail is not visible");
   const x = box.x + box.width / 2;
@@ -108,7 +108,7 @@ test("small 2002 range remains directly reachable", async ({ page }) => {
   await page.getByRole("button", { name: "Jump to 2002" }).click();
   await expect(page).toHaveURL(/year=2002/);
   await waitForYear(page, "2002");
-  await expect(page.locator(".app-bar__year")).toHaveText("2002");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2002");
   expect((await mountedMetrics(page)).years).toEqual(["2002"]);
 });
 
@@ -116,7 +116,7 @@ test("integrated end boundary moves 2013 to 2002", async ({ page }) => {
   await page.goto("/");
   await waitForYear(page, "2013");
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  const boundary = page.getByRole("button", { name: /Continue to 2002/ });
+  const boundary = page.getByRole("button", { name: /Older photos: 2002/ });
   await expect(boundary).toBeVisible();
   await boundary.click();
   await expect(page).toHaveURL(/year=2002/);
@@ -130,9 +130,9 @@ test("integrated beginning boundary restores the newer year's saved local anchor
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).not.toBeNull();
   const savedPhoto = await page.evaluate(() => history.state.restoration.photoId as string);
-  await page.getByRole("button", { name: /Continue to 2002/ }).click();
+  await page.getByRole("button", { name: /Older photos: 2002/ }).click();
   await waitForYear(page, "2002");
-  await page.getByRole("button", { name: /Continue to 2013/ }).click();
+  await page.getByRole("button", { name: /Newer photos: 2013/ }).click();
   await waitForYear(page, "2013");
   await expect(page.locator(`[data-photo-id="${savedPhoto}"]`)).toBeVisible();
 });
@@ -184,7 +184,7 @@ test("Safari and Chrome iOS user agents share the bounded year-window architectu
   }
 });
 
-test("ten portrait and landscape changes preserve a stable photo without accumulating DOM", async ({ browser }) => {
+test("thirty portrait and landscape changes preserve a stable photo without accumulating DOM", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4174" });
   const page = await context.newPage();
@@ -192,7 +192,8 @@ test("ten portrait and landscape changes preserve a stable photo without accumul
   await waitForYear(page, "2001");
   await page.evaluate(() => window.scrollTo(0, 9000));
   await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).not.toBeNull();
-  for (let cycle = 0; cycle < 10; cycle += 1) {
+  const samples: Awaited<ReturnType<typeof mountedMetrics>>[] = [];
+  for (let cycle = 0; cycle < 30; cycle += 1) {
     const anchorPhoto = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".photo-tile")]
       .map((tile) => ({ id: tile.dataset.photoId || "", top: tile.getBoundingClientRect().top }))
       .sort((left, right) => Math.abs(left.top - 112) - Math.abs(right.top - 112))[0]?.id || "");
@@ -203,10 +204,14 @@ test("ten portrait and landscape changes preserve a stable photo without accumul
       return rect.bottom > 0 && rect.top < innerHeight;
     }))).toBe(true);
     const metrics = await mountedMetrics(page);
+    samples.push(metrics);
     expect(metrics.years).toEqual(["2001"]);
+    expect(metrics.inactiveImages).toBe(0);
     expect(metrics.rows).toBeLessThan(40);
     expect(metrics.photos).toBeLessThan(150);
   }
+  expect(Math.max(...samples.map((sample) => sample.elements))).toBeLessThan(500);
+  expect(Math.max(...samples.map((sample) => sample.nodes))).toBeLessThan(650);
   await page.getByRole("button", { name: "Archive QA" }).click();
   await page.getByRole("button", { name: "Copy diagnostics" }).click();
   const diagnostics = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
@@ -272,7 +277,7 @@ test("player remains scoped to each active year's exact photo total", async ({ p
 test("keyboard scrubber commits archive and year boundary targets", async ({ page }) => {
   await page.goto("/");
   await waitForYear(page, "2013");
-  const rail = page.getByRole("scrollbar", { name: "Complete archive timeline" });
+  const rail = page.getByRole("slider", { name: "Complete archive timeline" });
   await rail.focus();
   await rail.press("PageDown");
   await waitForYear(page, "2002");

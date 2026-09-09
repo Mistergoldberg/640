@@ -31,6 +31,7 @@ describe("archive timeline model", () => {
 
   it("maps global positions using photo counts", () => {
     expect(model.years[2].end - model.years[2].start).toBeGreaterThan(model.years[0].end - model.years[0].start);
+    expect(model.years[0].end - model.years[0].start).toBeGreaterThan(model.years[1].end - model.years[1].start);
     expect(archiveTargetAtRatio(model, 0.98)?.year).toBe("2001");
   });
 
@@ -42,6 +43,12 @@ describe("archive timeline model", () => {
   it("snaps predictably to year boundaries", () => {
     const boundary = model.years[1].start;
     expect(archiveTargetAtRatio(model, boundary - 0.01, true)?.year).toBe("2002");
+    expect(archiveTargetAtRatio(model, boundary - 0.01, false)?.year).toBe("2013");
+  });
+
+  it("keeps the complete archive endpoints reachable", () => {
+    expect(archiveTargetAtRatio(model, 0)).toMatchObject({ year: "2013", sectionRatio: 0 });
+    expect(archiveTargetAtRatio(model, 1)).toMatchObject({ year: "2001", sectionRatio: 1 });
   });
 
   it("maps positions to album anchors", () => {

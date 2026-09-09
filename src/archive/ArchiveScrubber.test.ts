@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveScrubberCommit } from "./ArchiveScrubber";
+import { boundedIndicatorTop, resolveScrubberCommit } from "./ArchiveScrubber";
 import type { ArchiveTimelineModel } from "./archiveTimelineModel";
 
 const model: ArchiveTimelineModel = {
@@ -19,5 +19,10 @@ describe("archive scrubber commitment", () => {
   it("resolves one snapped target only when the gesture commits", () => {
     expect(resolveScrubberCommit(model, 0.805)).toMatchObject({ year: "2002", albumId: "b", ratio: 0.8 });
     expect(resolveScrubberCommit(model, 0.98)).toMatchObject({ year: "2001", albumId: "c" });
+  });
+
+  it("keeps first and final indicators inside the rail", () => {
+    expect(boundedIndicatorTop(0, 14)).toBe("clamp(14px, 0%, calc(100% - 14px))");
+    expect(boundedIndicatorTop(1, 14)).toBe("clamp(14px, 100%, calc(100% - 14px))");
   });
 });

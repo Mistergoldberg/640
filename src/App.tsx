@@ -1141,6 +1141,8 @@ function YearWindowGrid({
   onRetryAlbum: (year: string, albumId: string) => void;
 }) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
+  const chromeRef = useRef<HTMLElement | null>(null);
+  const yearHeadingRef = useRef<HTMLElement | null>(null);
   const viewport = useViewport();
   const previousLayoutRef = useRef<{ year: string; layout: GridLayout } | null>(null);
   const previousScrollYRef = useRef(0);
@@ -1170,7 +1172,11 @@ function YearWindowGrid({
   const visibleEntries = layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
   const currentAlbum = findAlbumAtTop(layout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
   const albumHeadingScreenTop = currentAlbum ? containerTop + currentAlbum.top - viewport.scrollY : -1;
-  const yearHeadingIsVisible = localViewportTop < 36;
+  const chromeBottom = chromeRef.current?.getBoundingClientRect().bottom || 82;
+  const yearHeadingRect = yearHeadingRef.current?.getBoundingClientRect();
+  const yearHeadingIsVisible = yearHeadingRect
+    ? yearHeadingRect.bottom > chromeBottom && yearHeadingRect.top < viewport.height
+    : localViewportTop < 36;
   const albumHeadingIsVisible = albumHeadingScreenTop >= 88 && albumHeadingScreenTop <= 240;
   const failedCount = collection?.failedAlbumIds.length || 0;
   const statusMessage = state?.status === "index-loading" ? `Loading ${activeYear} index`
@@ -1232,7 +1238,15 @@ function YearWindowGrid({
     if (virtualTop === undefined) virtualTop = 0;
     const generation = restoration.generation;
     const baseOffset = target.photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
-    const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
+    const firstAlbumId = layout.albumAnchors[0]?.id || null;
+    const enteringAtYearStart = !target.photoId && (!target.albumId || target.albumId === firstAlbumId);
+    const headingTop = yearHeadingRef.current
+      ? yearHeadingRef.current.getBoundingClientRect().top + window.scrollY
+      : undefined;
+    const stickyHeight = chromeRef.current?.getBoundingClientRect().height || 0;
+    const nextTop = enteringAtYearStart && headingTop !== undefined
+      ? headingTop - stickyHeight - 6
+      : ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
     const frame = window.requestAnimationFrame(() => {
       if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
       onRestorationApply(generation);
@@ -1341,6 +1355,19 @@ function YearWindowGrid({
     if (target) onNavigate(target, "boundary");
   };
 
+  const commitYearJump = (year: string) => {
+    const yearRange = timelineModel.years.find((candidate) => candidate.year === year);
+    if (!yearRange) return;
+    const album = yearRange.albums[0] || null;
+    onNavigate({
+      year,
+      albumId: album?.id || null,
+      albumName: album?.name || null,
+      ratio: yearRange.start,
+      sectionRatio: 0
+    }, "jump");
+  };
+
   return (
     <main
       className="collection-shell"
@@ -1349,13 +1376,25 @@ function YearWindowGrid({
       data-restoration-phase={restoration.phase}
       data-render-mode="year-windowed"
     >
-      <header className="collection-chrome">
+      <header className="collection-chrome" ref={chromeRef}>
         <div className="app-bar">
           <div className="app-bar__identity">
             <span className="app-bar__brand">640×480</span>
-            <span className={`app-bar__year ${yearHeadingIsVisible ? "is-inline" : ""}`}>{activeYear}</span>
           </div>
-          <span className="app-bar__range">{years[0]}-{years[years.length - 1]}</span>
+          <nav className="year-selector" aria-label="Archive years">
+            {timelineModel.years.map((year) => (
+              <button
+                key={year.year}
+                className={`${year.year === activeYear ? "is-selected" : ""} ${yearHeadingIsVisible && year.year === activeYear ? "is-inline-current" : ""}`}
+                type="button"
+                aria-current={year.year === activeYear ? "true" : undefined}
+                aria-label={`Jump to ${year.year}`}
+                onClick={() => commitYearJump(year.year)}
+              >
+                {year.year}
+              </button>
+            ))}
+          </nav>
         </div>
         {statusMessage ? (
           <div className={`collection-status collection-status--${state?.status === "error" || failedCount ? "error" : "loading"}`} role={state?.status === "error" || failedCount ? "alert" : "status"}>
@@ -1364,7 +1403,6 @@ function YearWindowGrid({
           </div>
         ) : (
           <div className={`album-context ${!currentAlbum || albumHeadingIsVisible ? "album-context--hidden" : ""}`} aria-live="polite" aria-hidden={!currentAlbum || albumHeadingIsVisible}>
-            <span className="album-context__year">{activeYear}</span>
             <span className="album-context__folder">{currentAlbum?.folderLabel || ""}</span>
           </div>
         )}
@@ -1373,13 +1411,12 @@ function YearWindowGrid({
       {newerTarget ? (
         <nav className="archive-year-boundary archive-year-boundary--newer" aria-label={`Beginning of ${activeYear}`}>
           <button type="button" onClick={() => commitBoundary(newerTarget)}>
-            <span>Continue to {newerTarget.year}</span>
-            <small>Restore the last stable position, or begin at its final album</small>
+            <span aria-hidden="true">↑</span> Newer photos: {newerTarget.year}
           </button>
         </nav>
       ) : null}
 
-      <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`}>
+      <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`} ref={yearHeadingRef}>
         <h1 id={`year-${activeYear}-title`}>{activeYear}</h1>
         <span>{(state?.index?.sequence.length || state?.index?.scannedCount || 0).toLocaleString()} photographs</span>
       </section>
@@ -1449,8 +1486,7 @@ function YearWindowGrid({
       {olderTarget ? (
         <nav className="archive-year-boundary archive-year-boundary--older" aria-label={`End of ${activeYear}`}>
           <button type="button" onClick={() => commitBoundary(olderTarget)}>
-            <span>Continue to {olderTarget.year}</span>
-            <small>Open the next year at its beginning</small>
+            Older photos: {olderTarget.year} <span aria-hidden="true">↓</span>
           </button>
         </nav>
       ) : null}

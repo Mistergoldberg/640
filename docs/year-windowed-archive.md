@@ -8,7 +8,7 @@ Full year collections use a two-entry LRU: the active year and the most recently
 
 `navigateToArchiveTarget` handles initial URLs, committed scrub targets, year buttons, boundary controls, browser history, and player-close restoration. Explicit year changes use one history entry per committed target. Back and Forward use the entry's versioned stable anchor. The `year-window-archive-v1` anchor stores a year, album ID, photo ID, and adjustment bounded to 160 px; no archive-wide pixel position is stored.
 
-Year boundaries are accessible `Continue to …` rows. The older-year boundary opens the next year at its beginning. The newer-year boundary restores a saved stable photo when one exists and otherwise begins at the final album. This avoids relying on raw overscroll behavior across touch, wheel, and keyboard input.
+Year boundaries are compact directional rows. `↑ Newer photos: YEAR` restores a saved stable photo when one exists and otherwise begins at the intended adjacent edge. `Older photos: YEAR ↓` opens the older year at its beginning. Both require explicit activation, avoiding raw overscroll behavior across touch, wheel, and keyboard input.
 
 ## Production-build measurements
 
@@ -21,4 +21,4 @@ Measurements used Chromium's production build, forced garbage collection, and tr
 
 Both runs retained two collection-cache entries, one active layout, zero inactive-year image elements, and two registered archive observers. Diagnostic warning events remained at zero. An additional 30-orientation stress pass settled at 16 rows, 55 tiles, 267 DOM nodes, 318 JavaScript listeners, and 7.0 MB used heap, showing that the footprint did not grow with each resize.
 
-These measurements validate the bounded architecture in desktop Chrome and mobile emulation. Physical iPhone Safari and Chrome acceptance remains required before treating the original WebKit content-process failure as fixed.
+These measurements validated the bounded architecture in desktop Chrome and mobile emulation. The `f0d33f6` QA release subsequently remained stable during physical iPhone Safari and Chrome testing. Each new UX release still requires its own physical acceptance pass.

@@ -13,7 +13,7 @@ interface ArchiveScrubberProps {
   activeAlbumId: string | null;
   activeRatio: number;
   formatAlbumName: (name: string, year: string) => string;
-  onCommit: (target: ArchiveTarget, intent: "scrub" | "jump") => void;
+  onCommit: (target: ArchiveTarget, intent: "scrub") => void;
   onScrubStateChange?: (isScrubbing: boolean) => void;
 }
 
@@ -23,6 +23,10 @@ function clamp(value: number, min: number, max: number) {
 
 export function resolveScrubberCommit(model: ArchiveTimelineModel, ratio: number) {
   return archiveTargetAtRatio(model, ratio, true);
+}
+
+export function boundedIndicatorTop(ratio: number, inset: number) {
+  return `clamp(${inset}px, ${clamp(ratio, 0, 1) * 100}%, calc(100% - ${inset}px))`;
 }
 
 export function ArchiveScrubber({
@@ -67,36 +71,69 @@ export function ArchiveScrubber({
     previewTarget(next);
   }, [model, previewTarget]);
 
-  const settle = useCallback((event: React.PointerEvent<HTMLDivElement>, cancelled = false) => {
+  const cancelActivePointer = useCallback((reason: "pointer-cancel" | "lost-capture" | "viewport-change") => {
+    const pointerId = pointerIdRef.current;
+    if (pointerId === null) return;
+    if (frameRef.current) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    }
+    pointerIdRef.current = null;
+    pendingRatioRef.current = null;
+    if (scrubberRef.current?.hasPointerCapture(pointerId)) {
+      scrubberRef.current.releasePointerCapture(pointerId);
+    }
+    if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+    setIsDragging(false);
+    setTarget(null);
+    updateDiagnostics({
+      pointerCapture: { active: false, pointerId, at: new Date().toISOString(), reason },
+      scrubber: { dragging: false, target: null }
+    }, "scrubber-pointer-cancel", { pointerId, reason });
+    onScrubStateChange?.(false);
+  }, [onScrubStateChange]);
+
+  const settle = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (pointerIdRef.current !== event.pointerId) return;
     if (frameRef.current) {
       window.cancelAnimationFrame(frameRef.current);
       frameRef.current = 0;
     }
-    const finalTarget = cancelled ? target : targetFromClientY(event.clientY, true);
-    recordDiagnostic(cancelled ? "scrubber-pointer-cancel" : "scrubber-commit", {
+    const finalTarget = targetFromClientY(event.clientY, true);
+    recordDiagnostic("scrubber-commit", {
       pointerId: event.pointerId,
       pointerType: event.pointerType,
       year: finalTarget?.year || null,
       albumId: finalTarget?.albumId || null,
       ratio: finalTarget?.ratio || null
     });
-    if (!cancelled && finalTarget) {
+    if (finalTarget) {
       setTarget(finalTarget);
       onCommit(finalTarget, "scrub");
     }
+    pointerIdRef.current = null;
+    pendingRatioRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
       updateDiagnostics({ pointerCapture: { active: false, pointerId: event.pointerId, at: new Date().toISOString() } }, "scrubber-pointer-release", { pointerId: event.pointerId });
     }
-    pointerIdRef.current = null;
-    pendingRatioRef.current = null;
     setIsDragging(false);
     updateDiagnostics({ scrubber: { dragging: false, target: finalTarget ? { year: finalTarget.year, albumId: finalTarget.albumId, ratio: finalTarget.ratio } : null } });
     onScrubStateChange?.(false);
     if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = window.setTimeout(() => setTarget(null), cancelled ? 0 : 700);
-  }, [onCommit, onScrubStateChange, target, targetFromClientY]);
+    hideTimerRef.current = window.setTimeout(() => setTarget(null), 700);
+  }, [onCommit, onScrubStateChange, targetFromClientY]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const cancelForViewportChange = () => cancelActivePointer("viewport-change");
+    window.addEventListener("resize", cancelForViewportChange);
+    window.addEventListener("orientationchange", cancelForViewportChange);
+    return () => {
+      window.removeEventListener("resize", cancelForViewportChange);
+      window.removeEventListener("orientationchange", cancelForViewportChange);
+    };
+  }, [cancelActivePointer, isDragging]);
 
   useEffect(() => () => {
     if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
@@ -112,37 +149,22 @@ export function ArchiveScrubber({
     ? `${labelTarget.year}${labelTarget.albumName ? ` · ${formatAlbumName(labelTarget.albumName, labelTarget.year)}` : ""}`
     : activeYear;
 
-  const commitAnchor = (ratio: number, intent: "scrub" | "jump" = "scrub") => {
+  const commitAnchor = (ratio: number) => {
     const nextTarget = resolveScrubberCommit(model, ratio);
     if (!nextTarget) return;
     setTarget(nextTarget);
-    recordDiagnostic("scrubber-commit", { input: intent, year: nextTarget.year, albumId: nextTarget.albumId, ratio: nextTarget.ratio });
-    onCommit(nextTarget, intent);
+    recordDiagnostic("scrubber-commit", { input: "keyboard", year: nextTarget.year, albumId: nextTarget.albumId, ratio: nextTarget.ratio });
+    onCommit(nextTarget, "scrub");
     if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
     hideTimerRef.current = window.setTimeout(() => setTarget(null), 700);
   };
 
   return (
     <div className={`archive-timeline ${isDragging ? "is-dragging" : ""}`}>
-      <div className="archive-timeline__years" aria-label="Archive years">
-        {model.years.map((year) => (
-          <button
-            key={year.year}
-            className={year.year === activeYear ? "is-active" : ""}
-            type="button"
-            style={{ top: `${clamp(year.start, 0.035, 0.965) * 100}%` }}
-            onClick={() => commitAnchor(year.start, "jump")}
-            aria-current={year.year === activeYear ? "true" : undefined}
-            aria-label={`Jump to ${year.year}`}
-          >
-            {year.year}
-          </button>
-        ))}
-      </div>
       <div
         ref={scrubberRef}
         className="archive-timeline__scrubber"
-        role="scrollbar"
+        role="slider"
         aria-label="Complete archive timeline"
         aria-controls="photo-grid"
         aria-orientation="vertical"
@@ -173,6 +195,7 @@ export function ArchiveScrubber({
         }}
         onPointerDown={(event) => {
           if (event.pointerType === "mouse" && event.button !== 0) return;
+          if (!event.isPrimary || pointerIdRef.current !== null) return;
           event.preventDefault();
           if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -196,17 +219,19 @@ export function ArchiveScrubber({
           }
         }}
         onPointerUp={(event) => settle(event)}
-        onPointerCancel={(event) => settle(event, true)}
+        onPointerCancel={(event) => {
+          if (pointerIdRef.current === event.pointerId) cancelActivePointer("pointer-cancel");
+        }}
         onLostPointerCapture={(event) => {
           if (pointerIdRef.current !== event.pointerId) return;
-          updateDiagnostics({ pointerCapture: { active: false, pointerId: event.pointerId, at: new Date().toISOString(), reason: "lost" } }, "scrubber-pointer-capture-lost", { pointerId: event.pointerId });
+          cancelActivePointer("lost-capture");
         }}
         onPointerLeave={(event) => {
           if (event.pointerType === "mouse" && pointerIdRef.current === null) setTarget(null);
         }}
       >
         <div className="archive-timeline__track" aria-hidden="true">
-          {model.years.map((year) => <span className="archive-timeline__year-tick" key={year.year} style={{ top: `${year.start * 100}%` }} />)}
+          {model.years.map((year) => <span className={`archive-timeline__year-tick ${year.year === activeYear ? "is-active" : ""}`} key={year.year} style={{ top: boundedIndicatorTop(year.start, 1) }} />)}
           {model.years.flatMap((year) => year.albums.slice(1).map((album) => (
             <span
               className={`archive-timeline__tick ${year.year === activeYear && album.id === activeAlbumId ? "is-active" : ""}`}
@@ -214,13 +239,12 @@ export function ArchiveScrubber({
               style={{ top: `${album.start * 100}%` }}
             />
           )))}
-          <span className="archive-timeline__thumb" style={{ top: `${clamp(displayRatio, 0, 1) * 100}%` }} />
-          <span className="archive-diagnostic-scrubber-target" style={{ top: `${clamp(labelTarget?.ratio ?? activeRatio, 0, 1) * 100}%` }} />
+          <span className="archive-timeline__thumb" style={{ top: boundedIndicatorTop(displayRatio, 14) }} />
+          <span className="archive-diagnostic-scrubber-target" style={{ top: boundedIndicatorTop(labelTarget?.ratio ?? activeRatio, 1) }} />
         </div>
         {isDragging || target ? (
-          <div className="archive-timeline__label" style={{ top: `${clamp(labelTarget?.ratio ?? activeRatio, 0.06, 0.94) * 100}%` }}>
-            <strong>{labelTarget?.year || activeYear}</strong>
-            {labelTarget?.albumName ? <span>{formatAlbumName(labelTarget.albumName, labelTarget.year)}</span> : null}
+          <div className="archive-timeline__label" style={{ top: boundedIndicatorTop(labelTarget?.ratio ?? activeRatio, 22) }}>
+            <span>{label}</span>
           </div>
         ) : null}
       </div>
