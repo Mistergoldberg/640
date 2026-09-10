@@ -21,8 +21,8 @@ vertical control rail for coarse-pointer landscape viewports up to 460px high:
 [ next  ] [             full viewport height                         ]
 [ play  ] [                                                          ]
 [ share ] [                                                          ]
-[ music ] [                                                          ]
-[ speed ] [                                                          ]
+[       ] [                                             ] [ music ]
+[       ] [                                             ] [ speed ]
 ```
 
 The media stage spans the complete dynamic viewport from top to bottom. Images
@@ -37,14 +37,15 @@ bottom controls.
 
 ## Control hierarchy and constrained height
 
-The left rail reads top to bottom as Close, Previous, Next, Play/Pause, Share,
-Music and Speed. Play/Pause and Speed retain the primary light treatment, while
-every action keeps a minimum 44×44px touch target. The image counter and Screen
-Mode control are hidden only in this compact landscape layout because neither is
-needed there; both remain available in portrait and desktop layouts.
+The left rail reads top to bottom as Close, Previous, Next, Play/Pause and Share.
+Music and Speed form a second rail at the bottom right. Play/Pause and Speed
+retain the primary light treatment, while every action keeps a minimum 44×44px
+touch target. The image counter and Screen Mode control are hidden only in this
+compact landscape layout because neither is needed there; both remain available
+in portrait and desktop layouts.
 
-Speed shows the current compact value. Its five 44px choices open as a second
-vertical stack immediately to the right of the rail. Selection closes the menu
+Speed shows the current compact value. Its five 44px choices open as a vertical
+stack immediately to the left of the right rail. Selection closes the menu
 and leaves the photograph index, opening delay, resume timer and pause state in
 the existing reducers. Escape, outside pointer/focus, window blur, resize and
 orientation change dismiss the menu without changing image geometry.
