@@ -80,8 +80,8 @@ describe("calculateImageGeometry", () => {
     const fit = calculateImageGeometry({
       sourceWidth: 640,
       sourceHeight: 480,
-      viewportWidth: 776,
-      viewportHeight: 390,
+      viewportWidth: 844,
+      viewportHeight: 278,
       controlClearance: 0,
       mode: "fit",
       rotation: 0
@@ -89,19 +89,19 @@ describe("calculateImageGeometry", () => {
     const expandedPortrait = calculateImageGeometry({
       sourceWidth: 360,
       sourceHeight: 480,
-      viewportWidth: 599,
-      viewportHeight: 320,
+      viewportWidth: 667,
+      viewportHeight: 216,
       controlClearance: 0,
       mode: "expanded",
       rotation: 0
     });
 
-    expect(fit.renderedWidth).toBe(520);
-    expect(fit.renderedHeight).toBe(390);
+    expect(fit.renderedWidth).toBeCloseTo(370.67, 2);
+    expect(fit.renderedHeight).toBe(278);
     expect(fit.overflowX).toBe(0);
     expect(fit.overflowY).toBe(0);
-    expect(expandedPortrait.renderedWidth).toBe(240);
-    expect(expandedPortrait.renderedHeight).toBe(320);
+    expect(expandedPortrait.renderedWidth).toBe(162);
+    expect(expandedPortrait.renderedHeight).toBe(216);
     expect(expandedPortrait.overflowX).toBe(0);
     expect(expandedPortrait.overflowY).toBe(0);
   });
