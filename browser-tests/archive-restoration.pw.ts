@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 const LEGACY_SCROLL_Y = 165736;
 const PHOTO_2001 = "2001-b41561bec02ff5";
+const REPORTED_REQUESTED_PHOTO = "2001-8117399092ce75";
+const REPORTED_WRONG_PHOTO = "2001-52f7e219f9486a";
 
 async function afterLayoutFrames(page: Page) {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -47,9 +49,13 @@ async function expectRootAt2013(page: Page) {
 }
 
 async function scrollWithinYear(page: Page, year: string, amount = 9000) {
+  const previousPhotoId = await page.evaluate(() => window.history.state?.restoration?.photoId || null);
   await page.evaluate((delta) => window.scrollBy(0, delta), amount);
   await expect(page).toHaveURL(new RegExp(`year=${year}`));
-  await expect.poll(() => page.evaluate(() => window.history.state?.restoration?.photoId || null)).not.toBeNull();
+  await expect.poll(() => page.evaluate((previous) => {
+    const current = window.history.state?.restoration?.photoId || null;
+    return Boolean(current && current !== previous);
+  }, previousPhotoId)).toBe(true);
   await afterLayoutFrames(page);
 }
 
@@ -119,6 +125,86 @@ test("reload deep inside 2001 restores the current-schema stable anchor", async 
   expect(after.anchor.photoId).toBe(before.anchor.photoId);
   expect(Math.abs(after.y - before.y)).toBeLessThan(500);
   expect((await visiblePhotoIds(page)).every((id) => id.startsWith("2001-"))).toBe(true);
+});
+
+test("reload flushes the live stable anchor before the persistence debounce expires", async ({ page }) => {
+  await page.goto("/?year=2001");
+  await waitForRestoration(page);
+  await page.evaluate(() => window.scrollBy(0, 9000));
+  await page.reload();
+  await waitForRestoration(page);
+  expect(await page.evaluate(() => history.state?.restoration?.photoId)).toBe(REPORTED_WRONG_PHOTO);
+  expect(Math.abs((await page.evaluate(() => scrollY)) - 9055)).toBeLessThan(500);
+});
+
+test("the exact reported photo remains authoritative through conflicting state and repeated reloads", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as typeof window & { __restorationPhotoWrites?: Array<string | null> };
+    target.__restorationPhotoWrites = [];
+    const replaceState = history.replaceState.bind(history);
+    history.replaceState = (state: unknown, unused: string, url?: string | URL | null) => {
+      const photoId = (state as { restoration?: { photoId?: string | null } } | null)?.restoration?.photoId ?? null;
+      target.__restorationPhotoWrites?.push(photoId);
+      replaceState(state, unused, url);
+    };
+  });
+  const url = `/?year=2001&photo=${REPORTED_REQUESTED_PHOTO}`;
+  await page.goto(url);
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId)).toBe(REPORTED_REQUESTED_PHOTO);
+  await expect(page).toHaveURL(new RegExp(`photo=${REPORTED_REQUESTED_PHOTO}`));
+  const historyLength = await page.evaluate(() => history.length);
+
+  await page.evaluate((wrongPhotoId) => {
+    const state = history.state;
+    history.replaceState({
+      ...state,
+      photoId: wrongPhotoId,
+      restoration: { ...state.restoration, photoId: wrongPhotoId }
+    }, "", location.href);
+  }, REPORTED_WRONG_PHOTO);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.reload();
+    await expect(page.getByLabel("Photo player")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId)).toBe(REPORTED_REQUESTED_PHOTO);
+    expect(await page.evaluate((wrongPhotoId) => (
+      (window as typeof window & { __restorationPhotoWrites?: Array<string | null> }).__restorationPhotoWrites || []
+    ).includes(wrongPhotoId), REPORTED_WRONG_PHOTO)).toBe(false);
+    await expect(page).toHaveURL(new RegExp(`photo=${REPORTED_REQUESTED_PHOTO}`));
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+  }
+});
+
+test("exact photo URLs survive delayed metadata and representative reloads", async ({ page }) => {
+  await page.route("**/data/2001/albums/**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    await route.continue();
+  });
+  for (const [year, photoId] of [
+    ["2001", REPORTED_REQUESTED_PHOTO],
+    ["2002", "2002-50386e89706e2e"],
+    ["2013", "2013-4651b733c14c76"]
+  ]) {
+    await page.goto(`/?year=${year}&photo=${photoId}`);
+    await expect(page.getByLabel("Photo player")).toBeVisible();
+    await page.reload();
+    await expect(page.getByLabel("Photo player")).toBeVisible();
+    expect(await page.evaluate(() => history.state?.restoration?.photoId)).toBe(photoId);
+    await expect(page).toHaveURL(new RegExp(`year=${year}.*photo=${photoId}`));
+  }
+});
+
+test("the exact reported photo survives mobile viewports and repeated orientation changes", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/?year=2001&photo=${REPORTED_REQUESTED_PHOTO}`);
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  for (let turn = 0; turn < 30; turn += 1) {
+    await page.setViewportSize(turn % 2 ? { width: 844, height: 390 } : { width: 390, height: 844 });
+    expect(await page.evaluate(() => history.state?.restoration?.photoId)).toBe(REPORTED_REQUESTED_PHOTO);
+  }
+  expect(await page.locator(".collection-shell").getAttribute("data-active-year")).toBe("2001");
+  expect(await page.locator("[data-year]:not([data-year='2001']) img").count()).toBe(0);
 });
 
 test("Back and Forward restore the stable anchor for each history entry", async ({ page }) => {

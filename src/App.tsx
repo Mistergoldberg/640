@@ -894,12 +894,13 @@ function App() {
     if (intent === "history" && storedInput) {
       restorationTarget = storedInput;
     } else {
+      const initialUrlPhotoId = intent === "initial" ? readUrlPhotoId() : null;
       const stored = updateUrlState(
         target.year,
-        null,
+        initialUrlPhotoId,
         plan.historyMode || "replace",
         catalogueId,
-        false,
+        Boolean(initialUrlPhotoId && readArchiveHistoryState(window.history.state)?.fromGrid),
         preferredAnchor
       );
       const source = storedInput?.source || (intent === "initial" ? "url" : intent);
@@ -1282,22 +1283,39 @@ function YearWindowGrid({
     };
   }, [onRestorationCancel, restoration.generation, restorationPending]);
 
+  const persistLiveViewportAnchor = useCallback(() => {
+    if (!collection || !ref.current) return;
+    const liveContainerTop = ref.current.getBoundingClientRect().top + window.scrollY;
+    const liveLocalViewportTop = window.scrollY - liveContainerTop;
+    const liveAlbum = findAlbumAtTop(layout, liveLocalViewportTop + ARCHIVE_JUMP_OFFSET_PX);
+    const nearestPhoto = nearestPhotoAnchor(photoAnchors, liveLocalViewportTop + RESTORE_OFFSET_PX);
+    const photoId = nearestPhoto?.[0] || null;
+    const anchorTop = nearestPhoto?.[1] ?? liveAlbum?.top ?? 0;
+    const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
+    onPersistAnchor({
+      year: activeYear,
+      albumId: liveAlbum?.id || null,
+      photoId,
+      adjustmentPx: liveLocalViewportTop - (anchorTop - baseOffset)
+    });
+  }, [activeYear, collection, layout, onPersistAnchor, photoAnchors, ref]);
+
   useEffect(() => {
-    if (!collection || (restoration.phase !== "settled" && restoration.phase !== "cancelled")) return;
-    const timer = window.setTimeout(() => {
-      const nearestPhoto = nearestPhotoAnchor(photoAnchors, localViewportTop + RESTORE_OFFSET_PX);
-      const photoId = nearestPhoto?.[0] || null;
-      const anchorTop = nearestPhoto?.[1] ?? currentAlbum?.top ?? 0;
-      const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
-      onPersistAnchor({
-        year: activeYear,
-        albumId: currentAlbum?.id || null,
-        photoId,
-        adjustmentPx: localViewportTop - (anchorTop - baseOffset)
-      });
-    }, 90);
+    if (restoration.phase !== "settled" && restoration.phase !== "cancelled") return;
+    const timer = window.setTimeout(persistLiveViewportAnchor, 90);
     return () => window.clearTimeout(timer);
-  }, [activeYear, collection, currentAlbum?.id, currentAlbum?.top, localViewportTop, onPersistAnchor, photoAnchors, restoration.phase]);
+  }, [localViewportTop, persistLiveViewportAnchor, restoration.phase]);
+
+  useEffect(() => {
+    if (restoration.phase !== "settled" && restoration.phase !== "cancelled") return;
+    const flush = () => persistLiveViewportAnchor();
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [persistLiveViewportAnchor, restoration.phase]);
 
   useLayoutEffect(() => {
     if (!diagnosticsEnabled()) return;

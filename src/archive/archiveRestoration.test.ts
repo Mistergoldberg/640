@@ -21,6 +21,8 @@ const catalog: Catalog = { years: [
 const catalogueId = archiveCatalogueIdentity(catalog);
 const valid = createStoredArchiveAnchor({ catalogueId, entryId: "entry-1", year: "2001", albumId: "album-1", photoId: "photo-1", adjustmentPx: 42 });
 const historyState = { app: "640x480", entryId: "entry-1", year: "2001", photoId: null, view: "grid", fromGrid: false, restoration: valid };
+const reportedRequestedPhoto = "2001-8117399092ce75";
+const reportedWrongPhoto = "2001-52f7e219f9486a";
 
 describe("archive restoration policy", () => {
   it("rejects unversioned legacy and unknown-schema records", () => {
@@ -36,6 +38,48 @@ describe("archive restoration policy", () => {
   it("restores a valid current-schema anchor on reload", () => {
     const target = resolveNavigationRestoration({ catalog, href: "https://example.test/?year=2001", historyState, navigationType: "reload" });
     expect(target).toMatchObject({ ...valid, source: "history" });
+  });
+
+  it("keeps the exact reported URL photo when current-schema history conflicts", () => {
+    const conflicting = {
+      ...historyState,
+      photoId: reportedWrongPhoto,
+      view: "photo" as const,
+      restoration: createStoredArchiveAnchor({
+        catalogueId,
+        entryId: historyState.entryId,
+        year: "2001",
+        photoId: reportedWrongPhoto
+      })
+    };
+    const target = resolveNavigationRestoration({
+      catalog,
+      href: `https://example.test/?year=2001&photo=${reportedRequestedPhoto}`,
+      historyState: conflicting,
+      navigationType: "reload"
+    });
+    expect(target).toMatchObject({ year: "2001", photoId: reportedRequestedPhoto, source: "url" });
+    expect(target.photoId).not.toBe(reportedWrongPhoto);
+  });
+
+  it.each([
+    ["empty", null],
+    ["malformed", { app: "640x480", entryId: "entry-1", restoration: "invalid" }],
+    ["preceding schema", { ...historyState, restoration: { ...valid, schema: "continuous-archive-v0" } }],
+    ["another year", {
+      ...historyState,
+      year: "2013",
+      restoration: createStoredArchiveAnchor({ catalogueId, entryId: "entry-1", year: "2013", photoId: "2013-other" })
+    }]
+  ])("keeps the exact reported URL photo with %s stored state", (_label, storedState) => {
+    const target = resolveNavigationRestoration({
+      catalog,
+      href: `https://example.test/?year=2001&photo=${reportedRequestedPhoto}`,
+      historyState: storedState,
+      navigationType: "reload",
+      entryId: "fresh-entry"
+    });
+    expect(target).toMatchObject({ year: "2001", photoId: reportedRequestedPhoto, source: "url" });
   });
 
   it("falls back to the newest year for a new root navigation", () => {
