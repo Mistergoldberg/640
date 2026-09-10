@@ -76,12 +76,12 @@ describe("calculateImageGeometry", () => {
     expect(geometry.renderedHeight).toBeLessThanOrEqual(710);
   });
 
-  it("contains fit and expanded images within a landscape media stage", () => {
+  it("uses the full landscape viewport height for fit and expanded images", () => {
     const fit = calculateImageGeometry({
       sourceWidth: 640,
       sourceHeight: 480,
       viewportWidth: 844,
-      viewportHeight: 278,
+      viewportHeight: 390,
       controlClearance: 0,
       mode: "fit",
       rotation: 0
@@ -90,18 +90,18 @@ describe("calculateImageGeometry", () => {
       sourceWidth: 360,
       sourceHeight: 480,
       viewportWidth: 667,
-      viewportHeight: 216,
+      viewportHeight: 320,
       controlClearance: 0,
       mode: "expanded",
       rotation: 0
     });
 
-    expect(fit.renderedWidth).toBeCloseTo(370.67, 2);
-    expect(fit.renderedHeight).toBe(278);
+    expect(fit.renderedWidth).toBe(520);
+    expect(fit.renderedHeight).toBe(390);
     expect(fit.overflowX).toBe(0);
     expect(fit.overflowY).toBe(0);
-    expect(expandedPortrait.renderedWidth).toBe(162);
-    expect(expandedPortrait.renderedHeight).toBe(216);
+    expect(expandedPortrait.renderedWidth).toBe(240);
+    expect(expandedPortrait.renderedHeight).toBe(320);
     expect(expandedPortrait.overflowX).toBe(0);
     expect(expandedPortrait.overflowY).toBe(0);
   });

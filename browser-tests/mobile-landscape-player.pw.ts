@@ -51,23 +51,20 @@ function expectHealthy(health: ReturnType<typeof monitorPage>) {
 }
 
 async function expectLandscapeContainment(page: Page, viewport: { width: number; height: number }) {
-  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-layout", "mobile-landscape-frame");
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-layout", "mobile-landscape-rail");
   const stage = page.locator(".player-media-stage");
   const image = page.locator(".player-image");
   const [stageBox, imageBox] = await Promise.all([stage.boundingBox(), image.boundingBox()]);
   expect(stageBox).not.toBeNull();
   expect(imageBox).not.toBeNull();
-  expect(stageBox!.x).toBe(0);
-  expect(stageBox!.width).toBe(viewport.width);
-  expect(stageBox!.y).toBe(viewport.height <= 340 ? 52 : 56);
-  expect(stageBox!.height).toBe(viewport.height - stageBox!.y * 2);
+  expect(stageBox).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
   expect(imageBox!.x).toBeGreaterThanOrEqual(stageBox!.x);
   expect(imageBox!.x + imageBox!.width).toBeLessThanOrEqual(stageBox!.x + stageBox!.width + 1);
-  expect(imageBox!.y).toBeGreaterThanOrEqual(stageBox!.y);
-  expect(imageBox!.y + imageBox!.height).toBeLessThanOrEqual(stageBox!.y + stageBox!.height + 1);
+  expect(imageBox!.y).toBeLessThanOrEqual(1);
+  expect(imageBox!.y + imageBox!.height).toBeGreaterThanOrEqual(viewport.height - 1);
 
-  const interactiveBoxes = await page.locator(".player-control-frame button").evaluateAll((buttons) => buttons
-    .filter((button) => getComputedStyle(button).display !== "none")
+  const interactiveBoxes = await page.locator(".player-control-frame > .player-topbar button, .player-controls > [data-player-control]").evaluateAll((buttons) => buttons
+    .filter((button) => getComputedStyle(button).display !== "none" && button.getBoundingClientRect().width > 0)
     .map((button) => {
       const rect = button.getBoundingClientRect();
       return {
@@ -87,30 +84,24 @@ async function expectLandscapeContainment(page: Page, viewport: { width: number;
     expect(target.right).toBeLessThanOrEqual(viewport.width);
     expect(target.top).toBeGreaterThanOrEqual(0);
     expect(target.bottom).toBeLessThanOrEqual(viewport.height);
-    expect(target.bottom <= stageBox!.y + 1 || target.top >= stageBox!.y + stageBox!.height - 1).toBe(true);
   }
 
-  const topControls = interactiveBoxes
-    .filter(({ bottom }) => bottom <= stageBox!.y + 1)
-    .sort((left, right) => left.left - right.left);
-  expect(topControls.map(({ name }) => name)).toEqual(["Close", "back", "forward", "playback", "share", "music", "screen-mode"]);
-  expect(Math.max(...topControls.map(({ top }) => top)) - Math.min(...topControls.map(({ top }) => top))).toBeLessThan(2);
+  const railControls = interactiveBoxes.sort((top, bottom) => top.top - bottom.top);
+  expect(railControls.map(({ name }) => name)).toEqual(["Close", "back", "forward", "playback", "share", "music", "speed"]);
+  expect(Math.max(...railControls.map(({ left }) => left)) - Math.min(...railControls.map(({ left }) => left))).toBeLessThan(2);
+  for (let index = 1; index < railControls.length; index += 1) {
+    expect(railControls[index].top).toBeGreaterThanOrEqual(railControls[index - 1].bottom);
+  }
 
-  const counterBox = await page.locator(".player-counter").boundingBox();
   const speedBox = await page.locator('[data-player-control="speed"]').boundingBox();
-  expect(counterBox).not.toBeNull();
   expect(speedBox).not.toBeNull();
-  expect(counterBox!.x + counterBox!.width).toBeLessThanOrEqual(viewport.width);
-  expect(counterBox!.x + counterBox!.width).toBeGreaterThan(viewport.width - 8);
-  expect(counterBox!.y + counterBox!.height).toBeLessThanOrEqual(stageBox!.y);
-  expect(speedBox!.x + speedBox!.width).toBeLessThanOrEqual(viewport.width);
-  expect(speedBox!.x + speedBox!.width).toBeGreaterThan(viewport.width - 8);
-  expect(speedBox!.y).toBeGreaterThanOrEqual(stageBox!.y + stageBox!.height);
+  await expect(page.locator(".player-counter")).toBeHidden();
+  await expect(page.locator('[data-player-control="screen-mode"]')).toBeHidden();
 
   return { stageBox: stageBox!, imageBox: imageBox!, speedBox: speedBox! };
 }
 
-test("mobile landscape uses bounded top and bottom chrome for both image orientations", async ({ browser }) => {
+test("mobile landscape uses a full-height image and vertical control rail for both image orientations", async ({ browser }) => {
   for (const sample of [
     { viewport: { width: 844, height: 390 }, photo: LANDSCAPE_PHOTO, orientation: "landscape" as const },
     { viewport: { width: 667, height: 320 }, photo: PORTRAIT_PHOTO, orientation: "portrait" as const }
@@ -119,20 +110,20 @@ test("mobile landscape uses bounded top and bottom chrome for both image orienta
     const page = await context.newPage();
     const health = monitorPage(page);
     await openDirectPhoto(page, sample.photo, sample.orientation);
-    const { stageBox, speedBox } = await expectLandscapeContainment(page, sample.viewport);
+    const { speedBox } = await expectLandscapeContainment(page, sample.viewport);
 
     const playbackBox = await page.locator('[data-player-control="playback"]').boundingBox();
     const previousBox = await page.locator('[data-player-control="back"]').boundingBox();
     const playbackBackground = await page.locator('[data-player-control="playback"]').evaluate((element) => getComputedStyle(element).backgroundColor);
     const previousBackground = await page.locator('[data-player-control="back"]').evaluate((element) => getComputedStyle(element).backgroundColor);
     const speedBackground = await page.locator('[data-player-control="speed"]').evaluate((element) => getComputedStyle(element).backgroundColor);
-    expect(playbackBox!.width).toBeGreaterThan(previousBox!.width);
+    expect(playbackBox!.width).toBe(previousBox!.width);
     expect(playbackBackground).not.toBe(previousBackground);
     expect(speedBackground).toBe(playbackBackground);
     await expect(page.locator('[data-player-control="more"]')).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Share player link" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Play music" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Full screen" })).toBeHidden();
     await expect(page.locator(".speed-trigger__value")).toHaveText("0.1s");
 
     const beforeMenuStage = await page.locator(".player-media-stage").boundingBox();
@@ -140,18 +131,26 @@ test("mobile landscape uses bounded top and bottom chrome for both image orienta
     await page.locator('[data-player-control="speed"]').click();
     await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toBeVisible();
     const menuBox = await page.locator(".speed-menu").boundingBox();
-    expect(menuBox!.x).toBeGreaterThanOrEqual(0);
-    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(speedBox.x - 3);
-    expect(menuBox!.y).toBeGreaterThanOrEqual(stageBox.y + stageBox.height);
+    expect(menuBox!.x).toBeGreaterThanOrEqual(speedBox.x + speedBox.width + 2);
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(sample.viewport.width);
+    expect(menuBox!.y).toBeGreaterThanOrEqual(0);
     expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(sample.viewport.height);
     await expect(page.getByRole("radio", { name: "0.1 seconds per photo" })).toHaveAttribute("aria-checked", "true");
     for (const button of await page.locator(".speed-menu button:visible").all()) {
       const box = await button.boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(44);
       expect(box!.height).toBeGreaterThanOrEqual(44);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(speedBox.x - 3);
-      expect(box!.y).toBeGreaterThanOrEqual(stageBox.y + stageBox.height);
+      expect(box!.x).toBeGreaterThanOrEqual(speedBox.x + speedBox.width + 2);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(sample.viewport.width);
       expect(box!.y + box!.height).toBeLessThanOrEqual(sample.viewport.height);
+    }
+    const speedOptions = await page.locator(".speed-menu button:visible").evaluateAll((buttons) => buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, left: rect.left };
+    }));
+    expect(Math.max(...speedOptions.map(({ left }) => left)) - Math.min(...speedOptions.map(({ left }) => left))).toBeLessThan(2);
+    for (let index = 1; index < speedOptions.length; index += 1) {
+      expect(speedOptions[index].top).toBeGreaterThanOrEqual(speedOptions[index - 1].bottom);
     }
     await page.getByRole("radio", { name: "0.5 seconds per photo" }).click();
     await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toHaveCount(0);
@@ -160,9 +159,6 @@ test("mobile landscape uses bounded top and bottom chrome for both image orienta
     expect(await page.locator(".player-media-stage").boundingBox()).toEqual(beforeMenuStage);
 
     await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
-    await expectLandscapeContainment(page, sample.viewport);
-    await page.getByRole("button", { name: "Full screen" }).click();
-    await expect(page.locator(".player-surface")).toHaveClass(/player-surface--expanded/);
     await expectLandscapeContainment(page, sample.viewport);
     expectHealthy(health);
     await context.close();
@@ -339,7 +335,7 @@ test("thirty player rotations retain one instance without listeners or observers
     await page.setViewportSize(viewport);
     await expect(page.getByLabel("Photo player")).toHaveAttribute(
       "data-player-layout",
-      viewport.width > viewport.height ? "mobile-landscape-frame" : "standard"
+      viewport.width > viewport.height ? "mobile-landscape-rail" : "standard"
     );
     expect(await playerIndex(page)).toEqual(preserved);
     expect(await page.evaluate(() => history.length)).toBe(historyLength);

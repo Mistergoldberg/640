@@ -147,7 +147,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const [playerViewport, setPlayerViewport] = useState(() => ({
     width: typeof window === "undefined" ? 640 : window.innerWidth,
     height: typeof window === "undefined" ? 480 : window.innerHeight,
-    landscapeFrame: false
+    landscapeRail: false
   }));
   const cacheRef = useRef(new Map<number, CacheEntry>());
   const musicIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -716,7 +716,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       setPlayerViewport({
         width: Math.max(1, mediaStage?.width || window.innerWidth),
         height: Math.max(1, mediaStage?.height || window.innerHeight),
-        landscapeFrame: window.matchMedia("(pointer: coarse) and (orientation: landscape) and (max-height: 460px)").matches
+        landscapeRail: window.matchMedia("(pointer: coarse) and (orientation: landscape) and (max-height: 460px)").matches
       });
     };
     const scheduleViewportUpdate = () => {
@@ -809,7 +809,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       return null;
     }
 
-    const clearance = imageMode === "fit" && !playerViewport.landscapeFrame
+    const clearance = imageMode === "fit" && !playerViewport.landscapeRail
       ? playerFitClearance(playerViewport.width, playerViewport.height)
       : { vertical: 0, horizontal: 0 };
     return calculateImageGeometry({
@@ -821,7 +821,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       mode: imageMode,
       rotation: 0
     });
-  }, [currentPhoto, imageMode, playerViewport.height, playerViewport.landscapeFrame, playerViewport.width]);
+  }, [currentPhoto, imageMode, playerViewport.height, playerViewport.landscapeRail, playerViewport.width]);
 
   if (!currentPhoto) {
     return null;
@@ -845,7 +845,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   return (
     <div
       className={`player-overlay ${controlsVisible ? "has-visible-controls" : ""}`}
-      data-player-layout={playerViewport.landscapeFrame ? "mobile-landscape-frame" : "standard"}
+      data-player-layout={playerViewport.landscapeRail ? "mobile-landscape-rail" : "standard"}
       role="dialog"
       aria-modal="true"
       aria-label="Photo player"
