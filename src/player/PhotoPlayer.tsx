@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { X } from "lucide-react";
 import { mediaUrl } from "../lib/assets";
 import type { Photo } from "../types";
@@ -146,7 +146,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const [nativeFullscreenActive, setNativeFullscreenActive] = useState(() => Boolean(fullscreenElement()));
   const [playerViewport, setPlayerViewport] = useState(() => ({
     width: typeof window === "undefined" ? 640 : window.innerWidth,
-    height: typeof window === "undefined" ? 480 : window.innerHeight
+    height: typeof window === "undefined" ? 480 : window.innerHeight,
+    landscapeRail: false
   }));
   const cacheRef = useRef(new Map<number, CacheEntry>());
   const musicIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -163,6 +164,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const ignoreSyntheticClickUntilRef = useRef(0);
   const touchStartRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const surfaceRef = useRef<HTMLButtonElement | null>(null);
+  const mediaStageRef = useRef<HTMLDivElement | null>(null);
   const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
   const resetKeyRef = useRef(resetKey);
 
@@ -710,9 +712,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     let frame = 0;
     const updateViewport = () => {
       frame = 0;
+      const mediaStage = mediaStageRef.current?.getBoundingClientRect();
       setPlayerViewport({
-        width: window.innerWidth,
-        height: window.innerHeight
+        width: Math.max(1, mediaStage?.width || window.innerWidth),
+        height: Math.max(1, mediaStage?.height || window.innerHeight),
+        landscapeRail: window.matchMedia("(pointer: coarse) and (orientation: landscape) and (max-height: 460px)").matches
       });
     };
     const scheduleViewportUpdate = () => {
@@ -723,9 +727,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     window.addEventListener("resize", scheduleViewportUpdate);
     window.addEventListener("orientationchange", scheduleViewportUpdate);
+    window.visualViewport?.addEventListener("resize", scheduleViewportUpdate);
+    scheduleViewportUpdate();
     return () => {
       window.removeEventListener("resize", scheduleViewportUpdate);
       window.removeEventListener("orientationchange", scheduleViewportUpdate);
+      window.visualViewport?.removeEventListener("resize", scheduleViewportUpdate);
       if (frame) {
         window.cancelAnimationFrame(frame);
       }
@@ -802,7 +809,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       return null;
     }
 
-    const clearance = imageMode === "fit" ? playerFitClearance(playerViewport.width, playerViewport.height) : { vertical: 0, horizontal: 0 };
+    const clearance = imageMode === "fit" && !playerViewport.landscapeRail
+      ? playerFitClearance(playerViewport.width, playerViewport.height)
+      : { vertical: 0, horizontal: 0 };
     return calculateImageGeometry({
       sourceWidth: currentPhoto.width,
       sourceHeight: currentPhoto.height,
@@ -812,7 +821,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       mode: imageMode,
       rotation: 0
     });
-  }, [currentPhoto, imageMode, playerViewport.height, playerViewport.width]);
+  }, [currentPhoto, imageMode, playerViewport.height, playerViewport.landscapeRail, playerViewport.width]);
 
   if (!currentPhoto) {
     return null;
@@ -836,133 +845,143 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   return (
     <div
       className={`player-overlay ${controlsVisible ? "has-visible-controls" : ""}`}
+      data-player-layout={playerViewport.landscapeRail ? "mobile-landscape-rail" : "standard"}
       role="dialog"
       aria-modal="true"
       aria-label="Photo player"
       onMouseMove={revealControls}
       onTouchStart={revealControls}
     >
-      <button
-        ref={surfaceRef}
-        className={`player-surface player-surface--${imageMode}`}
-        type="button"
-        onPointerDown={(event) => {
-          if (event.pointerType === "touch") {
-            touchStartRef.current = {
-              id: event.pointerId,
-              x: event.clientX,
-              y: event.clientY
-            };
-          }
-        }}
-        onPointerUp={(event) => {
-          if (event.pointerType !== "touch" || touchStartRef.current?.id !== event.pointerId) {
-            return;
-          }
-
-          const startedAt = touchStartRef.current;
-          touchStartRef.current = null;
-          ignoreSyntheticClickUntilRef.current = Date.now() + 450;
-          event.preventDefault();
-          event.stopPropagation();
-
-          const movedX = Math.abs(event.clientX - startedAt.x);
-          const movedY = Math.abs(event.clientY - startedAt.y);
-          if (movedX > 18 || movedY > 18) {
-            return;
-          }
-
-          const imageRect = event.currentTarget.querySelector("img")?.getBoundingClientRect();
-          if (
-            imageRect &&
-            (event.clientX < imageRect.left ||
-              event.clientX > imageRect.right ||
-              event.clientY < imageRect.top ||
-              event.clientY > imageRect.bottom)
-          ) {
-            return;
-          }
-
-          const navigationRect = imageRect || event.currentTarget.getBoundingClientRect();
-          navigateManually(event.clientX < navigationRect.left + navigationRect.width / 2 ? -1 : 1);
-        }}
-        onPointerCancel={(event) => {
-          if (event.pointerType === "touch") {
-            touchStartRef.current = null;
-            ignoreSyntheticClickUntilRef.current = Date.now() + 450;
-          }
-        }}
-        onClick={(event) => {
-          if (Date.now() < ignoreSyntheticClickUntilRef.current) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-
-          toggleFromPhotoSurface();
-        }}
-        aria-label={surfaceActionLabel}
-      >
-        <img
-          ref={currentImageRef}
-          key={currentPhoto.id}
-          src={mediaUrl(currentPhoto.displayKey)}
-          alt=""
-          className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}`}
-          style={playerImageStyle}
-          decoding="async"
-          onLoad={markVisibleImageReady}
-          onError={() => {
-            if (!atEnd) {
-              dispatch({ type: "ADVANCE" });
-            } else {
-              dispatch({ type: "REACH_END" });
+      <div className="player-media-stage" ref={mediaStageRef}>
+        <button
+          ref={surfaceRef}
+          className={`player-surface player-surface--${imageMode}`}
+          type="button"
+          onPointerDown={(event) => {
+            if (event.pointerType === "touch") {
+              touchStartRef.current = {
+                id: event.pointerId,
+                x: event.clientX,
+                y: event.clientY
+              };
             }
           }}
-        />
-      </button>
+          onPointerUp={(event) => {
+            if (event.pointerType !== "touch" || touchStartRef.current?.id !== event.pointerId) {
+              return;
+            }
 
-      <div className="player-topbar">
-        <button className="icon-button" type="button" onClick={close} aria-label="Close" title="Close">
-          <X size={22} strokeWidth={2.2} />
+            const startedAt = touchStartRef.current;
+            touchStartRef.current = null;
+            ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+            event.preventDefault();
+            event.stopPropagation();
+
+            const movedX = Math.abs(event.clientX - startedAt.x);
+            const movedY = Math.abs(event.clientY - startedAt.y);
+            if (movedX > 18 || movedY > 18) {
+              return;
+            }
+
+            const imageRect = event.currentTarget.querySelector("img")?.getBoundingClientRect();
+            if (
+              imageRect &&
+              (event.clientX < imageRect.left ||
+                event.clientX > imageRect.right ||
+                event.clientY < imageRect.top ||
+                event.clientY > imageRect.bottom)
+            ) {
+              return;
+            }
+
+            const navigationRect = imageRect || event.currentTarget.getBoundingClientRect();
+            navigateManually(event.clientX < navigationRect.left + navigationRect.width / 2 ? -1 : 1);
+          }}
+          onPointerCancel={(event) => {
+            if (event.pointerType === "touch") {
+              touchStartRef.current = null;
+              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+            }
+          }}
+          onClick={(event) => {
+            if (Date.now() < ignoreSyntheticClickUntilRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+
+            toggleFromPhotoSurface();
+          }}
+          aria-label={surfaceActionLabel}
+        >
+          <img
+            ref={currentImageRef}
+            key={currentPhoto.id}
+            src={mediaUrl(currentPhoto.displayKey)}
+            alt=""
+            className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}`}
+            style={playerImageStyle}
+            decoding="async"
+            onLoad={markVisibleImageReady}
+            onError={() => {
+              if (!atEnd) {
+                dispatch({ type: "ADVANCE" });
+              } else {
+                dispatch({ type: "REACH_END" });
+              }
+            }}
+          />
         </button>
-        <div className="player-counter" aria-live="polite">
-          {currentIndex + 1} / {photos.length}
-          {initialPlayPending ? <span className="player-counter__status">starts</span> : null}
-          {!initialPlayPending && temporaryResumePending ? <span className="player-counter__status">resumes</span> : null}
-        </div>
       </div>
 
-      <PlayerControls
-        atStart={atStart}
-        atEnd={atEnd}
-        primaryActionLabel={primaryActionLabel}
-        delayMs={playerState.delayMs}
-        speedMenuOpen={controlState.speedMenuOpen}
-        musicActionLabel={musicActionLabel}
-        musicIsActive={musicIsActive}
-        shareActionLabel={shareActionLabel}
-        shareIsActive={shareStatus === "copied"}
-        screenModeActive={isScreenModeActive}
-        onPrevious={() => navigateManually(-1)}
-        onTogglePlayback={toggleFromPrimaryControl}
-        onNext={() => navigateManually(1)}
-        onToggleSpeedMenu={toggleSpeedMenu}
-        onCloseSpeedMenu={closeSpeedMenu}
-        onSelectSpeed={selectSpeed}
-        onToggleMusic={toggleMusic}
-        onShare={() => void shareCurrentPhoto()}
-        onToggleScreenMode={toggleScreenMode}
-        onReveal={revealControls}
-      />
+      <div className={`player-control-rail ${controlState.speedMenuOpen ? "is-speed-menu-open" : ""}`}>
+        <PlayerControls
+          atStart={atStart}
+          atEnd={atEnd}
+          primaryActionLabel={primaryActionLabel}
+          delayMs={playerState.delayMs}
+          speedMenuOpen={controlState.speedMenuOpen}
+          musicActionLabel={musicActionLabel}
+          musicIsActive={musicIsActive}
+          shareActionLabel={shareActionLabel}
+          shareIsActive={shareStatus === "copied"}
+          screenModeActive={isScreenModeActive}
+          onPrevious={() => navigateManually(-1)}
+          onTogglePlayback={toggleFromPrimaryControl}
+          onNext={() => navigateManually(1)}
+          onToggleSpeedMenu={toggleSpeedMenu}
+          onCloseSpeedMenu={closeSpeedMenu}
+          onSelectSpeed={selectSpeed}
+          onToggleMusic={toggleMusic}
+          onShare={() => void shareCurrentPhoto()}
+          onToggleScreenMode={toggleScreenMode}
+          onReveal={revealControls}
+        />
+
+        <div className="player-topbar">
+          <button className="icon-button" type="button" onClick={close} aria-label="Close" title="Close">
+            <X size={22} strokeWidth={2.2} />
+          </button>
+          <div className="player-counter" aria-live="polite">
+            {currentIndex + 1} / {photos.length}
+            {initialPlayPending ? <span className="player-counter__status">starts</span> : null}
+            {!initialPlayPending && temporaryResumePending ? <span className="player-counter__status">resumes</span> : null}
+          </div>
+          {isBuffering ? <div className="player-buffer">Buffering</div> : null}
+        </div>
+
+        <div
+          className="player-progress"
+          aria-hidden="true"
+          style={{ "--player-progress": photos.length <= 1 ? 1 : currentIndex / (photos.length - 1) } as CSSProperties}
+        >
+          <span />
+        </div>
+      </div>
 
       <span className="sr-only" aria-live="polite">
         {shareStatus === "copied" ? "Share link copied" : shareStatus === "failed" ? "Share link failed" : ""}
       </span>
-
-      <div className="player-progress" aria-hidden="true">
-        <span style={{ transform: `scaleX(${photos.length <= 1 ? 1 : currentIndex / (photos.length - 1)})` }} />
-      </div>
 
       {hasMusicLoaded ? (
         <iframe
@@ -975,8 +994,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           tabIndex={-1}
         />
       ) : null}
-
-      {isBuffering ? <div className="player-buffer">Buffering</div> : null}
     </div>
   );
 }

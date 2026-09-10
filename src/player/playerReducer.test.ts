@@ -104,6 +104,16 @@ describe("playerReducer speed changes", () => {
     expect(playerReducer(changed, { type: "TEMPORARY_RESUME" }).status).toBe("playing");
   });
 
+  it("does not resume or move an explicitly paused player", () => {
+    const playing = playerReducer(decoded(openPlayer(4, 12)), { type: "INITIAL_DELAY_COMPLETE" });
+    const paused = playerReducer(playing, { type: "PAUSE" });
+    const changed = playerReducer(paused, { type: "CHANGE_SPEED", delayMs: 250 });
+
+    expect(changed).toEqual({ ...paused, delayMs: 250 });
+    expect(changed.currentIndex).toBe(4);
+    expect(changed.status).toBe("explicitly-paused");
+  });
+
   it("preserves active playback and natural end behavior", () => {
     const playing = playerReducer(decoded(openPlayer(10, 12)), { type: "INITIAL_DELAY_COMPLETE" });
     const changed = playerReducer(playing, { type: "CHANGE_SPEED", delayMs: 2000 });

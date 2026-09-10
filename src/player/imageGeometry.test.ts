@@ -75,4 +75,34 @@ describe("calculateImageGeometry", () => {
     expect(geometry.renderedWidth).toBeLessThanOrEqual(366);
     expect(geometry.renderedHeight).toBeLessThanOrEqual(710);
   });
+
+  it("contains fit and expanded images within a landscape media stage", () => {
+    const fit = calculateImageGeometry({
+      sourceWidth: 640,
+      sourceHeight: 480,
+      viewportWidth: 776,
+      viewportHeight: 390,
+      controlClearance: 0,
+      mode: "fit",
+      rotation: 0
+    });
+    const expandedPortrait = calculateImageGeometry({
+      sourceWidth: 360,
+      sourceHeight: 480,
+      viewportWidth: 599,
+      viewportHeight: 320,
+      controlClearance: 0,
+      mode: "expanded",
+      rotation: 0
+    });
+
+    expect(fit.renderedWidth).toBe(520);
+    expect(fit.renderedHeight).toBe(390);
+    expect(fit.overflowX).toBe(0);
+    expect(fit.overflowY).toBe(0);
+    expect(expandedPortrait.renderedWidth).toBe(240);
+    expect(expandedPortrait.renderedHeight).toBe(320);
+    expect(expandedPortrait.overflowX).toBe(0);
+    expect(expandedPortrait.overflowY).toBe(0);
+  });
 });

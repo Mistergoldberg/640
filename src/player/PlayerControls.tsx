@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef } from "react";
-import { Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, Music, Pause, Play, Share2 } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, MoreHorizontal, Music, Pause, Play, Share2 } from "lucide-react";
 import { PLAYER_SPEED_OPTIONS, speedOption } from "./playerControlState";
 
 interface PlayerControlsProps {
@@ -49,40 +49,58 @@ export function PlayerControls({
 }: PlayerControlsProps) {
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const speedTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const secondaryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const speedMenuRef = useRef<HTMLDivElement | null>(null);
+  const [secondaryMenuOpen, setSecondaryMenuOpen] = useState(false);
   const speedMenuId = useId();
   const selectedSpeed = speedOption(delayMs);
 
   useEffect(() => {
-    if (!speedMenuOpen) {
+    if (!speedMenuOpen && !secondaryMenuOpen) {
       return;
     }
 
     const frame = window.requestAnimationFrame(() => {
-      speedMenuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+      if (speedMenuOpen) {
+        speedMenuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+      }
     });
-    const closeForViewportChange = () => onCloseSpeedMenu();
+    const closeMenus = () => {
+      onCloseSpeedMenu();
+      setSecondaryMenuOpen(false);
+    };
+    const closeForViewportChange = () => closeMenus();
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       if (!target || controlsRef.current?.contains(target)) {
         return;
       }
 
-      onCloseSpeedMenu();
+      closeMenus();
       if (target.closest(".player-topbar")) {
         return;
       }
 
       speedTriggerRef.current?.blur();
+      secondaryTriggerRef.current?.blur();
       event.preventDefault();
       event.stopPropagation();
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Node && !controlsRef.current?.contains(event.target)) {
+        closeMenus();
+      }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        onCloseSpeedMenu();
-        speedTriggerRef.current?.focus({ preventScroll: true });
+        closeMenus();
+        (speedMenuOpen ? speedTriggerRef : secondaryTriggerRef).current?.focus({ preventScroll: true });
+        return;
+      }
+
+      if (!speedMenuOpen) {
         return;
       }
 
@@ -108,20 +126,25 @@ export function PlayerControls({
     };
 
     document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("focusin", handleFocusIn);
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", closeForViewportChange);
     window.addEventListener("orientationchange", closeForViewportChange);
+    window.addEventListener("blur", closeForViewportChange);
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("focusin", handleFocusIn);
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", closeForViewportChange);
       window.removeEventListener("orientationchange", closeForViewportChange);
+      window.removeEventListener("blur", closeForViewportChange);
     };
-  }, [onCloseSpeedMenu, speedMenuOpen]);
+  }, [onCloseSpeedMenu, secondaryMenuOpen, speedMenuOpen]);
 
   const runAction = (action: () => void) => {
     onCloseSpeedMenu();
+    setSecondaryMenuOpen(false);
     onReveal();
     action();
   };
@@ -129,7 +152,7 @@ export function PlayerControls({
   return (
     <div
       ref={controlsRef}
-      className={`player-controls ${speedMenuOpen ? "is-speed-menu-open" : ""}`}
+      className={`player-controls ${speedMenuOpen ? "is-speed-menu-open" : ""} ${secondaryMenuOpen ? "is-secondary-menu-open" : ""}`}
       role="toolbar"
       aria-label="Player controls"
       onPointerDown={(event) => {
@@ -182,6 +205,7 @@ export function PlayerControls({
         type="button"
         onClick={() => {
           onReveal();
+          setSecondaryMenuOpen(false);
           onToggleSpeedMenu();
         }}
         aria-label={`Playback speed: ${selectedSpeed.accessibleLabel}`}
@@ -194,6 +218,7 @@ export function PlayerControls({
       </button>
       <button
         className={`icon-button icon-button--music ${musicIsActive ? "is-selected" : ""}`}
+        data-player-secondary="true"
         data-player-control="music"
         type="button"
         onClick={() => runAction(onToggleMusic)}
@@ -205,6 +230,7 @@ export function PlayerControls({
       </button>
       <button
         className={`icon-button icon-button--share ${shareIsActive ? "is-selected" : ""}`}
+        data-player-secondary="true"
         data-player-control="share"
         type="button"
         onClick={() => runAction(onShare)}
@@ -220,6 +246,7 @@ export function PlayerControls({
       </button>
       <button
         className={`icon-button icon-button--screen ${screenModeActive ? "is-selected" : ""}`}
+        data-player-secondary="true"
         data-player-control="screen-mode"
         type="button"
         onClick={() => runAction(onToggleScreenMode)}
@@ -234,36 +261,67 @@ export function PlayerControls({
         )}
       </button>
 
+      <button
+        ref={secondaryTriggerRef}
+        className={`icon-button icon-button--more ${secondaryMenuOpen ? "is-selected" : ""}`}
+        data-player-control="more"
+        type="button"
+        onClick={() => {
+          onCloseSpeedMenu();
+          onReveal();
+          setSecondaryMenuOpen((open) => !open);
+        }}
+        aria-label={secondaryMenuOpen ? "Back to playback controls" : "More controls"}
+        aria-expanded={secondaryMenuOpen}
+        title={secondaryMenuOpen ? "Back to playback controls" : "More controls"}
+      >
+        {secondaryMenuOpen ? <ArrowLeft aria-hidden="true" size={18} strokeWidth={2.3} /> : <MoreHorizontal aria-hidden="true" size={19} strokeWidth={2.3} />}
+      </button>
+
       {speedMenuOpen ? (
         <div
           ref={speedMenuRef}
           id={speedMenuId}
           className="speed-menu"
-          role="radiogroup"
-          aria-label="Playback speed"
           onPointerDown={(event) => event.stopPropagation()}
           onPointerUp={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          {PLAYER_SPEED_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              className={option.value === delayMs ? "is-selected" : ""}
-              type="button"
-              role="radio"
-              aria-checked={option.value === delayMs}
-              tabIndex={option.value === delayMs ? 0 : -1}
-              aria-label={option.accessibleLabel}
-              title={option.accessibleLabel}
-              onClick={() => {
-                onSelectSpeed(option.value);
-                speedTriggerRef.current?.focus({ preventScroll: true });
-                onReveal();
-              }}
-            >
-              {option.shortLabel}
-            </button>
-          ))}
+          <div className="speed-menu__options" role="radiogroup" aria-label="Playback speed">
+            {PLAYER_SPEED_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                className={option.value === delayMs ? "is-selected" : ""}
+                type="button"
+                role="radio"
+                aria-checked={option.value === delayMs}
+                tabIndex={option.value === delayMs ? 0 : -1}
+                aria-label={option.accessibleLabel}
+                title={option.accessibleLabel}
+                onClick={() => {
+                  onSelectSpeed(option.value);
+                  speedTriggerRef.current?.focus({ preventScroll: true });
+                  onReveal();
+                }}
+              >
+                {option.shortLabel}
+              </button>
+            ))}
+          </div>
+          <button
+            className="speed-menu__done"
+            type="button"
+            onClick={() => {
+              onCloseSpeedMenu();
+              speedTriggerRef.current?.focus({ preventScroll: true });
+              onReveal();
+            }}
+            aria-label="Close speed menu"
+            title="Close speed menu"
+          >
+            <ArrowLeft aria-hidden="true" size={16} strokeWidth={2.3} />
+            <span>Done</span>
+          </button>
         </div>
       ) : null}
     </div>
