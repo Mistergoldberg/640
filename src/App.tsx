@@ -103,6 +103,12 @@ interface GridLayout {
   yearAnchors: YearAnchor[];
 }
 
+interface LiveLayoutAnchor {
+  year: string;
+  photoId: string | null;
+  albumId: string | null;
+}
+
 type CatalogLoadState =
   | { status: "loading"; message: string }
   | { status: "error"; message: string }
@@ -837,6 +843,7 @@ function YearWindowGrid({
   const yearHeadingRef = useRef<HTMLElement | null>(null);
   const viewport = useViewport();
   const previousLayoutRef = useRef<{ year: string; layout: GridLayout } | null>(null);
+  const pendingResizeAnchorRef = useRef<LiveLayoutAnchor | null>(null);
   const previousScrollYRef = useRef(0);
   const restorationRef = useRef(restoration);
   const diagnosticLayoutSignatureRef = useRef("");
@@ -891,23 +898,67 @@ function YearWindowGrid({
     restorationRef.current = restoration;
   }, [restoration]);
 
+  const capturePendingResizeAnchor = useCallback(() => {
+    if (!ref.current || restorationIsPending(restorationRef.current)) return;
+    const visibleTiles = [...ref.current.querySelectorAll<HTMLElement>(".photo-tile")]
+      .map((tile) => {
+        const rect = tile.getBoundingClientRect();
+        return {
+          tile,
+          distance: Math.abs(rect.top - RESTORE_OFFSET_PX),
+          visible: rect.bottom > 0 && rect.top < window.innerHeight
+        };
+      })
+      .filter((candidate) => candidate.visible)
+      .sort((left, right) => left.distance - right.distance);
+    const anchor = visibleTiles[0]?.tile;
+    if (!anchor) return;
+    pendingResizeAnchorRef.current = {
+      year: activeYear,
+      photoId: anchor.dataset.photoId || null,
+      albumId: anchor.closest<HTMLElement>("[data-album-id]")?.dataset.albumId || null
+    };
+  }, [activeYear, ref]);
+
+  useEffect(() => {
+    window.addEventListener("resize", capturePendingResizeAnchor);
+    return () => window.removeEventListener("resize", capturePendingResizeAnchor);
+  }, [capturePendingResizeAnchor]);
+
   useLayoutEffect(() => {
     const previous = previousLayoutRef.current;
     previousLayoutRef.current = { year: activeYear, layout };
     if (restorationPending || !width || !previous || previous.year !== activeYear || !ref.current || previous.layout.totalHeight === layout.totalHeight) return;
     const oldLocalTop = window.scrollY - (ref.current.getBoundingClientRect().top + window.scrollY) + RESTORE_OFFSET_PX;
-    const oldAlbum = findStableAlbumAtTop(previous.layout, oldLocalTop);
-    const oldPhoto = nearestPhotoAnchor([...previous.layout.photoTops].sort((left, right) => left[1] - right[1]), oldLocalTop)?.[0] || null;
-    const previousTop = oldPhoto ? previous.layout.photoTops.get(oldPhoto) : oldAlbum?.top;
-    const nextTop = oldPhoto ? layout.photoTops.get(oldPhoto) : oldAlbum
-      ? layout.albumAnchors.find((album) => album.id === oldAlbum.id)?.top
-      : undefined;
+    const pendingAnchor = pendingResizeAnchorRef.current?.year === activeYear ? pendingResizeAnchorRef.current : null;
+    const exactPhoto = pendingAnchor?.photoId && previous.layout.photoTops.has(pendingAnchor.photoId)
+      ? pendingAnchor.photoId
+      : null;
+    const fallbackPhoto = nearestPhotoAnchor([...previous.layout.photoTops].sort((left, right) => left[1] - right[1]), oldLocalTop)?.[0] || null;
+    const oldPhoto = exactPhoto || fallbackPhoto;
+    const exactAlbum = pendingAnchor?.albumId
+      ? previous.layout.albumAnchors.find((album) => album.id === pendingAnchor.albumId) || null
+      : null;
+    const oldAlbum = exactAlbum || findStableAlbumAtTop(previous.layout, oldLocalTop);
+    let previousTop: number | undefined;
+    let nextTop: number | undefined;
+    if (oldPhoto) {
+      previousTop = previous.layout.photoTops.get(oldPhoto);
+      nextTop = layout.photoTops.get(oldPhoto);
+    }
+    if (previousTop === undefined || nextTop === undefined) {
+      previousTop = oldAlbum?.top;
+      nextTop = oldAlbum
+        ? layout.albumAnchors.find((album) => album.id === oldAlbum.id)?.top
+        : undefined;
+    }
     const correction = stableYearLocalCorrection(previousTop, nextTop);
     if (Math.abs(correction) > 0.5) {
       const detail = { at: new Date().toISOString(), top: correction, anchorPhotoId: oldPhoto, anchorAlbumId: oldAlbum?.id || null, year: activeYear };
       updateDiagnostics({ lastLayoutCorrection: detail, lastProgrammaticScroll: { ...detail, kind: "scrollBy" } }, "layout-correction", detail);
       window.scrollBy({ top: correction, behavior: "auto" });
     }
+    pendingResizeAnchorRef.current = null;
   }, [activeYear, layout, restorationPending, width]);
 
   useLayoutEffect(() => {
