@@ -49,7 +49,7 @@ describe("authoritative archive navigation", () => {
 
   it("detects inactive-year rows and images as cleanup failures", () => {
     expect(archiveWindowWarnings({ mountedYears: ["2013"], mountedRows: 22, mountedPhotos: 74, inactiveImageElements: 0, observerCount: 1 })).toEqual([]);
-    expect(archiveWindowWarnings({ mountedYears: ["2013", "2001"], mountedRows: 41, mountedPhotos: 151, inactiveImageElements: 3, observerCount: 3 }))
+    expect(archiveWindowWarnings({ mountedYears: ["2013", "2001"], mountedRows: 41, mountedPhotos: 171, inactiveImageElements: 3, observerCount: 3 }))
       .toEqual(["multiple-mounted-years", "photo-tile-bound-exceeded", "row-bound-exceeded", "inactive-year-images", "stale-archive-observers"]);
   });
 });

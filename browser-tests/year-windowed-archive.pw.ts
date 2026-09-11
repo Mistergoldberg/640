@@ -18,7 +18,7 @@ async function dragArchive(page: Page, fractions: number[], hold = false) {
 
 async function mountedMetrics(page: Page) {
   return page.evaluate(() => {
-    const entries = [...document.querySelectorAll<HTMLElement>(".photo-row,.photo-mosaic")];
+    const entries = [...document.querySelectorAll<HTMLElement>(".photo-row")];
     const years = [...new Set(entries.map((entry) => entry.dataset.year).filter(Boolean))];
     const images = [...document.querySelectorAll<HTMLImageElement>(".photo-tile img")];
     let nodes = 0;
@@ -35,6 +35,27 @@ async function mountedMetrics(page: Page) {
       nodes
     };
   });
+}
+
+async function visibleTileGeometry(page: Page) {
+  return page.locator(".photo-tile").evaluateAll((tiles) => tiles
+    .filter((tile) => {
+      const rect = tile.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < innerHeight;
+    })
+    .map((tile) => {
+      const rect = tile.getBoundingClientRect();
+      const image = tile.querySelector("img");
+      const sourceWidth = Number(image?.getAttribute("width") || 0);
+      const sourceHeight = Number(image?.getAttribute("height") || 0);
+      return {
+        id: (tile as HTMLElement).dataset.photoId || "",
+        rowTone: tile.closest<HTMLElement>(".photo-row")?.dataset.rowTone || "",
+        objectFit: image ? getComputedStyle(image).objectFit : "",
+        tileRatio: rect.width / rect.height,
+        sourceRatio: sourceWidth / sourceHeight
+      };
+    }));
 }
 
 test("clean root visit mounts only 2013 and fetches no inactive album manifests", async ({ page }) => {
@@ -156,6 +177,29 @@ test("ordinary fast scrolling keeps visible image coverage on desktop and mobile
     const metrics = await mountedMetrics(page);
     expect(metrics.rows).toBeLessThan(40);
     expect(metrics.photos).toBeLessThan(150);
+    await context.close();
+  }
+});
+
+test("archive contact sheet preserves image aspect ratios across representative viewports", async ({ browser }) => {
+  for (const contextOptions of [
+    { viewport: { width: 1440, height: 900 }, expectedVisible: 12, expectsFeatureRows: true },
+    { viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true, expectedVisible: 10, expectsFeatureRows: true },
+    { viewport: { width: 844, height: 390 }, screen: { width: 844, height: 390 }, isMobile: true, hasTouch: true, expectedVisible: 6, expectsFeatureRows: false }
+  ]) {
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    await page.goto("/");
+    await waitForYear(page, "2013");
+    const samples = await visibleTileGeometry(page);
+    expect(samples.length).toBeGreaterThanOrEqual(contextOptions.expectedVisible);
+    expect(samples.every((sample) => sample.objectFit === "contain")).toBe(true);
+    for (const sample of samples) {
+      expect(Math.abs(sample.tileRatio - sample.sourceRatio)).toBeLessThan(0.04);
+    }
+    const tones = new Set(samples.map((sample) => sample.rowTone));
+    if (contextOptions.expectsFeatureRows) expect(tones.has("feature")).toBe(true);
+    expect(tones.has("compact") || tones.has("standard")).toBe(true);
     await context.close();
   }
 });

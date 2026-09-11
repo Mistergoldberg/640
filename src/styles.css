@@ -402,10 +402,7 @@ img {
 .photo-row {
   display: flex;
   width: 100%;
-}
-
-.photo-mosaic {
-  position: absolute;
+  align-items: flex-start;
 }
 
 .photo-tile {
@@ -419,9 +416,12 @@ img {
   cursor: pointer;
 }
 
-.photo-tile--mosaic {
-  position: absolute;
-  flex: none;
+.photo-row--feature {
+  isolation: isolate;
+}
+
+.photo-row--compact {
+  opacity: 0.94;
 }
 
 .photo-tile::after {
@@ -442,7 +442,8 @@ img {
 .photo-tile img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   background: #111;
 }
 
@@ -1011,6 +1012,25 @@ img {
 }
 
 @media (orientation: landscape) and (max-height: 460px) {
+  .collection-shell {
+    padding-top: max(4px, env(safe-area-inset-top));
+  }
+
+  .collection-chrome {
+    gap: 4px;
+    padding-bottom: 6px;
+  }
+
+  .archive-year-heading--inline {
+    min-height: 44px;
+    margin-top: 2px;
+    padding-top: 8px;
+  }
+
+  .archive-year-heading h1 {
+    font-size: 1.45rem;
+  }
+
   .archive-timeline {
     top: calc(max(54px, env(safe-area-inset-top) + 44px));
     bottom: calc(max(20px, env(safe-area-inset-bottom) + 14px));

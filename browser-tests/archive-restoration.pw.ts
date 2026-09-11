@@ -131,10 +131,18 @@ test("reload flushes the live stable anchor before the persistence debounce expi
   await page.goto("/?year=2001");
   await waitForRestoration(page);
   await page.evaluate(() => window.scrollBy(0, 9000));
+  await afterLayoutFrames(page);
+  const before = await page.evaluate(() => {
+    const nearest = [...document.querySelectorAll<HTMLElement>(".photo-tile")]
+      .map((tile) => ({ id: tile.dataset.photoId || "", distance: Math.abs(tile.getBoundingClientRect().top - 112) }))
+      .sort((left, right) => left.distance - right.distance)[0];
+    return { y: scrollY, photoId: nearest?.id || null };
+  });
+  expect(before.photoId).not.toBeNull();
   await page.reload();
   await waitForRestoration(page);
-  expect(await page.evaluate(() => history.state?.restoration?.photoId)).toBe(REPORTED_WRONG_PHOTO);
-  expect(Math.abs((await page.evaluate(() => scrollY)) - 9055)).toBeLessThan(500);
+  expect(await page.evaluate(() => history.state?.restoration?.photoId)).toBe(before.photoId);
+  expect(Math.abs((await page.evaluate(() => scrollY)) - before.y)).toBeLessThan(500);
 });
 
 test("the exact reported photo remains authoritative through conflicting state and repeated reloads", async ({ page }) => {

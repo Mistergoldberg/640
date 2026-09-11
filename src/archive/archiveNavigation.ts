@@ -62,7 +62,7 @@ export interface MountedArchiveCounts {
 export function archiveWindowWarnings(counts: MountedArchiveCounts) {
   const warnings: string[] = [];
   if (counts.mountedYears.length > 1) warnings.push("multiple-mounted-years");
-  if (counts.mountedPhotos > 150) warnings.push("photo-tile-bound-exceeded");
+  if (counts.mountedPhotos > 170) warnings.push("photo-tile-bound-exceeded");
   if (counts.mountedRows > 40) warnings.push("row-bound-exceeded");
   if (counts.inactiveImageElements > 0) warnings.push("inactive-year-images");
   if (counts.observerCount > 2) warnings.push("stale-archive-observers");

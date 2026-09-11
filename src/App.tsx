@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { assetUrl, mediaUrl } from "./lib/assets";
-import { buildJustifiedRows, type JustifiedItem } from "./lib/justifiedRows";
+import { buildEditorialRows, type JustifiedItem, type JustifiedRowTone } from "./lib/justifiedRows";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { validateCatalog } from "./data/manifestValidation";
 import { type LoadedAlbumSummary, type YearCollection } from "./data/useYearCollection";
@@ -38,19 +38,14 @@ import type { Catalog, Photo } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
-const GRID_MIN_OVERSCAN_PX = 320;
-const GRID_SCROLL_AHEAD_PX = 900;
+const GRID_MIN_OVERSCAN_PX = 260;
+const GRID_SCROLL_AHEAD_PX = 720;
 const ALBUM_GAP_PX = 18;
 const ALBUM_HEADING_HEIGHT_PX = 24;
 const ALBUM_HEADING_GAP_PX = 9;
 const ALBUM_ERROR_HEIGHT_PX = 52;
-const PREVIEW_MIN_REMAINING_PHOTOS = 8;
-const STREAM_MOSAIC_MIN_WINDOW_PHOTOS = 24;
-const STREAM_MOSAIC_MAX_WINDOW_PHOTOS = 44;
 const RESTORE_OFFSET_PX = 112;
 const ARCHIVE_JUMP_OFFSET_PX = 196;
-
-type PreviewShape = "square" | "landscape" | "portrait";
 
 interface LayoutHeading {
   type: "heading";
@@ -67,28 +62,10 @@ interface LayoutRow {
   top: number;
   height: number;
   gap: number;
+  tone: JustifiedRowTone;
   year: string;
   albumId: string;
   items: JustifiedItem[];
-}
-
-interface MosaicItem {
-  photo: Photo;
-  shape: PreviewShape;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-interface LayoutMosaic {
-  type: "mosaic";
-  id: string;
-  top: number;
-  height: number;
-  year: string;
-  albumId: string;
-  items: MosaicItem[];
 }
 
 interface LayoutAlbumError {
@@ -100,15 +77,7 @@ interface LayoutAlbumError {
   album: LoadedAlbumSummary;
 }
 
-interface MosaicSlot {
-  col: number;
-  row: number;
-  colSpan: number;
-  rowSpan: number;
-  shape: PreviewShape;
-}
-
-type LayoutEntry = LayoutHeading | LayoutRow | LayoutMosaic | LayoutAlbumError;
+type LayoutEntry = LayoutHeading | LayoutRow | LayoutAlbumError;
 
 interface AlbumAnchor {
   id: string;
@@ -363,248 +332,7 @@ function useViewport() {
   return useSyncExternalStore(subscribeViewport, readViewportSnapshot, () => serverViewport);
 }
 
-function normalizeMosaicSlots(slots: MosaicSlot[]) {
-  return [...slots].sort((left, right) => left.row - right.row || left.col - right.col);
-}
-
-function hashString(value: string) {
-  let hash = 2166136261;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return hash >>> 0;
-}
-
-function seededRandom(seed: string) {
-  let state = hashString(seed) || 1;
-
-  return () => {
-    state = (Math.imul(1664525, state) + 1013904223) >>> 0;
-    return state / 4294967296;
-  };
-}
-
-function randomInt(random: () => number, min: number, max: number) {
-  return Math.floor(random() * (max - min + 1)) + min;
-}
-
-function previewColumnCount(width: number) {
-  if (width >= 1180) {
-    return 6;
-  }
-
-  if (width >= 900) {
-    return 5;
-  }
-
-  if (width >= 560) {
-    return 4;
-  }
-
-  return 3;
-}
-
-function previewMosaicTemplates(width: number): MosaicSlot[][] {
-  let templates: MosaicSlot[][];
-
-  if (width >= 1180) {
-    templates = [
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 2, shape: "square" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 3, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 5, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 5, row: 1, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 5, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 1, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 2, row: 1, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 5, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 4, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 5, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 5, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 1, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 5, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 2, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 5, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 3, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 4, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 5, row: 3, colSpan: 1, rowSpan: 1, shape: "square" }
-      ]
-    ];
-  } else if (width >= 900) {
-    templates = [
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 2, shape: "square" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 3, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 4, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 1, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 4, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 4, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 1, row: 0, colSpan: 2, rowSpan: 2, shape: "square" },
-        { col: 3, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 4, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ]
-    ];
-  } else if (width >= 560) {
-    templates = [
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 2, shape: "square" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 3, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 1, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 3, row: 0, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 3, row: 2, colSpan: 1, rowSpan: 1, shape: "square" }
-      ]
-    ];
-  } else {
-    templates = [
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 2, shape: "square" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 3, colSpan: 2, rowSpan: 1, shape: "landscape" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 0, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 0, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 3, colSpan: 1, rowSpan: 1, shape: "square" }
-      ],
-      [
-        { col: 0, row: 0, colSpan: 1, rowSpan: 2, shape: "portrait" },
-        { col: 1, row: 0, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 1, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 1, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 2, colSpan: 2, rowSpan: 1, shape: "landscape" },
-        { col: 2, row: 2, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 0, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 1, row: 3, colSpan: 1, rowSpan: 1, shape: "square" },
-        { col: 2, row: 3, colSpan: 1, rowSpan: 1, shape: "square" }
-      ]
-    ];
-  }
-
-  return templates.map(normalizeMosaicSlots);
-}
-
-function streamMosaicWindowSize(slotCount: number, random: () => number) {
-  const minWindow = Math.max(STREAM_MOSAIC_MIN_WINDOW_PHOTOS, slotCount + PREVIEW_MIN_REMAINING_PHOTOS);
-  const maxWindow = Math.max(minWindow, STREAM_MOSAIC_MAX_WINDOW_PHOTOS);
-
-  return randomInt(random, minWindow, maxWindow);
-}
-
-function buildPreviewMosaic(photos: Photo[], width: number, gap: number, seed: string) {
-  const columns = previewColumnCount(width);
-  const templates = previewMosaicTemplates(width).filter((template) => photos.length >= template.length + PREVIEW_MIN_REMAINING_PHOTOS);
-  if (!templates.length) {
-    return null;
-  }
-
-  const random = seededRandom(seed);
-  const slots = templates[randomInt(random, 0, templates.length - 1)];
-  const mosaicPhotos = photos.slice(0, slots.length);
-
-  const cellSize = (width - gap * (columns - 1)) / columns;
-  const rowCount = Math.max(...slots.map((slot) => slot.row + slot.rowSpan));
-
-  return {
-    height: Math.round(rowCount * cellSize + gap * Math.max(0, rowCount - 1)),
-    items: slots.map((slot, index) => ({
-      photo: mosaicPhotos[index],
-      shape: slot.shape,
-      left: Math.round(slot.col * (cellSize + gap)),
-      top: Math.round(slot.row * (cellSize + gap)),
-      width: Math.round(slot.colSpan * cellSize + gap * Math.max(0, slot.colSpan - 1)),
-      height: Math.round(slot.rowSpan * cellSize + gap * Math.max(0, slot.rowSpan - 1))
-    })),
-    usedCount: mosaicPhotos.length
-  };
-}
-
-function buildGridLayout(collection: YearCollection, width: number, targetRowHeight: number, gap: number): GridLayout {
+function buildGridLayout(collection: YearCollection, width: number, targetRowHeight: number, gap: number, compactViewport = false): GridLayout {
   if (!width) {
     return {
       entries: [],
@@ -695,64 +423,27 @@ function buildGridLayout(collection: YearCollection, width: number, targetRowHei
       return;
     }
 
-    const templates = previewMosaicTemplates(width);
-    const smallestMosaicSlotCount = Math.min(...templates.map((template) => template.length));
-    let photoIndex = 0;
-    let chunkIndex = 0;
     let albumHasPhotoEntries = false;
 
-    while (photoIndex < photos.length) {
-      const remainingPhotoCount = photos.length - photoIndex;
-      const canBuildMosaic = remainingPhotoCount >= smallestMosaicSlotCount + PREVIEW_MIN_REMAINING_PHOTOS;
-      const seedBase = `${album.id}:${albumYear}:${previewColumnCount(width)}:${chunkIndex}`;
-      const chunkSize = canBuildMosaic
-        ? Math.min(remainingPhotoCount, streamMosaicWindowSize(smallestMosaicSlotCount, seededRandom(`${seedBase}:window`)))
-        : remainingPhotoCount;
-      const chunkPhotos = photos.slice(photoIndex, photoIndex + chunkSize);
-      const previewMosaic = canBuildMosaic ? buildPreviewMosaic(chunkPhotos, width, gap, `${seedBase}:mosaic`) : null;
-
-      if (previewMosaic) {
-        entries.push({
-          type: "mosaic",
-          id: `mosaic-${album.id}-${chunkIndex}`,
-          top,
-          height: previewMosaic.height,
-          year: albumYear,
-          albumId: album.id,
-          items: previewMosaic.items
-        });
-
-        previewMosaic.items.forEach((item) => {
-          photoTops.set(item.photo.id, top + item.top);
-        });
-        top += previewMosaic.height + gap;
-        albumHasPhotoEntries = true;
-      }
-
-      const rowPhotos = previewMosaic ? chunkPhotos.slice(previewMosaic.usedCount) : chunkPhotos;
-      const rows = buildJustifiedRows(rowPhotos, width, targetRowHeight, gap);
-      rows.forEach((row) => {
-        entries.push({
-          type: "row",
-          id: `${album.id}-${chunkIndex}-${row.id}`,
-          top,
-          height: row.height,
-          gap,
-          year: albumYear,
-          albumId: album.id,
-          items: row.items
-        });
-
-        row.items.forEach((item) => {
-          photoTops.set(item.photo.id, top);
-        });
-        top += row.height + gap;
-        albumHasPhotoEntries = true;
+    buildEditorialRows(photos, width, targetRowHeight, gap, compactViewport).forEach((row, rowIndex) => {
+      entries.push({
+        type: "row",
+        id: `${album.id}-${rowIndex}-${row.id}`,
+        top,
+        height: row.height,
+        gap,
+        tone: row.tone || "standard",
+        year: albumYear,
+        albumId: album.id,
+        items: row.items
       });
 
-      photoIndex += chunkSize;
-      chunkIndex += 1;
-    }
+      row.items.forEach((item) => {
+        photoTops.set(item.photo.id, top);
+      });
+      top += row.height + gap;
+      albumHasPhotoEntries = true;
+    });
 
     if (albumHasPhotoEntries) {
       top -= gap;
@@ -1154,12 +845,13 @@ function YearWindowGrid({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const state = states.get(activeYear);
   const collection = state?.status === "ready" ? state.collection : null;
-  const targetHeight = width < 520 ? 118 : width < 900 ? 146 : 174;
+  const compactViewport = viewport.height <= 460 && width >= 620;
+  const targetHeight = compactViewport ? 184 : width < 520 ? 138 : width < 900 ? 146 : 174;
   const gap = width < 520 ? 3 : 4;
   const layout = useMemo(() => collection
-    ? buildGridLayout(collection, width, targetHeight, gap)
+    ? buildGridLayout(collection, width, targetHeight, gap, compactViewport)
     : { entries: [], totalHeight: 0, photoTops: new Map<string, number>(), albumAnchors: [], yearAnchors: [] },
-  [collection, gap, targetHeight, width]);
+  [collection, compactViewport, gap, targetHeight, width]);
   const photoAnchors = useMemo(() => [...layout.photoTops].sort((left, right) => left[1] - right[1]), [layout.photoTops]);
   const indexById = useMemo(() => new Map(collection?.photos.map((photo, index) => [photo.id, index]) || []), [collection]);
   const containerTop = ref.current ? ref.current.getBoundingClientRect().top + viewport.scrollY : 0;
@@ -1330,7 +1022,7 @@ function YearWindowGrid({
       totalEntries: layout.entries.length,
       totalHeight: Math.round(layout.totalHeight)
     };
-    const entries = [...(ref.current?.querySelectorAll<HTMLElement>("[data-entry-type='row'],[data-entry-type='mosaic']") || [])];
+    const entries = [...(ref.current?.querySelectorAll<HTMLElement>("[data-entry-type='row']") || [])];
     const mountedYears = [...new Set(entries.map((entry) => entry.dataset.year).filter((year): year is string => Boolean(year)))];
     const rows = entries.length;
     const photos = ref.current?.querySelectorAll(".photo-tile").length || 0;
@@ -1478,19 +1170,8 @@ function YearWindowGrid({
               </div>
             );
           }
-          if (entry.type === "mosaic") {
-            return (
-              <div className="photo-mosaic virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height }}>
-                {entry.items.map((item) => (
-                  <button className={`photo-tile photo-tile--mosaic photo-tile--preview-${item.shape} photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open featured photo ${(indexById.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
-                    <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
-                  </button>
-                ))}
-              </div>
-            );
-          }
           return (
-            <div className="photo-row virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
+            <div className={`photo-row photo-row--${entry.tone} virtual-entry`} data-entry-type={entry.type} data-row-tone={entry.tone} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
                 <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open photo ${(indexById.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
                   <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
