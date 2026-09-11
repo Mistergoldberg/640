@@ -900,6 +900,7 @@ function YearWindowGrid({
 
   const capturePendingResizeAnchor = useCallback(() => {
     if (!ref.current || restorationIsPending(restorationRef.current)) return;
+    if (pendingResizeAnchorRef.current?.year === activeYear) return;
     const visibleTiles = [...ref.current.querySelectorAll<HTMLElement>(".photo-tile")]
       .map((tile) => {
         const rect = tile.getBoundingClientRect();
