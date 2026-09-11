@@ -227,13 +227,13 @@ test("portrait and landscape rotation preserve player state and history", async 
   const page = await context.newPage();
   const health = monitorPage(page);
   await openDirectPhoto(page, PORTRAIT_PHOTO, "portrait");
+  const openingStarted = Date.now();
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-layout", "standard");
   await expect.poll(() => page.locator(".player-counter").textContent()).toContain("starts");
   const openingPhoto = await playerIndex(page);
   const historyLength = await page.evaluate(() => history.length);
   await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).toBe(PORTRAIT_PHOTO);
   const restorationState = await page.evaluate(() => history.state?.restoration || null);
-  const openingStarted = Date.now();
   await page.waitForTimeout(700);
   await page.setViewportSize({ width: 844, height: 390 });
   await expectLandscapeContainment(page, { width: 844, height: 390 });
