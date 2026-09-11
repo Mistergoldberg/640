@@ -932,6 +932,17 @@ function YearWindowGrid({
     if (restorationPending || !width || !previous || previous.year !== activeYear || !ref.current || previous.layout.totalHeight === layout.totalHeight) return;
     const oldLocalTop = window.scrollY - (ref.current.getBoundingClientRect().top + window.scrollY) + RESTORE_OFFSET_PX;
     const pendingAnchor = pendingResizeAnchorRef.current?.year === activeYear ? pendingResizeAnchorRef.current : null;
+    if (pendingAnchor?.photoId) {
+      const nextPhotoTop = layout.photoTops.get(pendingAnchor.photoId);
+      if (nextPhotoTop !== undefined) {
+        const nextTop = ref.current.getBoundingClientRect().top + window.scrollY + nextPhotoTop - RESTORE_OFFSET_PX;
+        const detail = { at: new Date().toISOString(), top: Math.max(0, nextTop), anchorPhotoId: pendingAnchor.photoId, anchorAlbumId: pendingAnchor.albumId, year: activeYear };
+        updateDiagnostics({ lastLayoutCorrection: detail, lastProgrammaticScroll: { ...detail, kind: "resize-anchor-restoration" } }, "layout-correction", detail);
+        window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+        pendingResizeAnchorRef.current = null;
+        return;
+      }
+    }
     const exactPhoto = pendingAnchor?.photoId && previous.layout.photoTops.has(pendingAnchor.photoId)
       ? pendingAnchor.photoId
       : null;
