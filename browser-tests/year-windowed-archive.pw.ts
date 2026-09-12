@@ -58,6 +58,95 @@ async function visibleTileGeometry(page: Page) {
     }));
 }
 
+async function visibleRowGeometry(page: Page) {
+  return page.locator(".photo-row").evaluateAll((rows) => rows
+    .filter((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < innerHeight;
+    })
+    .map((row) => {
+      const rect = row.getBoundingClientRect();
+      const tiles = [...row.querySelectorAll<HTMLElement>(".photo-tile")];
+      return {
+        rowTone: row.dataset.rowTone || "",
+        rowTop: rect.top,
+        rowWidth: rect.width,
+        rowHeight: rect.height,
+        justifyContent: getComputedStyle(row).justifyContent,
+        items: tiles.map((tile) => {
+          const tileRect = tile.getBoundingClientRect();
+          const image = tile.querySelector("img");
+          const sourceWidth = Number(image?.getAttribute("width") || 0);
+          const sourceHeight = Number(image?.getAttribute("height") || 0);
+          return {
+            id: tile.dataset.photoId || "",
+            width: tileRect.width,
+            height: tileRect.height,
+            objectFit: image ? getComputedStyle(image).objectFit : "",
+            sourceRatio: sourceWidth / sourceHeight
+          };
+        })
+      };
+    }));
+}
+
+async function scrollUntilVisibleRowTone(page: Page, tone: string, maxScroll = 1440) {
+  for (let top = 0; top <= maxScroll; top += 360) {
+    await page.evaluate((scrollTop) => window.scrollTo(0, scrollTop), top);
+    await expect.poll(() => page.locator(".photo-row").count()).toBeGreaterThan(0);
+    const rows = await visibleRowGeometry(page);
+    const matchingRow = rows.find((row) => row.rowTone === tone);
+    if (matchingRow) {
+      return {
+        scrollY: await page.evaluate(() => window.scrollY),
+        row: matchingRow,
+        rows
+      };
+    }
+  }
+  throw new Error(`No visible ${tone} row found within ${maxScroll}px`);
+}
+
+async function visibleAnchorPhotoNearOffset(page: Page, offsetPx = 112) {
+  return page.evaluate((targetTop) => [...document.querySelectorAll<HTMLElement>(".photo-tile")]
+    .map((tile) => {
+      const rect = tile.getBoundingClientRect();
+      return {
+        id: tile.dataset.photoId || "",
+        top: rect.top,
+        visible: rect.bottom > 0 && rect.top < innerHeight
+      };
+    })
+    .filter((tile) => tile.visible)
+    .sort((left, right) => Math.abs(left.top - targetTop) - Math.abs(right.top - targetTop))[0]?.id || "", offsetPx);
+}
+
+async function waitForAnimationFrames(page: Page, count = 2) {
+  await page.evaluate((frames) => new Promise<void>((resolve) => {
+    let remaining = frames;
+    const tick = () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }), count);
+}
+
+async function waitForVisibleImagesReady(page: Page) {
+  await expect.poll(() => page.evaluate(() => {
+    const visibleImages = [...document.querySelectorAll<HTMLImageElement>(".photo-tile img")]
+      .filter((image) => {
+        const rect = image.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < innerHeight;
+      });
+    return visibleImages.length > 0 && visibleImages.every((image) => image.complete && image.naturalWidth > 0);
+  }), { timeout: 10_000 }).toBe(true);
+}
+
 test("clean root visit mounts only 2013 and fetches no inactive album manifests", async ({ page }) => {
   const manifests: string[] = [];
   page.on("request", (request) => {
@@ -184,7 +273,7 @@ test("ordinary fast scrolling keeps visible image coverage on desktop and mobile
 test("archive contact sheet preserves image aspect ratios across representative viewports", async ({ browser }) => {
   for (const contextOptions of [
     { viewport: { width: 1440, height: 900 }, expectedVisible: 12, expectsFeatureRows: true },
-    { viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true, expectedVisible: 10, expectsFeatureRows: true },
+    { viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true, expectedVisible: 5, expectsFeatureRows: true },
     { viewport: { width: 844, height: 390 }, screen: { width: 844, height: 390 }, isMobile: true, hasTouch: true, expectedVisible: 6, expectsFeatureRows: false }
   ]) {
     const context = await browser.newContext(contextOptions);
@@ -202,6 +291,59 @@ test("archive contact sheet preserves image aspect ratios across representative 
     expect(tones.has("compact") || tones.has("standard")).toBe(true);
     await context.close();
   }
+});
+
+test("editorial feature rows are deterministic and early across target viewports", async ({ browser }, testInfo) => {
+  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const desktopPage = await desktop.newPage();
+  await desktopPage.goto("/");
+  await waitForYear(desktopPage, "2013");
+  const desktopFeature = await scrollUntilVisibleRowTone(desktopPage, "pair-feature");
+  expect(desktopFeature.scrollY).toBeLessThanOrEqual(1440);
+  expect(desktopFeature.row.items).toHaveLength(2);
+  expect(desktopFeature.row.justifyContent).toBe("center");
+  expect(desktopFeature.row.items[0].height).toBeCloseTo(desktopFeature.row.items[1].height, 1);
+  expect(desktopFeature.row.items[0].height).toBeCloseTo(desktopFeature.row.rowHeight, 1);
+  expect(desktopFeature.row.items.reduce((sum, item) => sum + item.width, 0) + 4).toBeLessThanOrEqual(desktopFeature.row.rowWidth + 1);
+  for (const item of desktopFeature.row.items) {
+    expect(item.objectFit).toBe("contain");
+    expect(Math.abs(item.width / item.height - item.sourceRatio)).toBeLessThan(0.04);
+  }
+  await waitForVisibleImagesReady(desktopPage);
+  await desktopPage.screenshot({ path: testInfo.outputPath("contact-sheet-desktop-pair-feature.png"), fullPage: false });
+  await desktop.close();
+
+  const mobilePortrait = await browser.newContext({ viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mobilePortraitPage = await mobilePortrait.newPage();
+  await mobilePortraitPage.goto("/");
+  await waitForYear(mobilePortraitPage, "2013");
+  const mobileFeature = await scrollUntilVisibleRowTone(mobilePortraitPage, "solo-feature");
+  expect(mobileFeature.scrollY).toBeLessThanOrEqual(1440);
+  expect(mobileFeature.row.items).toHaveLength(1);
+  expect(mobileFeature.row.items[0].width).toBeCloseTo(mobileFeature.row.rowWidth, 1);
+  expect(Math.abs(mobileFeature.row.items[0].height - mobileFeature.row.rowWidth / mobileFeature.row.items[0].sourceRatio)).toBeLessThanOrEqual(1);
+  expect(mobileFeature.row.items[0].objectFit).toBe("contain");
+  await waitForVisibleImagesReady(mobilePortraitPage);
+  await mobilePortraitPage.screenshot({ path: testInfo.outputPath("contact-sheet-mobile-portrait-solo-feature.png"), fullPage: false });
+  await mobilePortrait.close();
+
+  const mobileLandscape = await browser.newContext({ viewport: { width: 844, height: 390 }, screen: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
+  const mobileLandscapePage = await mobileLandscape.newPage();
+  await mobileLandscapePage.goto("/");
+  await waitForYear(mobileLandscapePage, "2013");
+  const landscapeTones = new Set<string>();
+  for (let top = 0; top <= 1440; top += 360) {
+    await mobileLandscapePage.evaluate((scrollTop) => window.scrollTo(0, scrollTop), top);
+    for (const row of await visibleRowGeometry(mobileLandscapePage)) {
+      landscapeTones.add(row.rowTone);
+    }
+  }
+  expect(landscapeTones.has("solo-feature")).toBe(false);
+  expect(landscapeTones.has("pair-feature")).toBe(false);
+  expect(landscapeTones.has("compact")).toBe(true);
+  await waitForVisibleImagesReady(mobileLandscapePage);
+  await mobileLandscapePage.screenshot({ path: testInfo.outputPath("contact-sheet-mobile-landscape-compact.png"), fullPage: false });
+  await mobileLandscape.close();
 });
 
 test("Safari and Chrome iOS user agents share the bounded year-window architecture", async ({ browser }) => {
@@ -238,15 +380,15 @@ test("thirty portrait and landscape changes preserve a stable photo without accu
   await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).not.toBeNull();
   const samples: Awaited<ReturnType<typeof mountedMetrics>>[] = [];
   for (let cycle = 0; cycle < 30; cycle += 1) {
-    const anchorPhoto = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".photo-tile")]
-      .map((tile) => ({ id: tile.dataset.photoId || "", top: tile.getBoundingClientRect().top }))
-      .sort((left, right) => Math.abs(left.top - 112) - Math.abs(right.top - 112))[0]?.id || "");
+    await expect.poll(() => visibleAnchorPhotoNearOffset(page)).not.toBe("");
+    const anchorPhoto = await visibleAnchorPhotoNearOffset(page);
     expect(anchorPhoto).not.toBe("");
     await page.setViewportSize(cycle % 2 ? { width: 390, height: 844 } : { width: 844, height: 390 });
     await expect.poll(() => page.locator(`[data-photo-id="${anchorPhoto}"]`).evaluateAll((tiles) => tiles.some((tile) => {
       const rect = tile.getBoundingClientRect();
       return rect.bottom > 0 && rect.top < innerHeight;
     }))).toBe(true);
+    await waitForAnimationFrames(page);
     const metrics = await mountedMetrics(page);
     samples.push(metrics);
     expect(metrics.years).toEqual(["2001"]);

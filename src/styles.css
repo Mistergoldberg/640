@@ -420,6 +420,11 @@ img {
   isolation: isolate;
 }
 
+.photo-row--pair-feature,
+.photo-row--solo-feature {
+  justify-content: center;
+}
+
 .photo-row--compact {
   opacity: 0.94;
 }
