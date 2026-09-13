@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { assetUrl, mediaUrl } from "./lib/assets";
 import { buildEditorialRows, type JustifiedItem, type JustifiedRowTone } from "./lib/justifiedRows";
+import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { validateCatalog } from "./data/manifestValidation";
 import { type LoadedAlbumSummary, type YearCollection } from "./data/useYearCollection";
@@ -122,43 +123,12 @@ function yearExists(catalog: Catalog, year: string | null) {
   return Boolean(year && catalog.years.some((candidate) => candidate.year === year));
 }
 
-function displayAlbumName(name: string) {
-  if (name === "2013-10-09/edit") {
-    return "2013-10-09 · Edit";
-  }
-
-  if (name === "2013-10-09/pixel") {
-    return "2013-10-09 · Pixel";
-  }
-
-  if (name === "2002-Thialand") {
-    return "2002-Thailand";
-  }
-
-  return name;
-}
-
 function yearFromAlbumName(name: string, fallbackYear = "") {
   return name.match(/^(\d{4})/)?.[1] || fallbackYear;
 }
 
 function albumFolderLabel(album: LoadedAlbumSummary) {
-  return folderLabelFromName(album.name, album.year);
-}
-
-function folderLabelFromName(name: string, year: string) {
-  const displayName = displayAlbumName(name);
-  const yearPrefix = `${year}-`;
-
-  if (displayName.startsWith(yearPrefix)) {
-    return displayName.slice(yearPrefix.length);
-  }
-
-  if (displayName.startsWith(`${year}/`)) {
-    return displayName.slice(year.length + 1);
-  }
-
-  return displayName;
+  return formatPublicArchiveAlbumLabel(album.name, album.year);
 }
 
 function readUrlPhotoId() {
@@ -872,11 +842,6 @@ function YearWindowGrid({
   const visibleEntries = layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
   const currentAlbum = findAlbumAtTop(layout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
   const albumHeadingScreenTop = currentAlbum ? containerTop + currentAlbum.top - viewport.scrollY : -1;
-  const chromeBottom = chromeRef.current?.getBoundingClientRect().bottom || 82;
-  const yearHeadingRect = yearHeadingRef.current?.getBoundingClientRect();
-  const yearHeadingIsVisible = yearHeadingRect
-    ? yearHeadingRect.bottom > chromeBottom && yearHeadingRect.top < viewport.height
-    : localViewportTop < 36;
   const albumHeadingIsVisible = albumHeadingScreenTop >= 88 && albumHeadingScreenTop <= 240;
   const failedCount = collection?.failedAlbumIds.length || 0;
   const statusMessage = state?.status === "index-loading" ? `Loading ${activeYear} index`
@@ -1128,19 +1093,6 @@ function YearWindowGrid({
     if (target) onNavigate(target, "boundary");
   };
 
-  const commitYearJump = (year: string) => {
-    const yearRange = timelineModel.years.find((candidate) => candidate.year === year);
-    if (!yearRange) return;
-    const album = yearRange.albums[0] || null;
-    onNavigate({
-      year,
-      albumId: album?.id || null,
-      albumName: album?.name || null,
-      ratio: yearRange.start,
-      sectionRatio: 0
-    }, "jump");
-  };
-
   return (
     <main
       className="collection-shell"
@@ -1154,24 +1106,10 @@ function YearWindowGrid({
           <div className="app-bar__identity">
             <span className="app-bar__brand">640×480</span>
           </div>
-          <nav className="year-selector" aria-label="Archive years">
-            {timelineModel.years.map((year) => (
-              <button
-                key={year.year}
-                className={`${year.year === activeYear ? "is-selected" : ""} ${yearHeadingIsVisible && year.year === activeYear ? "is-inline-current" : ""}`}
-                type="button"
-                aria-current={year.year === activeYear ? "true" : undefined}
-                aria-label={`Jump to ${year.year}`}
-                onClick={() => commitYearJump(year.year)}
-              >
-                {year.year}
-              </button>
-            ))}
-          </nav>
         </div>
         {statusMessage ? (
           <div className={`collection-status collection-status--${state?.status === "error" || failedCount ? "error" : "loading"}`} role={state?.status === "error" || failedCount ? "alert" : "status"}>
-            <span>{statusMessage}{targetAlbum ? ` · ${folderLabelFromName(targetAlbum.name, activeYear)}` : ""}</span>
+            <span>{statusMessage}{targetAlbum ? ` · ${formatPublicArchiveAlbumLabel(targetAlbum.name, activeYear)}` : ""}</span>
             {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry</button> : null}
           </div>
         ) : (
@@ -1191,13 +1129,12 @@ function YearWindowGrid({
 
       <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`} ref={yearHeadingRef}>
         <h1 id={`year-${activeYear}-title`}>{activeYear}</h1>
-        <span>{(state?.index?.sequence.length || state?.index?.scannedCount || 0).toLocaleString()} photographs</span>
       </section>
 
       {!collection ? (
         <section className={`year-window-loading year-window-loading--${state?.status || "index-loading"}`} aria-live="polite">
           <strong>{activeYear}</strong>
-          <span>{targetAlbum ? folderLabelFromName(targetAlbum.name, activeYear) : "Preparing this year"}</span>
+          <span>{targetAlbum ? formatPublicArchiveAlbumLabel(targetAlbum.name, activeYear) : "Preparing this year"}</span>
           {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry year</button> : null}
         </section>
       ) : null}
@@ -1220,7 +1157,7 @@ function YearWindowGrid({
           if (entry.type === "heading") {
             return (
               <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }}>
-                <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2><span>{entry.album.count}</span>
+                <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2>
               </div>
             );
           }
@@ -1236,7 +1173,7 @@ function YearWindowGrid({
           return (
             <div className={`photo-row photo-row--${entry.tone} virtual-entry`} data-entry-type={entry.type} data-row-tone={entry.tone} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
               {entry.items.map((item) => (
-                <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open photo ${(indexById.get(item.photo.id) || 0) + 1} of ${collection?.photos.length || 0}`}>
+                <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open photo ${(indexById.get(item.photo.id) || 0) + 1}`}>
                   <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
                 </button>
               ))}
@@ -1258,7 +1195,7 @@ function YearWindowGrid({
         activeYear={activeYear}
         activeAlbumId={currentAlbum?.id || null}
         activeRatio={activeRatio}
-        formatAlbumName={folderLabelFromName}
+        formatAlbumName={formatPublicArchiveAlbumLabel}
         onCommit={(target, intent) => onNavigate(target, intent)}
         onScrubStateChange={(next) => {
           setIsScrubbing(next);

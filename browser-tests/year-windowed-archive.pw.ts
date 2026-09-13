@@ -16,6 +16,27 @@ async function dragArchive(page: Page, fractions: number[], hold = false) {
   if (!hold) await page.mouse.up();
 }
 
+async function pressScrubberKey(page: Page, key: "Home" | "End" | "PageDown" | "PageUp") {
+  const rail = page.getByRole("slider", { name: "Complete archive timeline" });
+  await rail.focus();
+  await rail.press(key);
+}
+
+async function scrubberKeyForYear(page: Page, year: string) {
+  const activeYear = await page.locator(".collection-shell").getAttribute("data-active-year");
+  if (year === activeYear) return null;
+  if (year === "2013") return "Home";
+  if (year === "2001") return "End";
+  if (year === "2002") return activeYear === "2001" ? "PageUp" : "PageDown";
+  throw new Error(`No scrubber shortcut configured for ${year}`);
+}
+
+async function jumpArchiveToYear(page: Page, year: string) {
+  const key = await scrubberKeyForYear(page, year);
+  if (key) await pressScrubberKey(page, key);
+  await waitForYear(page, year);
+}
+
 async function mountedMetrics(page: Page) {
   return page.evaluate(() => {
     const entries = [...document.querySelectorAll<HTMLElement>(".photo-row")];
@@ -147,6 +168,18 @@ async function waitForVisibleImagesReady(page: Page) {
   }), { timeout: 10_000 }).toBe(true);
 }
 
+async function scrollUntilAlbumHeading(page: Page, albumId: string, expectedText: string, maxScroll = 140_000) {
+  const heading = page.locator(`[data-entry-type="heading"][data-album-id="${albumId}"] h2`);
+  for (let top = 0; top <= maxScroll; top += 2400) {
+    await page.evaluate((scrollTop) => window.scrollTo(0, scrollTop), top);
+    if (await heading.evaluateAll((nodes, text) => nodes.some((node) => node.textContent?.trim() === text), expectedText)) {
+      await expect(heading.filter({ hasText: expectedText })).toBeVisible();
+      return;
+    }
+  }
+  throw new Error(`No visible album heading ${expectedText}`);
+}
+
 test("clean root visit mounts only 2013 and fetches no inactive album manifests", async ({ page }) => {
   const manifests: string[] = [];
   page.on("request", (request) => {
@@ -159,6 +192,22 @@ test("clean root visit mounts only 2013 and fetches no inactive album manifests"
   expect(new Set(manifests.filter((url) => url.includes("/data/2013/"))).size).toBe(9);
   expect(manifests.some((url) => url.includes("/data/2002/") || url.includes("/data/2001/"))).toBe(false);
   expect((await mountedMetrics(page)).years).toEqual(["2013"]);
+});
+
+test("archive header relies on scrubber navigation and hides public aggregate totals", async ({ page }) => {
+  await page.goto("/");
+  await waitForYear(page, "2013");
+  await expect(page.getByRole("navigation", { name: "Archive years" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Jump to \d{4}/ })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "2013", exact: true })).toBeVisible();
+  await expect(page.locator(".archive-year-heading > span")).toHaveCount(0);
+  await expect(page.locator(".album-group__heading > span")).toHaveCount(0);
+  await expect(page.getByText(/4,213 photographs|659|847/)).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "2013-09-03", exact: true })).toBeVisible();
+  await scrollUntilAlbumHeading(page, "2013-10-09-edit-4fafba37", "2013-10-09 · Edit");
+  await jumpArchiveToYear(page, "2002");
+  await expect(page.getByRole("heading", { name: "2002", exact: true })).toBeVisible();
+  await expect(page.locator('[data-entry-type="heading"][data-album-id="2002-thialand-0a8e8616"] h2')).toHaveText("2002-Thailand");
 });
 
 test("scrubber movement is preview-only and commits 2013 to 2001 once on release", async ({ page }) => {
@@ -201,9 +250,9 @@ test("rapid committed targets abort obsolete work and mount only the final year"
   });
   await page.goto("/");
   await waitForYear(page, "2013");
-  await page.getByRole("button", { name: "Jump to 2001" }).click();
+  await pressScrubberKey(page, "End");
   await expect.poll(() => requested2001).toBe(3);
-  await page.getByRole("button", { name: "Jump to 2002" }).click();
+  await pressScrubberKey(page, "PageUp");
   release();
   await expect(page).toHaveURL(/year=2002/);
   await waitForYear(page, "2002");
@@ -215,7 +264,7 @@ test("rapid committed targets abort obsolete work and mount only the final year"
 test("small 2002 range remains directly reachable", async ({ page }) => {
   await page.goto("/");
   await waitForYear(page, "2013");
-  await page.getByRole("button", { name: "Jump to 2002" }).click();
+  await jumpArchiveToYear(page, "2002");
   await expect(page).toHaveURL(/year=2002/);
   await waitForYear(page, "2002");
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2002");
@@ -360,8 +409,7 @@ test("Safari and Chrome iOS user agents share the bounded year-window architectu
     let metrics = await mountedMetrics(page);
     expect(metrics.rows).toBeLessThan(40);
     expect(metrics.photos).toBeLessThan(150);
-    await page.getByRole("button", { name: "Jump to 2001" }).click();
-    await waitForYear(page, "2001");
+    await jumpArchiveToYear(page, "2001");
     metrics = await mountedMetrics(page);
     expect(metrics.years).toEqual(["2001"]);
     expect(metrics.inactiveImages).toBe(0);
@@ -411,8 +459,7 @@ test("repeated traversal keeps inactive years empty and total DOM bounded", asyn
   await waitForYear(page, "2013");
   const samples: Awaited<ReturnType<typeof mountedMetrics>>[] = [];
   for (const year of ["2001", "2002", "2013", "2002", "2001", "2013"]) {
-    await page.getByRole("button", { name: `Jump to ${year}` }).click();
-    await waitForYear(page, year);
+    await jumpArchiveToYear(page, year);
     const metrics = await mountedMetrics(page);
     samples.push(metrics);
     expect(metrics.years).toEqual([year]);
@@ -447,8 +494,7 @@ test("player remains scoped to each active year's exact photo total", async ({ p
   await waitForYear(page, "2013");
   for (const [year, total] of [["2013", 4213], ["2002", 479], ["2001", 6669]] as const) {
     if (year !== "2013") {
-      await page.getByRole("button", { name: `Jump to ${year}` }).click();
-      await waitForYear(page, year);
+      await jumpArchiveToYear(page, year);
     }
     await page.locator(".photo-tile").first().click();
     await expect(page.getByLabel("Photo player")).toBeVisible();

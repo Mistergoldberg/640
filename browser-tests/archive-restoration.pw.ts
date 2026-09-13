@@ -28,6 +28,21 @@ async function waitForRestoration(page: Page, phase: "settled" | "cancelled" = "
   await afterLayoutFrames(page);
 }
 
+async function pressScrubberKey(page: Page, key: "Home" | "End" | "PageDown" | "PageUp") {
+  const rail = page.getByRole("slider", { name: "Complete archive timeline" });
+  await rail.focus();
+  await rail.press(key);
+}
+
+async function jumpArchiveToYear(page: Page, year: string) {
+  const activeYear = await page.locator(".collection-shell").getAttribute("data-active-year");
+  if (year === "2013" && activeYear !== "2013") await pressScrubberKey(page, "Home");
+  else if (year === "2001" && activeYear !== "2001") await pressScrubberKey(page, "End");
+  else if (year === "2002" && activeYear !== "2002") await pressScrubberKey(page, activeYear === "2001" ? "PageUp" : "PageDown");
+  await expect(page.locator(`.collection-shell[data-active-year="${year}"][data-mounted-years="${year}"]`)).toBeVisible({ timeout: 20_000 });
+  await afterLayoutFrames(page);
+}
+
 async function visiblePhotoIds(page: Page) {
   return page.locator(".photo-tile").evaluateAll((tiles) => tiles
     .filter((tile) => {
@@ -218,7 +233,7 @@ test("the exact reported photo survives mobile viewports and repeated orientatio
 test("Back and Forward restore the stable anchor for each history entry", async ({ page }) => {
   await page.goto("/");
   await expectRootAt2013(page);
-  await page.getByRole("button", { name: "Jump to 2001" }).click();
+  await jumpArchiveToYear(page, "2001");
   await expect(page).toHaveURL(/year=2001/);
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2001");
   const entry2001 = await page.evaluate(() => history.state.entryId);
@@ -279,9 +294,9 @@ test("a delayed non-current year cannot apply an obsolete target", async ({ page
   });
   await page.goto("/");
   await expectRootAt2013(page);
-  await page.getByRole("button", { name: "Jump to 2001" }).click();
+  await pressScrubberKey(page, "End");
   await expect.poll(() => requested).toBe(3);
-  await page.getByRole("button", { name: "Jump to 2013" }).click();
+  await pressScrubberKey(page, "Home");
   release();
   await expect(page).toHaveURL(/year=2013/);
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-active-year", "2013");

@@ -1,4 +1,18 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function pressScrubberKey(page: Page, key: "Home" | "End" | "PageDown" | "PageUp") {
+  const rail = page.getByRole("slider", { name: "Complete archive timeline" });
+  await rail.focus();
+  await rail.press(key);
+}
+
+async function jumpArchiveToYear(page: Page, year: string) {
+  const activeYear = await page.locator(".collection-shell").getAttribute("data-active-year");
+  if (year === "2013" && activeYear !== "2013") await pressScrubberKey(page, "Home");
+  else if (year === "2001" && activeYear !== "2001") await pressScrubberKey(page, "End");
+  else if (year === "2002" && activeYear !== "2002") await pressScrubberKey(page, activeYear === "2001" ? "PageUp" : "PageDown");
+  await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", year);
+}
 
 test("diagnostics remain absent from normal visits", async ({ page }) => {
   await page.goto("/");
@@ -11,8 +25,7 @@ test("debug mode exposes local diagnostics, overlays, copy, download, and reset"
   await page.goto("/?debug=1");
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", "2013");
   for (const year of ["2001", "2002", "2013"]) {
-    await page.getByRole("button", { name: `Jump to ${year}` }).click();
-    await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", year);
+    await jumpArchiveToYear(page, year);
   }
   const panel = page.getByLabel("Archive diagnostics");
   await expect(panel).toBeVisible();

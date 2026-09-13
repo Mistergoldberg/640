@@ -146,7 +146,7 @@ export function ArchiveScrubber({
   const displayRatio = isDragging && target ? target.ratio : activeRatio;
   const valueNow = Math.round(clamp(displayRatio, 0, 1) * 100);
   const label = labelTarget
-    ? `${labelTarget.year}${labelTarget.albumName ? ` · ${formatAlbumName(labelTarget.albumName, labelTarget.year)}` : ""}`
+    ? labelTarget.albumName ? formatAlbumName(labelTarget.albumName, labelTarget.year) : labelTarget.year
     : activeYear;
 
   const commitAnchor = (ratio: number) => {

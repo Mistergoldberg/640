@@ -91,10 +91,6 @@ img {
   white-space: nowrap;
 }
 
-.year-selector button.is-inline-current {
-  display: none;
-}
-
 .album-context {
   display: flex;
   min-height: 24px;
@@ -153,47 +149,6 @@ img {
   font-weight: 760;
 }
 
-.year-selector {
-  flex: 0 0 auto;
-  display: inline-grid;
-  grid-auto-flow: column;
-  gap: 3px;
-  max-width: min(60vw, 520px);
-  overflow-x: auto;
-  padding: 3px;
-  border: 1px solid rgba(244, 241, 234, 0.14);
-  border-radius: 6px;
-  background: rgba(9, 9, 9, 0.72);
-  scrollbar-width: none;
-}
-
-.year-selector::-webkit-scrollbar {
-  display: none;
-}
-
-.year-selector button {
-  min-width: 52px;
-  min-height: 34px;
-  padding: 0 9px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: rgba(244, 241, 234, 0.68);
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.74rem;
-  font-weight: 760;
-}
-
-.year-selector button.is-selected {
-  color: #030303;
-  background: #f4f1ea;
-}
-
-.year-selector button:hover,
-.year-selector button:focus-visible {
-  border-color: rgba(244, 241, 234, 0.56);
-}
-
 .album-stack {
   display: grid;
   gap: 30px;
@@ -214,7 +169,7 @@ img {
 .archive-year-heading {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding-top: 10px;
   border-top: 1px solid rgba(244, 241, 234, 0.2);
@@ -226,12 +181,6 @@ img {
   font-size: clamp(1.5rem, 1.1rem + 1vw, 2.1rem);
   font-weight: 820;
   line-height: 1;
-}
-
-.archive-year-heading > span {
-  color: rgba(244, 241, 234, 0.42);
-  font-size: 0.72rem;
-  font-weight: 680;
 }
 
 .archive-year-heading--inline {
@@ -320,7 +269,7 @@ img {
 .album-group__heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   color: rgba(244, 241, 234, 0.68);
 }
@@ -339,25 +288,12 @@ img {
   white-space: nowrap;
 }
 
-.album-heading__year {
-  flex: 0 0 auto;
-  color: rgba(244, 241, 234, 0.86);
-  font-weight: 820;
-}
-
 .album-heading__folder {
   min-width: 0;
   overflow: hidden;
   color: rgba(244, 241, 234, 0.58);
   font-weight: 620;
   text-overflow: ellipsis;
-}
-
-.album-group__heading > span {
-  flex: 0 0 auto;
-  color: rgba(244, 241, 234, 0.44);
-  font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .album-error {
@@ -917,16 +853,6 @@ img {
 
   .album-context {
     font-size: 0.74rem;
-  }
-
-  .year-selector {
-    max-width: calc(100vw - 146px);
-  }
-
-  .year-selector button {
-    min-width: 48px;
-    min-height: 36px;
-    padding: 0 8px;
   }
 
   .archive-timeline {

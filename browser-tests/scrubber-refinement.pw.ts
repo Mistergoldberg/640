@@ -87,7 +87,7 @@ test("scrubber rail, touch target, thumb, and hover label stay bounded", async (
       expect(labelBox!.x + labelBox!.width).toBeLessThanOrEqual(viewport.width);
       expect(labelBox!.y).toBeGreaterThanOrEqual(0);
       expect(labelBox!.y + labelBox!.height).toBeLessThanOrEqual(viewport.height);
-      await expect(label).toContainText(/2001 · /);
+      await expect(label).toContainText(/2001-/);
     }
     await context.close();
   }
@@ -107,7 +107,7 @@ test("drag preview is local and release creates one navigation entry", async ({ 
   albumRequests.length = 0;
   await dragTo(page, 0.96, true);
   await expect(page.locator(".archive-timeline")).toHaveClass(/is-dragging/);
-  await expect(page.locator(".archive-timeline__label")).toContainText(/2001 · /);
+  await expect(page.locator(".archive-timeline__label")).toContainText(/2001-/);
   await expect(page).toHaveURL(/year=2013/);
   await expect(page.locator(".collection-shell")).toHaveAttribute("data-mounted-years", "2013");
   expect(albumRequests.some((url) => url.includes("/data/2001/"))).toBe(false);
