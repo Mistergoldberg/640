@@ -74,9 +74,12 @@ describe("playerReducer initial delay", () => {
 
     expect(started.status).toBe("temporarily-paused");
     expect(started.resumeDelayMs).toBeNull();
+    expect(started.frameGestureActive).toBe(true);
     expect(navigated.currentIndex).toBe(5);
-    expect(navigated.resumeDelayMs).toBe(FRAME_INTERACTION_RESUME_DELAY_MS);
+    expect(navigated.frameGestureActive).toBe(true);
+    expect(navigated.resumeDelayMs).toBeNull();
     expect(released.status).toBe("temporarily-paused");
+    expect(released.frameGestureActive).toBe(false);
     expect(released.resumeDelayMs).toBe(FRAME_INTERACTION_RESUME_DELAY_MS);
     expect(released.resumeToken).toBe(navigated.resumeToken + 1);
   });

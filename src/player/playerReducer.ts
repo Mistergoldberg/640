@@ -25,6 +25,7 @@ export interface PlayerState {
   resumeToken: number;
   resumeDelayMs: number | null;
   initialDelayToken: number;
+  frameGestureActive: boolean;
   scope: PlayerScope;
 }
 
@@ -68,6 +69,7 @@ export function createPlayerState({
     resumeToken: 0,
     resumeDelayMs: null,
     initialDelayToken: 0,
+    frameGestureActive: false,
     scope
   };
 }
@@ -84,7 +86,7 @@ function canAutoResumeAfterManual(status: PlaybackStatus) {
   return status === "initial-delay" || status === "playing" || status === "temporarily-paused" || status === "buffering";
 }
 
-function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number): PlayerState {
+function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number | null): PlayerState {
   const nextIndex = clampIndex(state.currentIndex + direction, state.total);
   if (nextIndex === state.currentIndex) {
     return state;
@@ -96,6 +98,7 @@ function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number
       currentIndex: nextIndex,
       status: "explicitly-paused",
       bufferTargetIndex: null,
+      frameGestureActive: false,
       resumeDelayMs: null
     };
   }
@@ -105,7 +108,8 @@ function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number
     currentIndex: nextIndex,
     status: "temporarily-paused",
     bufferTargetIndex: null,
-    resumeToken: state.resumeToken + 1,
+    frameGestureActive: resumeDelayMs === null ? state.frameGestureActive : false,
+    resumeToken: resumeDelayMs === null ? state.resumeToken : state.resumeToken + 1,
     resumeDelayMs
   };
 }
@@ -119,18 +123,20 @@ function frameGestureStart(state: PlayerState): PlayerState {
     ...state,
     status: "temporarily-paused",
     bufferTargetIndex: null,
+    frameGestureActive: true,
     resumeDelayMs: null
   };
 }
 
 function frameGestureEnd(state: PlayerState): PlayerState {
   if (state.status !== "temporarily-paused") {
-    return state;
+    return state.frameGestureActive ? { ...state, frameGestureActive: false } : state;
   }
 
   return {
     ...state,
     bufferTargetIndex: null,
+    frameGestureActive: false,
     resumeToken: state.resumeToken + 1,
     resumeDelayMs: FRAME_INTERACTION_RESUME_DELAY_MS
   };
@@ -148,6 +154,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
           ...state,
           status: "ended",
           bufferTargetIndex: null,
+          frameGestureActive: false,
           resumeDelayMs: null
         };
       }
@@ -157,6 +164,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         status: "initial-delay",
         initialDelayToken: state.initialDelayToken + 1,
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -170,6 +178,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
           ...state,
           status: "ended",
           bufferTargetIndex: null,
+          frameGestureActive: false,
           resumeDelayMs: null
         };
       }
@@ -178,6 +187,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "playing",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -187,6 +197,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
           ...state,
           status: "ended",
           bufferTargetIndex: null,
+          frameGestureActive: false,
           resumeDelayMs: null
         };
       }
@@ -195,6 +206,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "playing",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -203,6 +215,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "explicitly-paused",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -219,10 +232,10 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
       return frameGestureEnd(state);
 
     case "FRAME_NEXT":
-      return manualStep(state, 1, FRAME_INTERACTION_RESUME_DELAY_MS);
+      return manualStep(state, 1, state.frameGestureActive ? null : FRAME_INTERACTION_RESUME_DELAY_MS);
 
     case "FRAME_PREVIOUS":
-      return manualStep(state, -1, FRAME_INTERACTION_RESUME_DELAY_MS);
+      return manualStep(state, -1, state.frameGestureActive ? null : FRAME_INTERACTION_RESUME_DELAY_MS);
 
     case "TEMPORARY_RESUME":
       if (state.status !== "temporarily-paused") {
@@ -234,6 +247,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
           ...state,
           status: "ended",
           bufferTargetIndex: null,
+          frameGestureActive: false,
           resumeDelayMs: null
         };
       }
@@ -242,6 +256,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "playing",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -254,6 +269,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "buffering",
         bufferTargetIndex: clampIndex(event.targetIndex, state.total),
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -267,6 +283,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         currentIndex: state.bufferTargetIndex,
         status: state.bufferTargetIndex >= state.total - 1 ? "ended" : "playing",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -277,6 +294,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
           ...state,
           status: "ended",
           bufferTargetIndex: null,
+          frameGestureActive: false,
           resumeDelayMs: null
         };
       }
@@ -286,6 +304,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         currentIndex: nextIndex,
         status: nextIndex >= state.total - 1 ? "ended" : state.status,
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: nextIndex >= state.total - 1 ? null : state.resumeDelayMs
       };
     }
@@ -296,6 +315,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         currentIndex: Math.max(0, state.total - 1),
         status: "ended",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 
@@ -318,6 +338,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         ...state,
         status: "explicitly-paused",
         bufferTargetIndex: null,
+        frameGestureActive: false,
         resumeDelayMs: null
       };
 

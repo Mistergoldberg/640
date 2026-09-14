@@ -6,13 +6,13 @@ export const FRAME_WHEEL_DELTA_THRESHOLD = 90;
 export const FRAME_WHEEL_STEP_COOLDOWN_MS = 120;
 export const FRAME_WHEEL_IDLE_RESET_MS = 420;
 
-interface FrameNavigationActions {
+export interface FrameNavigationActions {
   pause(): void;
   navigate(direction: FrameNavigationDirection): void;
   finish(): void;
 }
 
-interface FrameNavigationTimers {
+export interface FrameNavigationTimers {
   now(): number;
   setTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   clearTimeout(id: ReturnType<typeof setTimeout>): void;
@@ -110,6 +110,14 @@ export class PlayerFrameNavigationController {
       this.actions.finish();
     }
     return true;
+  }
+
+  isPointerHolding() {
+    return this.pointer?.didHold ?? false;
+  }
+
+  hasActivePointer() {
+    return this.pointer !== null;
   }
 
   handleWheel(input: FrameWheelInput) {

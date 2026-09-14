@@ -8,6 +8,13 @@ import { PlayerControls } from "./PlayerControls";
 import { createPlayerControlState, playerControlReducer, screenModeActive } from "./playerControlState";
 import { PlayerFrameNavigationController, type FrameNavigationDirection } from "./playerFrameNavigation";
 import { INITIAL_PLAY_DELAY_MS, createPlayerState, playerReducer, type PlayerScope, type PlayerState } from "./playerReducer";
+import {
+  PlayerTouchNavigationController,
+  TOUCH_SYNTHETIC_CLICK_SUPPRESSION_MS,
+  directionFromClientX,
+  isWithinMobileLandscapeRail,
+  shouldSuppressSyntheticClick
+} from "./playerTouchNavigation";
 import { usePlaybackClock } from "./usePlaybackClock";
 
 const PRELOAD_AHEAD = 30;
@@ -137,6 +144,15 @@ function hasFinePointer() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
 }
 
+function visibleRect(element: Element) {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+
+  return rect;
+}
+
 export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose }: PhotoPlayerProps) {
   const [playerState, dispatch] = useReducer(playerReducer, { initialIndex, total: photos.length, scope }, createPlayerState);
   const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
@@ -165,9 +181,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const resumeTimerRef = useRef<number | null>(null);
   const shareTimerRef = useRef<number | null>(null);
   const ignoreSyntheticClickUntilRef = useRef(0);
-  const touchStartRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const activeTouchPointersRef = useRef(new Set<number>());
+  const touchPointerIdRef = useRef<number | null>(null);
   const framePointerIdRef = useRef<number | null>(null);
   const frameInteractionRef = useRef<PlayerFrameNavigationController | null>(null);
+  const touchInteractionRef = useRef<PlayerTouchNavigationController | null>(null);
   const surfaceRef = useRef<HTMLButtonElement | null>(null);
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
   const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
@@ -211,9 +229,16 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     cacheRef.current.clear();
   }, []);
 
+  const suppressSyntheticClick = useCallback(() => {
+    ignoreSyntheticClickUntilRef.current = Date.now() + TOUCH_SYNTHETIC_CLICK_SUPPRESSION_MS;
+  }, []);
+
   const close = useCallback(() => {
     frameInteractionRef.current?.destroy();
     framePointerIdRef.current = null;
+    touchInteractionRef.current?.destroy();
+    touchPointerIdRef.current = null;
+    activeTouchPointersRef.current.clear();
     clearInitialDelayTimer();
     clearResumeTimer();
     fullscreenRequestTokenRef.current += 1;
@@ -392,12 +417,79 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         finish: finishFrameInteraction
       });
     }
+
+    if (!touchInteractionRef.current) {
+      touchInteractionRef.current = new PlayerTouchNavigationController({
+        pause: pauseForFrameInteraction,
+        navigate: navigateByFrameInteraction,
+        finish: finishFrameInteraction
+      });
+    } else {
+      touchInteractionRef.current.setActions({
+        pause: pauseForFrameInteraction,
+        navigate: navigateByFrameInteraction,
+        finish: finishFrameInteraction
+      });
+    }
   }, [finishFrameInteraction, navigateByFrameInteraction, pauseForFrameInteraction]);
 
   const cancelFramePointerInteraction = useCallback(() => {
     if (frameInteractionRef.current?.cancelPointer()) {
       framePointerIdRef.current = null;
     }
+  }, []);
+
+  const cancelTouchFrameInteraction = useCallback((finishGesture = true) => {
+    if (touchInteractionRef.current?.cancel(finishGesture)) {
+      touchPointerIdRef.current = null;
+    }
+    activeTouchPointersRef.current.clear();
+  }, []);
+
+  const cancelActiveFrameInteractions = useCallback(() => {
+    cancelFramePointerInteraction();
+    cancelTouchFrameInteraction();
+  }, [cancelFramePointerInteraction, cancelTouchFrameInteraction]);
+
+  const releasePointerCapture = useCallback((target: Element, pointerId: number) => {
+    if (target instanceof HTMLElement && target.hasPointerCapture(pointerId)) {
+      target.releasePointerCapture(pointerId);
+    }
+  }, []);
+
+  const mobileLandscapeRailLeft = useCallback(() => {
+    if (!playerViewport.landscapeRail) {
+      return null;
+    }
+
+    const overlay = surfaceRef.current?.closest(".player-overlay");
+    const controls = Array.from(
+      overlay?.querySelectorAll<HTMLElement>('.player-controls > [data-player-control="music"], .player-controls > [data-player-control="speed"]') || []
+    )
+      .map(visibleRect)
+      .filter((rect): rect is DOMRect => Boolean(rect));
+
+    if (controls.length === 0) {
+      return null;
+    }
+
+    return Math.min(...controls.map((rect) => rect.left));
+  }, [playerViewport.landscapeRail]);
+
+  const pointHitsMobileLandscapeRail = useCallback(
+    (clientX: number) => isWithinMobileLandscapeRail(clientX, mobileLandscapeRailLeft()),
+    [mobileLandscapeRailLeft]
+  );
+
+  const pointHitsPlayerControl = useCallback((clientX: number, clientY: number) => {
+    const overlay = surfaceRef.current?.closest(".player-overlay");
+    const controls = Array.from(
+      overlay?.querySelectorAll<HTMLElement>(".player-topbar button, .player-controls > [data-player-control], .speed-menu button") || []
+    )
+      .map(visibleRect)
+      .filter((rect): rect is DOMRect => Boolean(rect));
+
+    return controls.some((rect) => clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom);
   }, []);
 
   const closeSpeedMenu = useCallback(() => {
@@ -748,6 +840,21 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) {
+      return;
+    }
+
+    const preventSurfaceSelection = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    surface.addEventListener("selectstart", preventSurfaceSelection);
+    return () => surface.removeEventListener("selectstart", preventSurfaceSelection);
+  }, []);
+
+  useEffect(() => {
     const syncFullscreenState = () => {
       const nextActive = Boolean(fullscreenElement());
       const wasActive = nativeFullscreenRef.current;
@@ -755,7 +862,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       setNativeFullscreenActive(nextActive);
 
       if (nextActive !== wasActive) {
-        cancelFramePointerInteraction();
+        cancelActiveFrameInteractions();
       }
 
       if (nextActive) {
@@ -775,12 +882,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         void exitDocumentFullscreen();
       }
     };
-  }, [cancelFramePointerInteraction]);
+  }, [cancelActiveFrameInteractions]);
 
   useEffect(() => {
-    window.addEventListener("blur", cancelFramePointerInteraction);
-    return () => window.removeEventListener("blur", cancelFramePointerInteraction);
-  }, [cancelFramePointerInteraction]);
+    window.addEventListener("blur", cancelActiveFrameInteractions);
+    return () => window.removeEventListener("blur", cancelActiveFrameInteractions);
+  }, [cancelActiveFrameInteractions]);
 
   useEffect(() => {
     let frame = 0;
@@ -867,6 +974,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     return () => {
       frameInteractionRef.current?.destroy();
       framePointerIdRef.current = null;
+      touchInteractionRef.current?.destroy();
+      touchPointerIdRef.current = null;
+      activeTouchPointersRef.current.clear();
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
@@ -946,84 +1056,129 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               framePointerIdRef.current = event.pointerId;
               event.currentTarget.setPointerCapture(event.pointerId);
               const rect = event.currentTarget.getBoundingClientRect();
-              const direction: FrameNavigationDirection = event.clientX < rect.left + rect.width / 2 ? -1 : 1;
+              const direction = directionFromClientX(event.clientX, rect);
               frameInteractionRef.current?.startPointer(direction);
               return;
             }
 
             if (event.pointerType === "touch") {
-              touchStartRef.current = {
-                id: event.pointerId,
-                x: event.clientX,
-                y: event.clientY
-              };
+              suppressSyntheticClick();
+              activeTouchPointersRef.current.add(event.pointerId);
+
+              if (!event.isPrimary || activeTouchPointersRef.current.size > 1) {
+                event.preventDefault();
+                event.stopPropagation();
+                touchInteractionRef.current?.cancel();
+                touchPointerIdRef.current = null;
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+              closeSpeedMenu();
+              revealControls();
+
+              if (pointHitsMobileLandscapeRail(event.clientX)) {
+                return;
+              }
+
+              touchPointerIdRef.current = event.pointerId;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              const rect = event.currentTarget.getBoundingClientRect();
+              touchInteractionRef.current?.start({
+                pointerId: event.pointerId,
+                clientX: event.clientX,
+                clientY: event.clientY,
+                direction: directionFromClientX(event.clientX, rect),
+                activeTouchCount: activeTouchPointersRef.current.size,
+                isPrimary: event.isPrimary
+              });
+            }
+          }}
+          onPointerMove={(event) => {
+            if (event.pointerType !== "touch" || touchPointerIdRef.current !== event.pointerId) {
+              return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            touchInteractionRef.current?.move({
+              pointerId: event.pointerId,
+              clientX: event.clientX,
+              clientY: event.clientY
+            });
+
+            if (!touchInteractionRef.current?.hasActiveGesture()) {
+              touchPointerIdRef.current = null;
+              releasePointerCapture(event.currentTarget, event.pointerId);
             }
           }}
           onPointerUp={(event) => {
             if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
               event.preventDefault();
               event.stopPropagation();
-              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              suppressSyntheticClick();
               framePointerIdRef.current = null;
               frameInteractionRef.current?.releasePointer();
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
+              releasePointerCapture(event.currentTarget, event.pointerId);
               return;
             }
 
-            if (event.pointerType !== "touch" || touchStartRef.current?.id !== event.pointerId) {
+            if (event.pointerType !== "touch") {
               return;
             }
 
-            const startedAt = touchStartRef.current;
-            touchStartRef.current = null;
-            ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+            activeTouchPointersRef.current.delete(event.pointerId);
+            suppressSyntheticClick();
+
+            if (touchPointerIdRef.current !== event.pointerId) {
+              return;
+            }
+
             event.preventDefault();
             event.stopPropagation();
-
-            const movedX = Math.abs(event.clientX - startedAt.x);
-            const movedY = Math.abs(event.clientY - startedAt.y);
-            if (movedX > 18 || movedY > 18) {
-              return;
-            }
-
-            const imageRect = event.currentTarget.querySelector("img")?.getBoundingClientRect();
-            if (
-              imageRect &&
-              (event.clientX < imageRect.left ||
-                event.clientX > imageRect.right ||
-                event.clientY < imageRect.top ||
-                event.clientY > imageRect.bottom)
-            ) {
-              return;
-            }
-
-            const navigationRect = imageRect || event.currentTarget.getBoundingClientRect();
-            navigateManually(event.clientX < navigationRect.left + navigationRect.width / 2 ? -1 : 1);
+            touchPointerIdRef.current = null;
+            touchInteractionRef.current?.release({ pointerId: event.pointerId });
+            releasePointerCapture(event.currentTarget, event.pointerId);
           }}
           onPointerCancel={(event) => {
             if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
               framePointerIdRef.current = null;
-              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              suppressSyntheticClick();
               frameInteractionRef.current?.cancelPointer();
               return;
             }
 
             if (event.pointerType === "touch") {
-              touchStartRef.current = null;
-              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              activeTouchPointersRef.current.delete(event.pointerId);
+              suppressSyntheticClick();
+              if (touchPointerIdRef.current === event.pointerId) {
+                touchPointerIdRef.current = null;
+                touchInteractionRef.current?.cancel();
+                releasePointerCapture(event.currentTarget, event.pointerId);
+              }
             }
           }}
           onLostPointerCapture={(event) => {
             if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
               framePointerIdRef.current = null;
-              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              suppressSyntheticClick();
               frameInteractionRef.current?.cancelPointer();
+            }
+
+            if (event.pointerType === "touch" && touchPointerIdRef.current === event.pointerId) {
+              activeTouchPointersRef.current.delete(event.pointerId);
+              touchPointerIdRef.current = null;
+              suppressSyntheticClick();
+              touchInteractionRef.current?.cancel();
             }
           }}
           onWheel={(event) => {
             if (!hasFinePointer()) {
+              return;
+            }
+
+            if (pointHitsPlayerControl(event.clientX, event.clientY)) {
               return;
             }
 
@@ -1040,13 +1195,25 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             }
           }}
           onClick={(event) => {
-            if (Date.now() < ignoreSyntheticClickUntilRef.current) {
+            if (shouldSuppressSyntheticClick(ignoreSyntheticClickUntilRef.current)) {
               event.preventDefault();
               event.stopPropagation();
               return;
             }
 
             toggleFromPhotoSurface();
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onDragStart={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onSelect={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
           }}
           aria-label={surfaceActionLabel}
         >
@@ -1058,6 +1225,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}`}
             style={playerImageStyle}
             decoding="async"
+            draggable={false}
             onLoad={markVisibleImageReady}
             onError={() => {
               if (!atEnd) {
