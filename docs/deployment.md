@@ -89,12 +89,17 @@ They are not part of the public build or Git checkpoint.
 
 The Pixilation deployment is a static React/Vite application at
 `https://pixilation.org/`, served by the existing Nginx server. The legacy
-`https://insertcatchytitlehere.com/` deployment remains active on its existing
-release. `https://www.insertcatchytitlehere.com/` redirects to the legacy apex.
+release remains on the server for rollback history, but the public
+`https://insertcatchytitlehere.com/` and
+`https://www.insertcatchytitlehere.com/` hostnames now permanently redirect to
+`https://pixilation.org/` while preserving paths and query strings. QA remains
+available at `https://qa.insertcatchytitlehere.com/` and is not redirected.
 Generated media belongs in the dedicated R2 Standard bucket
 `insertcatchytitlehere-media`, exposed through
-`https://media.pixilation.org/` for Pixilation and retained at
-`https://media.insertcatchytitlehere.com/` for the legacy deployment.
+`https://media.pixilation.org/` for Pixilation. The old
+`https://media.insertcatchytitlehere.com/` custom domain remains attached to R2,
+but traffic to it now permanently redirects to `https://media.pixilation.org/`
+with the same path and query string.
 
 Only `640/generated/library/` may be uploaded as public media. Asset keys start
 with `2001/`, `2002/` or `2013/`, without a local directory prefix. The server
