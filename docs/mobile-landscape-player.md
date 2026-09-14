@@ -72,7 +72,7 @@ Run the complete gate from `640/app`:
 ```sh
 npm test
 npm run test:browser
-VITE_APP_BASE_PATH=/ VITE_MEDIA_BASE_URL=https://media.insertcatchytitlehere.com/ npm run build
+VITE_APP_BASE_PATH=/ VITE_MEDIA_BASE_URL=https://media.pixilation.org/ npm run build
 npm run release:audit
 npm run media:upload:dry-run
 ```

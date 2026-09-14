@@ -6,7 +6,7 @@ export function resolveDeploymentConfig(mode: string, env: Record<string, string
   }
 
   const mediaBaseUrl = env.VITE_MEDIA_BASE_URL?.trim() ||
-    (production ? "https://media.insertcatchytitlehere.com/" : "");
+    (production ? "https://media.pixilation.org/" : "");
   if (mediaBaseUrl) {
     const url = new URL(mediaBaseUrl);
     if (!["https:", ...(production ? [] : ["http:"])].includes(url.protocol) ||

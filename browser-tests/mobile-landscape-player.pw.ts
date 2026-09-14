@@ -37,7 +37,10 @@ function monitorPage(page: Page) {
   page.on("requestfailed", (request) => {
     const url = request.url();
     const reason = request.failure()?.errorText || "request failed";
-    if ((url.includes("insertcatchytitlehere.com") || url.includes("127.0.0.1")) && !reason.includes("ERR_ABORTED")) {
+    const monitoredRequest = ["media.pixilation.org", "insertcatchytitlehere.com", "127.0.0.1"].some((host) =>
+      url.includes(host)
+    );
+    if (monitoredRequest && !reason.includes("ERR_ABORTED")) {
       health.requestFailures.push(`${reason} ${url}`);
     }
   });

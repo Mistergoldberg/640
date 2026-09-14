@@ -2,11 +2,12 @@
 
 ## Status
 
-Wrangler OAuth authentication succeeded and the Cloudflare zone is confirmed
-active and not paused. R2 is now enabled. After verifying that the account had no
+Wrangler OAuth authentication succeeded and the Cloudflare zones are confirmed
+active and not paused. R2 is enabled. After verifying that the account had no
 buckets, `insertcatchytitlehere-media` was created with Standard storage. Its
-custom domain `media.insertcatchytitlehere.com` is enabled with active ownership
-and SSL, minimum TLS 1.2; the `r2.dev` endpoint is disabled. Bucket-specific S3 credentials are saved locally with restricted permissions.
+custom domains `media.pixilation.org` and
+`media.insertcatchytitlehere.com` are enabled with active ownership and SSL,
+minimum TLS 1.2; the `r2.dev` endpoint is disabled. Bucket-specific S3 credentials are saved locally with restricted permissions.
 Media publication is complete: 22,722 objects, 605,516,997 bytes. Every remote key,
 size and MD5 checksum matched the audited local library. Representative public
 thumbnail/display downloads from all three years matched SHA-256 checksums and
@@ -86,12 +87,14 @@ They are not part of the public build or Git checkpoint.
 
 ## Architecture and public/private boundary
 
-The deployed site is a static React/Vite application at
-`https://insertcatchytitlehere.com/`, served by the existing Nginx server.
-`https://www.insertcatchytitlehere.com/` redirects to the apex.
+The Pixilation deployment is a static React/Vite application at
+`https://pixilation.org/`, served by the existing Nginx server. The legacy
+`https://insertcatchytitlehere.com/` deployment remains active on its existing
+release. `https://www.insertcatchytitlehere.com/` redirects to the legacy apex.
 Generated media belongs in the dedicated R2 Standard bucket
 `insertcatchytitlehere-media`, exposed through
-`https://media.insertcatchytitlehere.com/`.
+`https://media.pixilation.org/` for Pixilation and retained at
+`https://media.insertcatchytitlehere.com/` for the legacy deployment.
 
 Only `640/generated/library/` may be uploaded as public media. Asset keys start
 with `2001/`, `2002/` or `2013/`, without a local directory prefix. The server
@@ -130,13 +133,13 @@ goes to ignored `640/generated/reports/`.
 
 `src/lib/deploymentConfig.ts` centralizes deployment configuration. Development
 defaults to `/640/` with local generated media. Production defaults to `/` and
-`https://media.insertcatchytitlehere.com/`, with local-media middleware disabled.
+`https://media.pixilation.org/`, with local-media middleware disabled.
 Components obtain the base through Vite; history and sharing preserve the root
 URL and query parameters. The explicit production command is:
 
 ```sh
 VITE_APP_BASE_PATH=/ \
-VITE_MEDIA_BASE_URL=https://media.insertcatchytitlehere.com/ \
+VITE_MEDIA_BASE_URL=https://media.pixilation.org/ \
 npm run build
 ```
 

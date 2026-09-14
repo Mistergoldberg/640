@@ -7,7 +7,7 @@ describe("deployment configuration", () => {
   });
   it("builds production for the apex and public R2 origin by default", () => {
     expect(resolveDeploymentConfig("production", {})).toEqual({
-      base: "/", mediaBaseUrl: "https://media.insertcatchytitlehere.com/"
+      base: "/", mediaBaseUrl: "https://media.pixilation.org/"
     });
   });
   it("accepts an explicit development base without changing media keys", () => {
