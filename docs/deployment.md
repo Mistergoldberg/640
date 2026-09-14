@@ -112,6 +112,16 @@ database, permanent rotate tool or public mutation endpoint. Existing shared PHP
 and database services on the server are not dependencies of this application and
 must not be removed or reconfigured for other sites.
 
+## Canonical public identity
+
+The public canonical hostname is `https://pixilation.org/`. The production HTML
+declares that root canonical URL, Open Graph URL and WebSite structured-data URL.
+`robots.txt` allows crawling and references `https://pixilation.org/sitemap.xml`.
+The sitemap intentionally lists only the root URL because this remains a static
+SPA without per-photo server-rendered HTML or unique per-photo metadata. Query
+state URLs such as `?year=2002&photo=...` are shareable application states, not
+separate indexed documents.
+
 ## Local commands
 
 Run from `640/app`:

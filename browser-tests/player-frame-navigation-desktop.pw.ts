@@ -121,6 +121,7 @@ test("desktop wheel and trackpad gestures navigate without button hold and do no
   const afterLargeDelta = await playerIndex(page);
   expect(afterLargeDelta.index).toBeLessThanOrEqual(beforeLargeDelta.index + 1);
 
+  await pausePlayer(page);
   const speedBox = await page.locator('[data-player-control="speed"]').boundingBox();
   expect(speedBox).not.toBeNull();
   const beforeControlWheel = await playerIndex(page);
