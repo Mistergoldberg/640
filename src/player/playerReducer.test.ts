@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPlayerState, playerReducer, type PlayerState } from "./playerReducer";
+import { FRAME_INTERACTION_RESUME_DELAY_MS, MANUAL_RESUME_DELAY_MS, createPlayerState, playerReducer, type PlayerState } from "./playerReducer";
 
 const scope = { type: "year", year: "2013" } as const;
 
@@ -51,6 +51,7 @@ describe("playerReducer initial delay", () => {
     expect(navigatedState.status).toBe("temporarily-paused");
     expect(navigatedState.currentIndex).toBe(1);
     expect(navigatedState.resumeToken).toBe(1);
+    expect(navigatedState.resumeDelayMs).toBe(MANUAL_RESUME_DELAY_MS);
     expect(playerReducer(navigatedState, { type: "INITIAL_DELAY_COMPLETE" }).status).toBe("temporarily-paused");
     expect(playerReducer(navigatedState, { type: "TEMPORARY_RESUME" }).status).toBe("playing");
   });
@@ -62,6 +63,35 @@ describe("playerReducer initial delay", () => {
     expect(secondNavigation.status).toBe("temporarily-paused");
     expect(secondNavigation.currentIndex).toBe(2);
     expect(secondNavigation.resumeToken).toBe(2);
+    expect(secondNavigation.resumeDelayMs).toBe(MANUAL_RESUME_DELAY_MS);
+  });
+
+  it("frame gestures suspend autoplay until release, then use the three-second resume delay", () => {
+    const playing = playerReducer(decoded(openPlayer(4, 12)), { type: "INITIAL_DELAY_COMPLETE" });
+    const started = playerReducer(playing, { type: "FRAME_GESTURE_START" });
+    const navigated = playerReducer(started, { type: "FRAME_NEXT" });
+    const released = playerReducer(navigated, { type: "FRAME_GESTURE_END" });
+
+    expect(started.status).toBe("temporarily-paused");
+    expect(started.resumeDelayMs).toBeNull();
+    expect(navigated.currentIndex).toBe(5);
+    expect(navigated.resumeDelayMs).toBe(FRAME_INTERACTION_RESUME_DELAY_MS);
+    expect(released.status).toBe("temporarily-paused");
+    expect(released.resumeDelayMs).toBe(FRAME_INTERACTION_RESUME_DELAY_MS);
+    expect(released.resumeToken).toBe(navigated.resumeToken + 1);
+  });
+
+  it("frame navigation preserves explicit pause and never schedules resume", () => {
+    const playing = playerReducer(decoded(openPlayer(4, 12)), { type: "INITIAL_DELAY_COMPLETE" });
+    const paused = playerReducer(playing, { type: "PAUSE" });
+    const started = playerReducer(paused, { type: "FRAME_GESTURE_START" });
+    const navigated = playerReducer(started, { type: "FRAME_PREVIOUS" });
+    const released = playerReducer(navigated, { type: "FRAME_GESTURE_END" });
+
+    expect(started).toEqual(paused);
+    expect(released.currentIndex).toBe(3);
+    expect(released.status).toBe("explicitly-paused");
+    expect(released.resumeDelayMs).toBeNull();
   });
 
   it("closing during initial delay leaves automatic startup cancelled", () => {

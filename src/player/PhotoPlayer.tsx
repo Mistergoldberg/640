@@ -6,13 +6,12 @@ import { exitDocumentFullscreen, fullscreenElement, requestDocumentFullscreen, s
 import { calculateImageGeometry, playerFitClearance } from "./imageGeometry";
 import { PlayerControls } from "./PlayerControls";
 import { createPlayerControlState, playerControlReducer, screenModeActive } from "./playerControlState";
-import { createPlayerState, playerReducer, type PlayerScope, type PlayerState } from "./playerReducer";
+import { PlayerFrameNavigationController, type FrameNavigationDirection } from "./playerFrameNavigation";
+import { INITIAL_PLAY_DELAY_MS, createPlayerState, playerReducer, type PlayerScope, type PlayerState } from "./playerReducer";
 import { usePlaybackClock } from "./usePlaybackClock";
 
 const PRELOAD_AHEAD = 30;
 const PRELOAD_BEHIND = 8;
-const INITIAL_PLAY_DELAY_MS = 3000;
-const MANUAL_RESUME_DELAY_MS = 5000;
 const SOUNDCLOUD_WIDGET_API_URL = "https://w.soundcloud.com/player/api.js";
 const SOUNDCLOUD_EMBED_URL =
   "https://w.soundcloud.com/player/?url=https%3A%2F%2Fapi.soundcloud.com%2Fplaylists%2F2293150329&auto_play=true&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=false&show_artwork=false";
@@ -134,6 +133,10 @@ async function copyShareUrl(url: string) {
   }
 }
 
+function hasFinePointer() {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
+}
+
 export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose }: PhotoPlayerProps) {
   const [playerState, dispatch] = useReducer(playerReducer, { initialIndex, total: photos.length, scope }, createPlayerState);
   const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
@@ -163,6 +166,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const shareTimerRef = useRef<number | null>(null);
   const ignoreSyntheticClickUntilRef = useRef(0);
   const touchStartRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const framePointerIdRef = useRef<number | null>(null);
+  const frameInteractionRef = useRef<PlayerFrameNavigationController | null>(null);
   const surfaceRef = useRef<HTMLButtonElement | null>(null);
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
   const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
@@ -207,6 +212,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const close = useCallback(() => {
+    frameInteractionRef.current?.destroy();
+    framePointerIdRef.current = null;
     clearInitialDelayTimer();
     clearResumeTimer();
     fullscreenRequestTokenRef.current += 1;
@@ -340,6 +347,58 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     },
     [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
   );
+
+  const pauseForFrameInteraction = useCallback(() => {
+    revealControls();
+    clearInitialDelayTimer();
+    clearResumeTimer();
+    dispatch({ type: "FRAME_GESTURE_START" });
+  }, [clearInitialDelayTimer, clearResumeTimer, revealControls]);
+
+  const finishFrameInteraction = useCallback(() => {
+    clearResumeTimer();
+    dispatch({ type: "FRAME_GESTURE_END" });
+  }, [clearResumeTimer]);
+
+  const navigateByFrameInteraction = useCallback(
+    (direction: FrameNavigationDirection) => {
+      revealControls();
+
+      const fromIndex = currentIndexRef.current;
+      const nextIndex = clampIndex(fromIndex + direction, photos.length);
+      if (nextIndex === fromIndex) {
+        return;
+      }
+
+      clearInitialDelayTimer();
+      clearResumeTimer();
+      dispatch({ type: direction > 0 ? "FRAME_NEXT" : "FRAME_PREVIOUS" });
+      warmBuffer(nextIndex);
+    },
+    [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
+  );
+
+  useEffect(() => {
+    if (!frameInteractionRef.current) {
+      frameInteractionRef.current = new PlayerFrameNavigationController({
+        pause: pauseForFrameInteraction,
+        navigate: navigateByFrameInteraction,
+        finish: finishFrameInteraction
+      });
+    } else {
+      frameInteractionRef.current.setActions({
+        pause: pauseForFrameInteraction,
+        navigate: navigateByFrameInteraction,
+        finish: finishFrameInteraction
+      });
+    }
+  }, [finishFrameInteraction, navigateByFrameInteraction, pauseForFrameInteraction]);
+
+  const cancelFramePointerInteraction = useCallback(() => {
+    if (frameInteractionRef.current?.cancelPointer()) {
+      framePointerIdRef.current = null;
+    }
+  }, []);
 
   const closeSpeedMenu = useCallback(() => {
     controlDispatch({ type: "CLOSE_SPEED_MENU" });
@@ -522,6 +581,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     const isInitialMount = resetKeyRef.current === resetKey;
     if (!isInitialMount) {
       resetKeyRef.current = resetKey;
+      frameInteractionRef.current?.destroy();
+      framePointerIdRef.current = null;
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
@@ -583,13 +644,17 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       return;
     }
 
+    if (playerState.resumeDelayMs === null) {
+      return;
+    }
+
     resumeTimerRef.current = window.setTimeout(() => {
       resumeTimerRef.current = null;
       dispatch({ type: "TEMPORARY_RESUME" });
-    }, MANUAL_RESUME_DELAY_MS);
+    }, playerState.resumeDelayMs);
 
     return clearResumeTimer;
-  }, [clearResumeTimer, playerState.resumeToken, status]);
+  }, [clearResumeTimer, playerState.resumeDelayMs, playerState.resumeToken, status]);
 
   useEffect(() => {
     if (status !== "buffering" || playerState.bufferTargetIndex === null) {
@@ -689,6 +754,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       nativeFullscreenRef.current = nextActive;
       setNativeFullscreenActive(nextActive);
 
+      if (nextActive !== wasActive) {
+        cancelFramePointerInteraction();
+      }
+
       if (nextActive) {
         controlDispatch({ type: "NATIVE_FULLSCREEN_ENTERED" });
       } else if (wasActive) {
@@ -706,7 +775,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         void exitDocumentFullscreen();
       }
     };
-  }, []);
+  }, [cancelFramePointerInteraction]);
+
+  useEffect(() => {
+    window.addEventListener("blur", cancelFramePointerInteraction);
+    return () => window.removeEventListener("blur", cancelFramePointerInteraction);
+  }, [cancelFramePointerInteraction]);
 
   useEffect(() => {
     let frame = 0;
@@ -791,6 +865,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   useEffect(() => {
     revealControls();
     return () => {
+      frameInteractionRef.current?.destroy();
+      framePointerIdRef.current = null;
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
@@ -858,6 +934,23 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           className={`player-surface player-surface--${imageMode}`}
           type="button"
           onPointerDown={(event) => {
+            if (event.pointerType === "mouse" && hasFinePointer()) {
+              if (event.button !== 0 || !event.isPrimary) {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+              closeSpeedMenu();
+              revealControls();
+              framePointerIdRef.current = event.pointerId;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              const rect = event.currentTarget.getBoundingClientRect();
+              const direction: FrameNavigationDirection = event.clientX < rect.left + rect.width / 2 ? -1 : 1;
+              frameInteractionRef.current?.startPointer(direction);
+              return;
+            }
+
             if (event.pointerType === "touch") {
               touchStartRef.current = {
                 id: event.pointerId,
@@ -867,6 +960,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             }
           }}
           onPointerUp={(event) => {
+            if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
+              event.preventDefault();
+              event.stopPropagation();
+              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              framePointerIdRef.current = null;
+              frameInteractionRef.current?.releasePointer();
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              return;
+            }
+
             if (event.pointerType !== "touch" || touchStartRef.current?.id !== event.pointerId) {
               return;
             }
@@ -898,9 +1003,40 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             navigateManually(event.clientX < navigationRect.left + navigationRect.width / 2 ? -1 : 1);
           }}
           onPointerCancel={(event) => {
+            if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
+              framePointerIdRef.current = null;
+              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              frameInteractionRef.current?.cancelPointer();
+              return;
+            }
+
             if (event.pointerType === "touch") {
               touchStartRef.current = null;
               ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+            }
+          }}
+          onLostPointerCapture={(event) => {
+            if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
+              framePointerIdRef.current = null;
+              ignoreSyntheticClickUntilRef.current = Date.now() + 450;
+              frameInteractionRef.current?.cancelPointer();
+            }
+          }}
+          onWheel={(event) => {
+            if (!hasFinePointer()) {
+              return;
+            }
+
+            const handled = frameInteractionRef.current?.handleWheel({
+              deltaX: event.deltaX,
+              deltaY: event.deltaY,
+              deltaMode: event.deltaMode,
+              ctrlKey: event.ctrlKey,
+              viewportHeight: playerViewport.height
+            });
+            if (handled) {
+              event.preventDefault();
+              event.stopPropagation();
             }
           }}
           onClick={(event) => {
