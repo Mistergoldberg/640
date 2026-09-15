@@ -10,9 +10,9 @@ import sharp from "sharp";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
-const ARCHIVE_ROOT = path.resolve(APP_ROOT, "..");
-const REPO_ROOT = path.resolve(ARCHIVE_ROOT, "..");
-const DEFAULT_SOURCE_ROOT = path.resolve(APP_ROOT, "../original-photos");
+const ARCHIVE_ROOT = APP_ROOT;
+const REPO_ROOT = APP_ROOT;
+const DEFAULT_SOURCE_ROOT = path.resolve(APP_ROOT, "original-photos");
 const REPORT_ROOT = path.join(ARCHIVE_ROOT, "generated", "reports");
 const CACHE_ROOT = path.join(ARCHIVE_ROOT, "generated", "inventory-cache");
 const JSON_REPORT_PATH = path.join(REPORT_ROOT, "archive-inventory.json");
@@ -89,9 +89,9 @@ function parseArgs(argv) {
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: npm run archive:inventory -- [--source ../original-photos] [--concurrency 6] [--no-cache]",
+          "Usage: npm run archive:inventory -- [--source original-photos] [--concurrency 6] [--no-cache]",
           "",
-          "Scans source photographs read-only and writes private reports under ../generated/."
+          "Scans source photographs read-only and writes private reports under generated/."
         ].join("\n") + "\n"
       );
       process.exit(0);
@@ -137,7 +137,7 @@ function ensureSafeRoot(sourceRoot) {
   }
 
   if (!isInsideOrEqual(sourceRoot, ARCHIVE_ROOT)) {
-    throw new Error("Refusing source root outside the 640 archive directory");
+    throw new Error("Refusing source root outside the pixilation.org archive directory");
   }
 
   if (isInsideOrEqual(REPORT_ROOT, sourceRoot) || isInsideOrEqual(CACHE_ROOT, sourceRoot)) {

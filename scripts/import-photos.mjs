@@ -13,12 +13,21 @@ const DISPLAY_MAX_WIDTH = 640;
 const DISPLAY_MAX_HEIGHT = 480;
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
-const PHOTO_SOURCE_ROOT = path.resolve(APP_ROOT, "..");
+const PHOTO_SOURCE_ROOT = APP_ROOT;
 const ORIGINAL_PHOTOS_ROOT = path.join(PHOTO_SOURCE_ROOT, "original-photos");
 const GENERATED_MEDIA_ROOT = path.join(PHOTO_SOURCE_ROOT, "generated", "library");
 const GENERATED_REPORTS_ROOT = path.join(PHOTO_SOURCE_ROOT, "generated", "reports");
 const STANDALONE_SOURCE_YEARS = new Set(["2001", "2013"]);
 const NOISE_FILENAMES = new Set([".DS_Store", "Thumbs.db", "desktop.ini"]);
+const BLOCKED_SOURCE_ROOTS = [
+  ".git",
+  "dist",
+  "generated",
+  "node_modules",
+  "public",
+  "scripts",
+  "src"
+].map((name) => path.join(APP_ROOT, name));
 
 function parseArgs(argv) {
   const args = {
@@ -876,10 +885,10 @@ async function resolveSourceScope(args) {
   if (args.source) {
     const sourceRoot = resolveMaybeRelative(args.source);
     if (!isInsideOrEqual(sourceRoot, PHOTO_SOURCE_ROOT)) {
-      throw new Error("Source folder must be inside the 640 archive workspace");
+      throw new Error("Source folder must be inside the pixilation.org archive workspace");
     }
-    if (isInsideOrEqual(sourceRoot, APP_ROOT)) {
-      throw new Error("Source folder must not be inside the app workspace");
+    if (BLOCKED_SOURCE_ROOTS.some((blockedRoot) => isInsideOrEqual(sourceRoot, blockedRoot))) {
+      throw new Error("Source folder must not be inside app code, generated output, or dependency directories");
     }
     if (sourceRoot === PHOTO_SOURCE_ROOT || sourceRoot === ORIGINAL_PHOTOS_ROOT) {
       throw new Error("Use the default year resolver instead of scanning the entire archive root");

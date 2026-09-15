@@ -6,7 +6,7 @@ import sharp from "sharp";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
-const ARCHIVE_ROOT = path.resolve(APP_ROOT, "..");
+const ARCHIVE_ROOT = APP_ROOT;
 const MEDIA_ROOT = path.join(ARCHIVE_ROOT, "generated", "library");
 const REPORT_ROOT = path.join(ARCHIVE_ROOT, "generated", "reports");
 const REPORT_PATH = path.join(REPORT_ROOT, "public-release-audit.json");

@@ -7,7 +7,7 @@ import type { Connect, Plugin } from "vite";
 import { resolveDeploymentConfig } from "./src/lib/deploymentConfig";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
-const mediaRoot = path.resolve(appRoot, "../generated/library");
+const mediaRoot = path.resolve(appRoot, "generated/library");
 
 function isInsideOrEqual(child: string, parent: string) {
   const relative = path.relative(parent, child);

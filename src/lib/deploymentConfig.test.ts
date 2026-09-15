@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveDeploymentConfig } from "./deploymentConfig";
 
 describe("deployment configuration", () => {
-  it("keeps local development at /640/ with local media", () => {
-    expect(resolveDeploymentConfig("development", {})).toEqual({ base: "/640/", mediaBaseUrl: "" });
+  it("keeps local development at / with local media", () => {
+    expect(resolveDeploymentConfig("development", {})).toEqual({ base: "/", mediaBaseUrl: "" });
   });
   it("builds production for the apex and public R2 origin by default", () => {
     expect(resolveDeploymentConfig("production", {})).toEqual({

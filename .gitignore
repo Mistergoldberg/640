@@ -3,8 +3,14 @@ dist/
 .vite/
 test-results/
 playwright-report/
+generated/
+original-photos/
+dev-01/
+20[0-9][0-9]/
 .env
 .env.*
 !.env.example
 .rclone.conf
 rclone.conf
+.DS_Store
+Thumbs.db

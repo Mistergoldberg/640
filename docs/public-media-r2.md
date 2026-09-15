@@ -1,23 +1,22 @@
 # 640x480 Public Media Release
 
-This app publishes generated display and thumbnail derivatives only. Original source folders such as `640/2001`, `640/2013`, and future source-year folders stay local and must never be uploaded.
+This app publishes generated display and thumbnail derivatives only. Original source folders such as `2001`, `2013`, and future source-year folders stay local and must never be uploaded.
 
 ## Public Payload
 
 Publish only:
 
 ```text
-640/generated/library/
+generated/library/
 ```
 
 Do not publish:
 
 ```text
-640/2001/
-640/2013/
-640/dev-01/
-640/app/
-640/generated/reports/
+2001/
+2013/
+dev-01/
+generated/reports/
 ```
 
 Run this before planning any upload:
@@ -29,7 +28,7 @@ npm run release:audit
 The audit writes:
 
 ```text
-../generated/reports/public-release-audit.json
+generated/reports/public-release-audit.json
 ```
 
 The report is ignored by Git and is not browser-accessible.
@@ -72,7 +71,7 @@ export VITE_MEDIA_BASE_URL="https://media.example.com/"
 For local development, leave `VITE_MEDIA_BASE_URL` blank so Vite serves:
 
 ```text
-http://127.0.0.1:5173/640/media/
+http://127.0.0.1:5173/media/
 ```
 
 For production builds, set `VITE_MEDIA_BASE_URL` to the custom media domain.

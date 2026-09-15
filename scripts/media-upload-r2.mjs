@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
-const ARCHIVE_ROOT = path.resolve(APP_ROOT, "..");
+const ARCHIVE_ROOT = APP_ROOT;
 const MEDIA_ROOT = path.join(ARCHIVE_ROOT, "generated", "library");
 const REPORT_PATH = path.join(ARCHIVE_ROOT, "generated", "reports", "public-release-audit.json");
 const ALLOWED_KEY_PATTERN = /^(?:19|20)\d{2}\/(?:thumbs|display)\/(?:19|20)\d{2}-[a-f0-9]{14}\.(?:jpg|jpeg|png|webp|gif|tif|tiff|heic|heif)$/i;
@@ -139,7 +139,7 @@ async function main() {
     throw new Error("Refusing a generated media root that resolves through a symlink");
   }
   if (!isInsideOrEqual(mediaRoot, path.join(ARCHIVE_ROOT, "generated", "library"))) {
-    throw new Error("Refusing to use a media root outside 640/generated/library");
+    throw new Error("Refusing to use a media root outside generated/library");
   }
   if (/\/(?:19|20)\d{2}$/.test(toPosix(mediaRoot)) || mediaRoot.includes(`${path.sep}dev-01`)) {
     throw new Error("Refusing to use a source-year folder as upload source");

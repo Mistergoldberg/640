@@ -82,7 +82,7 @@ Verified deployment results:
   media hostname remains attached to R2 with active ownership and SSL.
 
 The exact server inventory and effective configuration are stored only in ignored
-local `640/generated/reports/deployment-*` files with restricted permissions.
+local `generated/reports/deployment-*` files with restricted permissions.
 They are not part of the public build or Git checkpoint.
 
 ## Architecture and public/private boundary
@@ -101,7 +101,7 @@ Generated media belongs in the dedicated R2 Standard bucket
 but traffic to it now permanently redirects to `https://media.pixilation.org/`
 with the same path and query string.
 
-Only `640/generated/library/` may be uploaded as public media. Asset keys start
+Only `generated/library/` may be uploaded as public media. Asset keys start
 with `2001/`, `2002/` or `2013/`, without a local directory prefix. The server
 receives only the static application `dist` payload. Current year totals are
 6,669 for 2001, 479 for 2002 and 4,213 for 2013.
@@ -129,7 +129,7 @@ separate indexed documents.
 
 ## Local commands
 
-Run from `640/app`:
+Run from the repository root:
 
 ```sh
 npm ci
@@ -140,14 +140,14 @@ npm run release:audit
 npm run media:upload:dry-run
 ```
 
-Development currently uses `/640/`; Vite serves the local generated library at
-`/640/media/`. Leave `VITE_MEDIA_BASE_URL` unset to use local media. Audit output
-goes to ignored `640/generated/reports/`.
+Development currently uses `/`; Vite serves the local generated library at
+`/media/`. Leave `VITE_MEDIA_BASE_URL` unset to use local media. Audit output
+goes to ignored `generated/reports/`.
 
 ## Production build
 
 `src/lib/deploymentConfig.ts` centralizes deployment configuration. Development
-defaults to `/640/` with local generated media. Production defaults to `/` and
+defaults to `/` with local generated media. Production defaults to `/` and
 `https://media.pixilation.org/`, with local-media middleware disabled.
 Components obtain the base through Vite; history and sharing preserve the root
 URL and query parameters. The explicit production command is:
@@ -170,9 +170,9 @@ Git, build artifacts or this document. The existing uploader requires locally
 configured R2 account, bucket, endpoint and bucket-scoped S3 credentials; it does
 not automatically obtain those credentials from a Wrangler login.
 
-The ignored local `640/generated/reports/configure-r2.command` helper collects
+The ignored local `generated/reports/configure-r2.command` helper collects
 the Access Key ID and Secret Access Key through hidden Terminal input. It writes
-only to `640/generated/.credentials/insertcatchytitlehere-r2.json` with mode 0600
+only to `generated/.credentials/insertcatchytitlehere-r2.json` with mode 0600
 in a mode 0700 directory. It refuses to overwrite existing credentials and does
 not upload anything. That directory is outside the public-media upload source.
 
