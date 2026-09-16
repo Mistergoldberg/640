@@ -166,6 +166,12 @@ img {
   right: 0;
 }
 
+.year-segment-spacer {
+  display: block;
+  width: 100%;
+  pointer-events: none;
+}
+
 .archive-year-heading {
   display: flex;
   align-items: baseline;

@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { assetUrl, mediaUrl } from "./lib/assets";
-import { buildEditorialRows, type JustifiedItem, type JustifiedRowTone } from "./lib/justifiedRows";
 import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { validateCatalog } from "./data/manifestValidation";
-import { type LoadedAlbumSummary, type YearCollection } from "./data/useYearCollection";
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
+import {
+  albumFolderLabel,
+  buildYearSegmentLayout,
+  type AlbumAnchor,
+  type GridLayout
+} from "./archive/yearSegmentLayout";
+import { SEAMLESS_YEAR_SEGMENTS_ENABLED } from "./archive/seamlessYearSegmentsFlag";
 import {
   archiveWindowWarnings,
   boundaryArchiveTarget,
@@ -35,74 +40,14 @@ import {
 } from "./archive/archiveRestoration";
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "./player/fullscreen";
 import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
-import type { Catalog, Photo } from "./types";
+import type { Catalog } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
 const GRID_MIN_OVERSCAN_PX = 260;
 const GRID_SCROLL_AHEAD_PX = 720;
-const ALBUM_GAP_PX = 18;
-const ALBUM_HEADING_HEIGHT_PX = 24;
-const ALBUM_HEADING_GAP_PX = 9;
-const ALBUM_ERROR_HEIGHT_PX = 52;
 const RESTORE_OFFSET_PX = 112;
 const ARCHIVE_JUMP_OFFSET_PX = 196;
-
-interface LayoutHeading {
-  type: "heading";
-  id: string;
-  top: number;
-  height: number;
-  year: string;
-  album: LoadedAlbumSummary;
-}
-
-interface LayoutRow {
-  type: "row";
-  id: string;
-  top: number;
-  height: number;
-  gap: number;
-  tone: JustifiedRowTone;
-  year: string;
-  albumId: string;
-  items: JustifiedItem[];
-}
-
-interface LayoutAlbumError {
-  type: "album-error";
-  id: string;
-  top: number;
-  height: number;
-  year: string;
-  album: LoadedAlbumSummary;
-}
-
-type LayoutEntry = LayoutHeading | LayoutRow | LayoutAlbumError;
-
-interface AlbumAnchor {
-  id: string;
-  year: string;
-  folderLabel: string;
-  top: number;
-  bottom: number;
-  count: number;
-}
-
-interface YearAnchor {
-  year: string;
-  top: number;
-  bottom: number;
-  albums: AlbumAnchor[];
-}
-
-interface GridLayout {
-  entries: LayoutEntry[];
-  totalHeight: number;
-  photoTops: Map<string, number>;
-  albumAnchors: AlbumAnchor[];
-  yearAnchors: YearAnchor[];
-}
 
 interface LiveLayoutAnchor {
   year: string;
@@ -115,20 +60,8 @@ type CatalogLoadState =
   | { status: "error"; message: string }
   | { status: "ready"; catalog: Catalog };
 
-function sortPhotos(photos: Photo[]) {
-  return [...photos].sort((left, right) => left.sortPosition - right.sortPosition);
-}
-
 function yearExists(catalog: Catalog, year: string | null) {
   return Boolean(year && catalog.years.some((candidate) => candidate.year === year));
-}
-
-function yearFromAlbumName(name: string, fallbackYear = "") {
-  return name.match(/^(\d{4})/)?.[1] || fallbackYear;
-}
-
-function albumFolderLabel(album: LoadedAlbumSummary) {
-  return formatPublicArchiveAlbumLabel(album.name, album.year);
 }
 
 function readUrlPhotoId() {
@@ -306,149 +239,6 @@ function subscribeViewport(onStoreChange: () => void) {
 
 function useViewport() {
   return useSyncExternalStore(subscribeViewport, readViewportSnapshot, () => serverViewport);
-}
-
-function buildGridLayout(collection: YearCollection, width: number, targetRowHeight: number, gap: number, compactViewport = false): GridLayout {
-  if (!width) {
-    return {
-      entries: [],
-      totalHeight: 0,
-      photoTops: new Map(),
-      albumAnchors: [],
-      yearAnchors: []
-    };
-  }
-
-  const photosByAlbum = new Map<string, Photo[]>();
-  for (const photo of sortPhotos(collection.photos)) {
-    if (!photosByAlbum.has(photo.albumId)) {
-      photosByAlbum.set(photo.albumId, []);
-    }
-
-    photosByAlbum.get(photo.albumId)?.push(photo);
-  }
-
-  const entries: LayoutEntry[] = [];
-  const photoTops = new Map<string, number>();
-  const albumAnchors: AlbumAnchor[] = [];
-  const yearAnchors: YearAnchor[] = [];
-  let activeYear = "";
-  let activeYearAnchor: YearAnchor | null = null;
-  let top = 0;
-
-  collection.index.albums.forEach((album) => {
-    const photos = photosByAlbum.get(album.id) || [];
-    if (!photos.length && album.loadState === "ready") {
-      return;
-    }
-
-    const albumYear = album.year || yearFromAlbumName(album.name, activeYear);
-    if (albumYear !== activeYear) {
-      if (activeYearAnchor) {
-        activeYearAnchor.bottom = top;
-      }
-
-      if (entries.length) {
-        top += ALBUM_GAP_PX;
-      }
-
-      activeYear = albumYear;
-      const yearTop = top;
-      activeYearAnchor = {
-        year: albumYear,
-        top: yearTop,
-        bottom: yearTop,
-        albums: []
-      };
-      yearAnchors.push(activeYearAnchor);
-    } else if (entries.length) {
-      top += ALBUM_GAP_PX;
-    }
-
-    const albumTop = top;
-    entries.push({
-      type: "heading",
-      id: `heading-${album.id}`,
-      top,
-      height: ALBUM_HEADING_HEIGHT_PX,
-      year: albumYear,
-      album
-    });
-    top += ALBUM_HEADING_HEIGHT_PX + ALBUM_HEADING_GAP_PX;
-
-    if (album.loadState !== "ready") {
-      entries.push({
-        type: "album-error",
-        id: `album-error-${album.id}`,
-        top,
-        height: ALBUM_ERROR_HEIGHT_PX,
-        year: albumYear,
-        album
-      });
-      top += ALBUM_ERROR_HEIGHT_PX;
-      const albumAnchor = {
-        id: album.id,
-        year: albumYear,
-        folderLabel: albumFolderLabel(album),
-        top: albumTop,
-        bottom: top,
-        count: photos.length
-      };
-      albumAnchors.push(albumAnchor);
-      activeYearAnchor?.albums.push(albumAnchor);
-      return;
-    }
-
-    let albumHasPhotoEntries = false;
-
-    buildEditorialRows(photos, width, targetRowHeight, gap, compactViewport).forEach((row, rowIndex) => {
-      entries.push({
-        type: "row",
-        id: `${album.id}-${rowIndex}-${row.id}`,
-        top,
-        height: row.height,
-        gap,
-        tone: row.tone || "standard",
-        year: albumYear,
-        albumId: album.id,
-        items: row.items
-      });
-
-      row.items.forEach((item) => {
-        photoTops.set(item.photo.id, top);
-      });
-      top += row.height + gap;
-      albumHasPhotoEntries = true;
-    });
-
-    if (albumHasPhotoEntries) {
-      top -= gap;
-    }
-
-    const albumAnchor = {
-      id: album.id,
-      year: albumYear,
-      folderLabel: albumFolderLabel(album),
-      top: albumTop,
-      bottom: top,
-      count: photos.length
-    };
-    albumAnchors.push(albumAnchor);
-    activeYearAnchor?.albums.push(albumAnchor);
-  });
-
-  const finalYearAnchor = yearAnchors[yearAnchors.length - 1];
-  if (finalYearAnchor) {
-    finalYearAnchor.bottom = top;
-  }
-
-  return {
-    entries,
-    totalHeight: Math.max(0, top),
-    photoTops,
-    albumAnchors,
-    yearAnchors
-  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -732,9 +522,11 @@ function App() {
   if (catalogState.status === "error") return <SystemState title="640×480" message={catalogState.message} />;
   if (!activeYear || !states.size) return <SystemState title="640×480" message="Building archive index" />;
 
+  const ArchiveGrid = SEAMLESS_YEAR_SEGMENTS_ENABLED ? SegmentedYearGrid : YearWindowGrid;
+
   return (
     <>
-      <YearWindowGrid
+      <ArchiveGrid
         years={years}
         states={states}
         timelineModel={timelineModel}
@@ -777,6 +569,27 @@ function SystemState({ title, message, actionLabel, onAction }: { title: string;
   );
 }
 
+interface YearWindowGridProps {
+  years: string[];
+  states: Map<string, ArchiveYearState>;
+  timelineModel: ReturnType<typeof buildArchiveTimelineModel>;
+  activeYear: string;
+  restoration: ArchiveRestorationState;
+  onNavigate: (target: ArchiveTarget | ArchiveRestorationTarget, intent: ArchiveNavigationIntent) => void;
+  onRestorationWait: (generation: number) => void;
+  onRestorationApply: (generation: number) => void;
+  onRestorationSettle: (generation: number, visibleYear: string) => void;
+  onRestorationCancel: (generation: number) => void;
+  onPersistAnchor: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
+  onOpenPhoto: (year: string, photoId: string) => void;
+  onRetryYear: (year: string) => void;
+  onRetryAlbum: (year: string, albumId: string) => void;
+}
+
+function SegmentedYearGrid(props: YearWindowGridProps) {
+  return <YearWindowGrid {...props} />;
+}
+
 function YearWindowGrid({
   years,
   states,
@@ -792,22 +605,7 @@ function YearWindowGrid({
   onOpenPhoto,
   onRetryYear,
   onRetryAlbum
-}: {
-  years: string[];
-  states: Map<string, ArchiveYearState>;
-  timelineModel: ReturnType<typeof buildArchiveTimelineModel>;
-  activeYear: string;
-  restoration: ArchiveRestorationState;
-  onNavigate: (target: ArchiveTarget | ArchiveRestorationTarget, intent: ArchiveNavigationIntent) => void;
-  onRestorationWait: (generation: number) => void;
-  onRestorationApply: (generation: number) => void;
-  onRestorationSettle: (generation: number, visibleYear: string) => void;
-  onRestorationCancel: (generation: number) => void;
-  onPersistAnchor: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
-  onOpenPhoto: (year: string, photoId: string) => void;
-  onRetryYear: (year: string) => void;
-  onRetryAlbum: (year: string, albumId: string) => void;
-}) {
+}: YearWindowGridProps) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const chromeRef = useRef<HTMLElement | null>(null);
   const yearHeadingRef = useRef<HTMLElement | null>(null);
@@ -826,7 +624,7 @@ function YearWindowGrid({
   const targetHeight = compactViewport ? 184 : width < 520 ? 138 : width < 900 ? 146 : 174;
   const gap = width < 520 ? 3 : 4;
   const layout = useMemo(() => collection
-    ? buildGridLayout(collection, width, targetHeight, gap, compactViewport)
+    ? buildYearSegmentLayout({ collection, width, targetRowHeight: targetHeight, gap, compactViewport })
     : { entries: [], totalHeight: 0, photoTops: new Map<string, number>(), albumAnchors: [], yearAnchors: [] },
   [collection, compactViewport, gap, targetHeight, width]);
   const photoAnchors = useMemo(() => [...layout.photoTops].sort((left, right) => left[1] - right[1]), [layout.photoTops]);
