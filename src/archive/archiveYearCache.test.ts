@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   requestIsCurrent,
   shouldCancelYearRequest,
   touchBoundedYearCache,
   YEAR_COLLECTION_CACHE_CAPACITY
 } from "./archiveYearCache";
+import { loadAlbumResults } from "./useArchiveYearCache";
+import type { AlbumSummary } from "../types";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("bounded archive year cache", () => {
   it("keeps only the active and most recently used full collections", () => {
@@ -32,5 +38,36 @@ describe("bounded archive year cache", () => {
     expect(requestIsCurrent(4, 4, true)).toBe(false);
     expect(shouldCancelYearRequest("2001", "2013")).toBe(true);
     expect(shouldCancelYearRequest("2013", "2013")).toBe(false);
+  });
+
+  it("limits concurrent album manifest requests while preserving result order", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      fetched.push(url);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return {
+        ok: true,
+        json: async () => ({ photos: [] })
+      };
+    });
+    const albums: AlbumSummary[] = Array.from({ length: 8 }, (_, index) => ({
+      id: `album-${index}`,
+      name: `Album ${index}`,
+      count: 0,
+      manifestUrl: `data/test/album-${index}.json`
+    }));
+
+    const results = await loadAlbumResults(albums, new AbortController().signal, 3);
+
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(fetched).toHaveLength(8);
+    expect(results).toHaveLength(8);
+    expect(results.map((result) => result.status)).toEqual(Array(8).fill("fulfilled"));
+    expect(results.map((result) => result.status === "fulfilled" ? result.value.album.id : "")).toEqual(albums.map((album) => album.id));
   });
 });

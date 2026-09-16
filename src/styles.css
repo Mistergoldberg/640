@@ -172,6 +172,52 @@ img {
   pointer-events: none;
 }
 
+.year-segment {
+  display: block;
+}
+
+.year-boundary-sentinel {
+  height: 1px;
+  margin-top: -1px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.year-segment-boundary-state {
+  display: grid;
+  min-height: 92px;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  color: rgba(244, 241, 234, 0.54);
+  font-size: 0.76rem;
+}
+
+.year-segment-boundary-state strong {
+  color: rgba(244, 241, 234, 0.82);
+}
+
+.year-segment-boundary-state button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 184, 184, 0.3);
+  border-radius: 5px;
+  color: #ffd3d3;
+  background: rgba(255, 184, 184, 0.08);
+  cursor: pointer;
+}
+
+.year-segment-boundary-state--loading {
+  background: linear-gradient(90deg, rgba(244, 241, 234, 0.01), rgba(244, 241, 234, 0.04), rgba(244, 241, 234, 0.01));
+  background-size: 220% 100%;
+  animation: archive-loading 1.6s ease-in-out infinite;
+}
+
+.year-segment-boundary-state--error {
+  color: #ffb8b8;
+}
+
 .archive-year-heading {
   display: flex;
   align-items: baseline;

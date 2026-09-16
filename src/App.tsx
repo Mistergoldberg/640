@@ -4,7 +4,7 @@ import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { validateCatalog } from "./data/manifestValidation";
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
-import { useArchiveYearCache, type ArchiveYearState } from "./archive/useArchiveYearCache";
+import { useArchiveYearCache, type ArchiveLoadReason, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
 import {
   albumFolderLabel,
@@ -48,6 +48,13 @@ const GRID_MIN_OVERSCAN_PX = 260;
 const GRID_SCROLL_AHEAD_PX = 720;
 const RESTORE_OFFSET_PX = 112;
 const ARCHIVE_JUMP_OFFSET_PX = 196;
+const SEGMENT_HANDOFF_HYSTERESIS_PX = 96;
+const SEGMENT_PREFETCH_MIN_PX = 560;
+const SEGMENT_PREFETCH_MAX_PX = 1600;
+const SEGMENT_ROW_BUDGET = 80;
+const SEGMENT_PHOTO_BUDGET = 300;
+
+type BoundaryDirection = "newer" | "older";
 
 interface LiveLayoutAnchor {
   year: string;
@@ -314,7 +321,11 @@ function App() {
   const pendingClosePhotoIdRef = useRef<string | null>(null);
   const initializedRef = useRef(false);
   const savedAnchorsRef = useRef(new Map<string, Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">>());
-  const { states, indexes, collections, cachedYears, loadingYears, loadYear, retryYear, retryAlbum } = useArchiveYearCache(catalog, activeYear);
+  const { states, indexes, collections, cachedYears, loadingYears, loadYear, cancelYearLoad, retryYear, retryAlbum } = useArchiveYearCache(
+    catalog,
+    activeYear,
+    { maxConcurrentAlbumRequests: SEAMLESS_YEAR_SEGMENTS_ENABLED ? 3 : undefined }
+  );
   const years = useMemo(() => catalog ? orderedArchiveYears(catalog).map((year) => year.year) : [], [catalog]);
   const timelineModel = useMemo(
     () => catalog ? buildArchiveTimelineModel(catalog, indexes) : { years: [], anchors: [] },
@@ -382,6 +393,23 @@ function App() {
       updateDiagnostics({ lastProgrammaticScroll: detail }, "programmatic-scroll", detail);
       window.scrollTo({ top: 0, behavior: "auto" });
     }
+  }, [catalog, catalogueId, loadYear]);
+
+  const passiveHandoffToYear = useCallback((anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => {
+    if (!catalog || !yearExists(catalog, anchor.year) || activeYearRef.current === anchor.year) return;
+    const previousYear = activeYearRef.current;
+    recordDiagnostic("archive-passive-handoff", {
+      previousYear,
+      year: anchor.year,
+      albumId: anchor.albumId,
+      photoId: anchor.photoId,
+      adjustmentPx: anchor.adjustmentPx
+    });
+    updateUrlState(anchor.year, null, "replace", catalogueId, false, anchor);
+    activeYearRef.current = anchor.year;
+    setActiveYear(anchor.year);
+    loadYear(anchor.year, "passive");
+    dispatchRestoration({ type: "cancel" });
   }, [catalog, catalogueId, loadYear]);
 
   useEffect(() => {
@@ -542,6 +570,9 @@ function App() {
           if (!activePhotoIdRef.current) replaceCurrentHistoryAnchor(catalogueId, anchor);
         }}
         onOpenPhoto={openPhoto}
+        onRequestYear={(year, reason) => loadYear(year, reason)}
+        onCancelYearRequest={cancelYearLoad}
+        onPassiveHandoff={passiveHandoffToYear}
         onRetryYear={retryYear}
         onRetryAlbum={retryAlbum}
       />
@@ -582,12 +613,16 @@ interface YearWindowGridProps {
   onRestorationCancel: (generation: number) => void;
   onPersistAnchor: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
   onOpenPhoto: (year: string, photoId: string) => void;
+  onRequestYear: (year: string, reason: ArchiveLoadReason) => void;
+  onCancelYearRequest: (year: string) => void;
+  onPassiveHandoff: (anchor: Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">) => void;
   onRetryYear: (year: string) => void;
   onRetryAlbum: (year: string, albumId: string) => void;
+  segmentedMode?: boolean;
 }
 
 function SegmentedYearGrid(props: YearWindowGridProps) {
-  return <YearWindowGrid {...props} />;
+  return <YearWindowGrid {...props} segmentedMode />;
 }
 
 function YearWindowGrid({
@@ -603,21 +638,37 @@ function YearWindowGrid({
   onRestorationCancel,
   onPersistAnchor,
   onOpenPhoto,
+  onRequestYear,
+  onCancelYearRequest,
+  onPassiveHandoff,
   onRetryYear,
-  onRetryAlbum
+  onRetryAlbum,
+  segmentedMode = false
 }: YearWindowGridProps) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const chromeRef = useRef<HTMLElement | null>(null);
   const yearHeadingRef = useRef<HTMLElement | null>(null);
+  const activeSegmentRef = useRef<HTMLElement | null>(null);
+  const adjacentSegmentRefs = useRef(new Map<string, HTMLElement>());
+  const adjacentGridRefs = useRef(new Map<string, HTMLDivElement>());
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
   const viewport = useViewport();
   const previousLayoutRef = useRef<{ year: string; layout: GridLayout } | null>(null);
   const pendingResizeAnchorRef = useRef<LiveLayoutAnchor | null>(null);
   const previousScrollYRef = useRef(0);
+  const scrollDirectionRef = useRef<BoundaryDirection | null>(null);
   const restorationRef = useRef(restoration);
   const diagnosticLayoutSignatureRef = useRef("");
   const diagnosticRangeSignatureRef = useRef("");
   const activeWarningsRef = useRef(new Set<string>());
+  const requestedSegmentYearsRef = useRef(new Set<string>());
+  const passiveHandoffTargetRef = useRef<string | null>(null);
+  const lastPassiveHandoffRef = useRef("");
+  const compensatedPrependedYearsRef = useRef(new Set<string>());
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [mountedSegmentYears, setMountedSegmentYears] = useState([activeYear]);
+  const [pendingAdjacent, setPendingAdjacent] = useState<{ year: string; direction: BoundaryDirection; required: boolean } | null>(null);
   const state = states.get(activeYear);
   const collection = state?.status === "ready" ? state.collection : null;
   const compactViewport = viewport.height <= 460 && width >= 620;
@@ -631,7 +682,12 @@ function YearWindowGrid({
   const indexById = useMemo(() => new Map(collection?.photos.map((photo, index) => [photo.id, index]) || []), [collection]);
   const containerTop = ref.current ? ref.current.getBoundingClientRect().top + viewport.scrollY : 0;
   const localViewportTop = viewport.scrollY - containerTop;
-  const scrollingDown = viewport.scrollY >= previousScrollYRef.current;
+  if (viewport.scrollY > previousScrollYRef.current) {
+    scrollDirectionRef.current = "older";
+  } else if (viewport.scrollY < previousScrollYRef.current) {
+    scrollDirectionRef.current = "newer";
+  }
+  const scrollingDown = scrollDirectionRef.current !== "newer";
   previousScrollYRef.current = viewport.scrollY;
   const trailingOverscan = Math.max(GRID_MIN_OVERSCAN_PX, viewport.height * 0.4);
   const leadingOverscan = Math.max(GRID_SCROLL_AHEAD_PX, viewport.height);
@@ -656,10 +712,248 @@ function YearWindowGrid({
     : null;
   const olderTarget = boundaryArchiveTarget(timelineModel, activeYear, "older");
   const newerTarget = boundaryArchiveTarget(timelineModel, activeYear, "newer");
+  const activeYearIndex = years.indexOf(activeYear);
+  const newerMountedYear = segmentedMode
+    ? mountedSegmentYears.find((year) => years.indexOf(year) >= 0 && years.indexOf(year) < activeYearIndex) || null
+    : null;
+  const olderMountedYear = segmentedMode
+    ? mountedSegmentYears.find((year) => years.indexOf(year) > activeYearIndex) || null
+    : null;
+  const segmentPrefetchDistance = Math.round(clamp(viewport.height * 1.5, SEGMENT_PREFETCH_MIN_PX, SEGMENT_PREFETCH_MAX_PX));
+  const adjacentLayoutByYear = useMemo(() => {
+    const next = new Map<string, GridLayout>();
+    if (!segmentedMode) return next;
+    for (const year of mountedSegmentYears) {
+      if (year === activeYear) continue;
+      const adjacentState = states.get(year);
+      if (adjacentState?.status !== "ready" || !adjacentState.collection) continue;
+      next.set(year, buildYearSegmentLayout({
+        collection: adjacentState.collection,
+        width,
+        targetRowHeight: targetHeight,
+        gap,
+        compactViewport
+      }));
+    }
+    return next;
+  }, [activeYear, compactViewport, gap, mountedSegmentYears, segmentedMode, states, targetHeight, width]);
+
+  const setAdjacentSegmentRef = useCallback((year: string, node: HTMLElement | null) => {
+    if (node) adjacentSegmentRefs.current.set(year, node);
+    else adjacentSegmentRefs.current.delete(year);
+  }, []);
+
+  const setAdjacentGridRef = useCallback((year: string, node: HTMLDivElement | null) => {
+    if (node) adjacentGridRefs.current.set(year, node);
+    else adjacentGridRefs.current.delete(year);
+  }, []);
+
+  const adjacentTargetForDirection = useCallback((direction: BoundaryDirection) => (
+    direction === "older" ? olderTarget : newerTarget
+  ), [newerTarget, olderTarget]);
+
+  const constrainedConnection = useCallback(() => {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    return Boolean(connection?.saveData);
+  }, []);
+
+  const requestAdjacentSegment = useCallback((direction: BoundaryDirection, required = false) => {
+    if (!segmentedMode) return;
+    const target = adjacentTargetForDirection(direction);
+    if (!target) return;
+    if (!required && constrainedConnection()) return;
+    if (mountedSegmentYears.includes(target.year)) return;
+    if (mountedSegmentYears.length >= 2) return;
+
+    setPendingAdjacent((current) => {
+      if (current && current.year !== target.year && !current.required) {
+        onCancelYearRequest(current.year);
+        requestedSegmentYearsRef.current.delete(current.year);
+      }
+      return { year: target.year, direction, required: required || current?.year === target.year && current.required || false };
+    });
+
+    if (!requestedSegmentYearsRef.current.has(target.year)) {
+      requestedSegmentYearsRef.current.add(target.year);
+      onRequestYear(target.year, required ? "boundary" : "prefetch");
+      recordDiagnostic("year-segment-prefetch-request", { year: target.year, direction, required });
+    }
+  }, [
+    adjacentTargetForDirection,
+    constrainedConnection,
+    mountedSegmentYears,
+    onCancelYearRequest,
+    onRequestYear,
+    segmentedMode
+  ]);
+
+  const collectionForSegment = useCallback((year: string) => (
+    year === activeYear ? collection : states.get(year)?.collection || null
+  ), [activeYear, collection, states]);
+
+  const layoutForSegment = useCallback((year: string) => (
+    year === activeYear ? layout : adjacentLayoutByYear.get(year) || null
+  ), [activeYear, adjacentLayoutByYear, layout]);
+
+  const gridForSegment = useCallback((year: string) => (
+    year === activeYear ? ref.current : adjacentGridRefs.current.get(year) || null
+  ), [activeYear, ref]);
+
+  const sectionForSegment = useCallback((year: string) => (
+    year === activeYear ? activeSegmentRef.current : adjacentSegmentRefs.current.get(year) || null
+  ), [activeYear]);
+
+  const visibleEntriesForGrid = useCallback((segmentLayout: GridLayout, grid: HTMLElement | null) => {
+    if (!grid) return [];
+    const segmentTop = grid.getBoundingClientRect().top + viewport.scrollY;
+    const segmentViewportTop = viewport.scrollY - segmentTop;
+    const segmentVisibleTop = segmentViewportTop - (scrollingDown ? trailingOverscan : leadingOverscan);
+    const segmentVisibleBottom = segmentViewportTop + viewport.height + (scrollingDown ? leadingOverscan : trailingOverscan);
+    return segmentLayout.entries.filter((entry) => entry.top + entry.height >= segmentVisibleTop && entry.top <= segmentVisibleBottom);
+  }, [leadingOverscan, scrollingDown, trailingOverscan, viewport.height, viewport.scrollY]);
+
+  const stableAnchorForSegment = useCallback((year: string) => {
+    const segmentLayout = layoutForSegment(year);
+    const grid = gridForSegment(year);
+    if (!segmentLayout || !grid) {
+      return { year, albumId: null, photoId: null, adjustmentPx: 0 };
+    }
+    const gridTop = grid.getBoundingClientRect().top + window.scrollY;
+    const localViewportTop = window.scrollY - gridTop;
+    const photoAnchor = nearestPhotoAnchor([...segmentLayout.photoTops].sort((left, right) => left[1] - right[1]), localViewportTop + RESTORE_OFFSET_PX);
+    const album = findAlbumAtTop(segmentLayout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
+    const photoId = photoAnchor?.[0] || null;
+    const anchorTop = photoAnchor?.[1] ?? album?.top ?? 0;
+    const baseOffset = photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
+    return {
+      year,
+      albumId: album?.id || null,
+      photoId,
+      adjustmentPx: localViewportTop - (anchorTop - baseOffset)
+    };
+  }, [gridForSegment, layoutForSegment]);
 
   useLayoutEffect(() => {
     restorationRef.current = restoration;
   }, [restoration]);
+
+  useEffect(() => {
+    if (!segmentedMode) return;
+    if (passiveHandoffTargetRef.current === activeYear) {
+      passiveHandoffTargetRef.current = null;
+      setPendingAdjacent(null);
+      return;
+    }
+    requestedSegmentYearsRef.current.clear();
+    compensatedPrependedYearsRef.current.clear();
+    scrollDirectionRef.current = null;
+    setPendingAdjacent(null);
+    setMountedSegmentYears([activeYear]);
+    lastPassiveHandoffRef.current = "";
+  }, [activeYear, segmentedMode]);
+
+  useEffect(() => {
+    if (!segmentedMode || !pendingAdjacent) return;
+    const pendingState = states.get(pendingAdjacent.year);
+    if (pendingState?.status !== "ready" || !pendingState.collection) return;
+    setMountedSegmentYears((current) => {
+      if (current.includes(pendingAdjacent.year)) return current;
+      if (current.length >= 2) return current;
+      return [...current, pendingAdjacent.year];
+    });
+  }, [pendingAdjacent, segmentedMode, states]);
+
+  useLayoutEffect(() => {
+    if (!segmentedMode || !newerMountedYear || pendingAdjacent?.year !== newerMountedYear || pendingAdjacent.direction !== "newer") return;
+    if (compensatedPrependedYearsRef.current.has(newerMountedYear)) return;
+    const section = adjacentSegmentRefs.current.get(newerMountedYear);
+    if (!section) return;
+    const height = section.getBoundingClientRect().height;
+    if (height <= 0) return;
+    compensatedPrependedYearsRef.current.add(newerMountedYear);
+    const detail = { at: new Date().toISOString(), kind: "prepend-adjacent-segment", year: newerMountedYear, top: Math.round(height) };
+    updateDiagnostics({ lastProgrammaticScroll: detail }, "programmatic-scroll", detail);
+    window.scrollBy({ top: height, behavior: "auto" });
+  }, [newerMountedYear, pendingAdjacent, segmentedMode]);
+
+  useEffect(() => {
+    if (!segmentedMode || !pendingAdjacent || pendingAdjacent.required) return;
+    const currentDirection = scrollDirectionRef.current;
+    if (!currentDirection || currentDirection === pendingAdjacent.direction) return;
+    onCancelYearRequest(pendingAdjacent.year);
+    requestedSegmentYearsRef.current.delete(pendingAdjacent.year);
+    setPendingAdjacent(null);
+    recordDiagnostic("year-segment-prefetch-cancel", { year: pendingAdjacent.year, direction: pendingAdjacent.direction });
+  }, [onCancelYearRequest, pendingAdjacent, segmentedMode, viewport.scrollY]);
+
+  useEffect(() => {
+    if (!segmentedMode || mountedSegmentYears.length >= 2) return;
+    const registrations: Array<() => void> = [];
+    const observe = (node: Element | null, direction: BoundaryDirection) => {
+      if (!node || !adjacentTargetForDirection(direction)) return;
+      const observer = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        if (scrollDirectionRef.current !== direction) return;
+        requestAdjacentSegment(direction, false);
+      }, { root: null, rootMargin: `${segmentPrefetchDistance}px 0px`, threshold: 0 });
+      const unregister = registerArchiveObserver(`year-segment-${direction}-sentinel`);
+      observer.observe(node);
+      registrations.push(() => {
+        observer.disconnect();
+        unregister();
+      });
+    };
+
+    observe(topSentinelRef.current, "newer");
+    observe(bottomSentinelRef.current, "older");
+    return () => {
+      for (const unregister of registrations) unregister();
+    };
+  }, [adjacentTargetForDirection, mountedSegmentYears.length, requestAdjacentSegment, segmentPrefetchDistance, segmentedMode]);
+
+  useEffect(() => {
+    if (!segmentedMode || mountedSegmentYears.length >= 2 || !ref.current) return;
+    const currentDirection = scrollDirectionRef.current;
+    if (!currentDirection) return;
+    const gridTop = ref.current.getBoundingClientRect().top + viewport.scrollY;
+    const gridBottom = gridTop + layout.totalHeight;
+    const triggerDistance = Math.max(48, Math.min(160, viewport.height * 0.18));
+    if (currentDirection === "older" && olderTarget && viewport.scrollY + viewport.height >= gridBottom - triggerDistance) {
+      requestAdjacentSegment("older", true);
+    }
+    if (currentDirection === "newer" && newerTarget && viewport.scrollY <= gridTop + triggerDistance) {
+      requestAdjacentSegment("newer", true);
+    }
+  }, [
+    layout.totalHeight,
+    mountedSegmentYears.length,
+    newerTarget,
+    olderTarget,
+    requestAdjacentSegment,
+    segmentedMode,
+    viewport.height,
+    viewport.scrollY,
+    ref
+  ]);
+
+  useEffect(() => {
+    if (!segmentedMode || mountedSegmentYears.length < 2) return;
+    const anchorY = window.scrollY + RESTORE_OFFSET_PX;
+    for (const year of mountedSegmentYears) {
+      if (year === activeYear) continue;
+      const section = sectionForSegment(year);
+      if (!section) continue;
+      const sectionTop = section.getBoundingClientRect().top + window.scrollY;
+      const sectionBottom = sectionTop + section.getBoundingClientRect().height;
+      if (anchorY < sectionTop + SEGMENT_HANDOFF_HYSTERESIS_PX || anchorY > sectionBottom - SEGMENT_HANDOFF_HYSTERESIS_PX) continue;
+      const signature = `${activeYear}->${year}`;
+      if (lastPassiveHandoffRef.current === signature) return;
+      lastPassiveHandoffRef.current = signature;
+      passiveHandoffTargetRef.current = year;
+      onPassiveHandoff(stableAnchorForSegment(year));
+      return;
+    }
+  }, [activeYear, mountedSegmentYears, onPassiveHandoff, sectionForSegment, segmentedMode, stableAnchorForSegment, viewport.scrollY]);
 
   const capturePendingResizeAnchor = useCallback(() => {
     if (!ref.current || restorationIsPending(restorationRef.current)) return;
@@ -839,25 +1133,42 @@ function YearWindowGrid({
     if (!diagnosticsEnabled()) return;
     const first = visibleEntries[0];
     const last = visibleEntries[visibleEntries.length - 1];
+    const totalSegmentEntries = layout.entries.length + (segmentedMode ? [...adjacentLayoutByYear.values()].reduce((sum, segmentLayout) => sum + segmentLayout.entries.length, 0) : 0);
     const virtualRange = {
-      mode: "year-windowed",
+      mode: segmentedMode ? "segmented-year-window" : "year-windowed",
       year: activeYear,
       first: first ? { id: first.id, type: first.type, top: Math.round(first.top) } : null,
       last: last ? { id: last.id, type: last.type, bottom: Math.round(last.top + last.height) } : null,
       renderedEntries: visibleEntries.length,
-      totalEntries: layout.entries.length,
+      totalEntries: totalSegmentEntries,
       totalHeight: Math.round(layout.totalHeight)
     };
-    const entries = [...(ref.current?.querySelectorAll<HTMLElement>("[data-entry-type='row']") || [])];
-    const mountedYears = [...new Set(entries.map((entry) => entry.dataset.year).filter((year): year is string => Boolean(year)))];
+    const diagnosticRoot = segmentedMode
+      ? activeSegmentRef.current?.closest<HTMLElement>(".collection-shell") || null
+      : ref.current;
+    const entries = [...(diagnosticRoot?.querySelectorAll<HTMLElement>("[data-entry-type='row']") || [])];
+    const rowMountedYears = [...new Set(entries.map((entry) => entry.dataset.year).filter((year): year is string => Boolean(year)))];
+    const mountedYears = segmentedMode ? mountedSegmentYears : rowMountedYears;
     const rows = entries.length;
-    const photos = ref.current?.querySelectorAll(".photo-tile").length || 0;
-    const images = [...(ref.current?.querySelectorAll<HTMLImageElement>(".photo-tile img") || [])];
+    const photos = diagnosticRoot?.querySelectorAll(".photo-tile").length || 0;
+    const images = [...(diagnosticRoot?.querySelectorAll<HTMLImageElement>(".photo-tile img") || [])];
     const loadedImages = images.filter((image) => image.complete && image.naturalWidth > 0).length;
-    const inactiveImageElements = images.filter((image) => image.closest<HTMLElement>("[data-year]")?.dataset.year !== activeYear).length;
+    const inactiveImageElements = segmentedMode
+      ? images.filter((image) => {
+        const year = image.closest<HTMLElement>("[data-year]")?.dataset.year;
+        return !year || !mountedSegmentYears.includes(year);
+      }).length
+      : images.filter((image) => image.closest<HTMLElement>("[data-year]")?.dataset.year !== activeYear).length;
     const stableAnchor = nearestPhotoAnchor(photoAnchors, localViewportTop + RESTORE_OFFSET_PX);
     const counts = { mountedYears, mountedRows: rows, mountedPhotos: photos, inactiveImageElements, observerCount: getDiagnostics().observerCount };
-    const warnings = archiveWindowWarnings(counts);
+    const warnings = segmentedMode
+      ? [
+        ...(mountedYears.length > 2 ? ["segment-count-bound-exceeded"] : []),
+        ...(rows > SEGMENT_ROW_BUDGET ? ["segmented-row-bound-exceeded"] : []),
+        ...(photos > SEGMENT_PHOTO_BUDGET ? ["segmented-photo-bound-exceeded"] : []),
+        ...(inactiveImageElements > 0 ? ["unmounted-segment-images"] : [])
+      ]
+      : archiveWindowWarnings(counts);
     updateDiagnostics({
       activeYear,
       activeAlbum: currentAlbum ? { year: activeYear, id: currentAlbum.id } : null,
@@ -866,7 +1177,9 @@ function YearWindowGrid({
       mountedPhotos: photos,
       loadedImages,
       inactiveImageElements,
-      retainedYearLayouts: collection ? [activeYear] : [],
+      retainedYearLayouts: segmentedMode
+        ? mountedSegmentYears.filter((year) => Boolean(layoutForSegment(year)))
+        : collection ? [activeYear] : [],
       stableAnchor: stableAnchor ? { year: activeYear, albumId: currentAlbum?.id || null, photoId: stableAnchor[0], adjustmentPx: Math.round(localViewportTop + RESTORE_OFFSET_PX - stableAnchor[1]) } : null,
       virtualRange,
       scrubber: { ...getDiagnostics().scrubber, dragging: isScrubbing, activeRatio: Math.round(activeRatio * 100000) / 100000 }
@@ -885,7 +1198,89 @@ function YearWindowGrid({
       diagnosticLayoutSignatureRef.current = layoutSignature;
       recordDiagnostic("year-layout-construction", { year: activeYear, width, totalHeight: Math.round(layout.totalHeight), entryCount: layout.entries.length });
     }
-  }, [activeRatio, activeYear, collection, currentAlbum, isScrubbing, layout.entries.length, layout.totalHeight, localViewportTop, photoAnchors, visibleEntries, width]);
+  }, [activeRatio, activeYear, adjacentLayoutByYear, collection, currentAlbum, isScrubbing, layout.entries.length, layout.totalHeight, layoutForSegment, localViewportTop, mountedSegmentYears, photoAnchors, segmentedMode, visibleEntries, width]);
+
+  const renderLayoutEntries = (
+    year: string,
+    segmentCollection: NonNullable<typeof collection>,
+    entries: GridLayout["entries"]
+  ) => {
+    const segmentIndexById = year === activeYear
+      ? indexById
+      : new Map(segmentCollection.photos.map((photo, index) => [photo.id, index]));
+    return entries.map((entry) => {
+      if (entry.type === "heading") {
+        return (
+          <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={year} data-album-id={entry.album.id} key={`${year}-${entry.id}`} style={{ top: entry.top, height: entry.height }}>
+            <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2>
+          </div>
+        );
+      }
+      if (entry.type === "album-error") {
+        const loading = entry.album.loadState === "loading";
+        return (
+          <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} data-entry-type={entry.type} data-year={year} data-album-id={entry.album.id} key={`${year}-${entry.id}`} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
+            <span>{loading ? "Loading album" : entry.album.errorMessage || "Album could not be loaded"}</span>
+            {!loading ? <button type="button" onClick={() => onRetryAlbum(year, entry.album.id)}>Retry</button> : null}
+          </div>
+        );
+      }
+      return (
+        <div className={`photo-row photo-row--${entry.tone} virtual-entry`} data-entry-type={entry.type} data-row-tone={entry.tone} data-year={year} data-album-id={entry.albumId} key={`${year}-${entry.id}`} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
+          {entry.items.map((item) => (
+            <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(year, item.photo.id)} aria-label={`Open photo ${(segmentIndexById.get(item.photo.id) || 0) + 1}`}>
+              <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
+            </button>
+          ))}
+        </div>
+      );
+    });
+  };
+
+  const renderAdjacentBoundaryState = (direction: BoundaryDirection) => {
+    if (!segmentedMode || !pendingAdjacent || pendingAdjacent.direction !== direction) return null;
+    if (mountedSegmentYears.includes(pendingAdjacent.year)) return null;
+    const pendingState = states.get(pendingAdjacent.year);
+    const failed = pendingState?.status === "error";
+    return (
+      <section className={`year-segment-boundary-state year-segment-boundary-state--${failed ? "error" : "loading"}`} role={failed ? "alert" : "status"} aria-live="polite">
+        <strong>{pendingAdjacent.year}</strong>
+        <span>{failed ? pendingState?.message || "Year could not be loaded" : "Preparing adjacent year"}</span>
+        {failed ? <button type="button" onClick={() => onRetryYear(pendingAdjacent.year)}>Retry year</button> : null}
+      </section>
+    );
+  };
+
+  const renderAdjacentSegment = (year: string | null) => {
+    if (!segmentedMode || !year) return null;
+    const segmentCollection = collectionForSegment(year);
+    const segmentLayout = layoutForSegment(year);
+    const segmentState = states.get(year);
+    if (!segmentCollection || !segmentLayout || segmentState?.status !== "ready") {
+      return null;
+    }
+    const visibleSegmentEntries = visibleEntriesForGrid(segmentLayout, gridForSegment(year));
+    return (
+      <section
+        className="year-segment year-segment--adjacent"
+        data-segment-year={year}
+        data-year={year}
+        ref={(node) => setAdjacentSegmentRef(year, node)}
+      >
+        <section className="archive-year-heading archive-year-heading--inline" data-year={year} aria-labelledby={`year-${year}-segment-title`}>
+          <h1 id={`year-${year}-segment-title`}>{year}</h1>
+        </section>
+        <div
+          className="virtual-album-stack"
+          data-segment-grid={year}
+          ref={(node) => setAdjacentGridRef(year, node)}
+          style={{ height: segmentLayout.totalHeight || undefined }}
+        >
+          {renderLayoutEntries(year, segmentCollection, visibleSegmentEntries)}
+        </div>
+      </section>
+    );
+  };
 
   const commitBoundary = (target: ArchiveTarget | null) => {
     if (target) onNavigate(target, "boundary");
@@ -895,9 +1290,9 @@ function YearWindowGrid({
     <main
       className="collection-shell"
       data-active-year={activeYear}
-      data-mounted-years={collection ? activeYear : ""}
+      data-mounted-years={segmentedMode ? mountedSegmentYears.join(",") : collection ? activeYear : ""}
       data-restoration-phase={restoration.phase}
-      data-render-mode="year-windowed"
+      data-render-mode={segmentedMode ? "segmented-year-window" : "year-windowed"}
     >
       <header className="collection-chrome" ref={chromeRef}>
         <div className="app-bar">
@@ -917,6 +1312,14 @@ function YearWindowGrid({
         )}
       </header>
 
+      {renderAdjacentSegment(newerMountedYear)}
+
+      {segmentedMode && !newerMountedYear ? (
+        <div className="year-boundary-sentinel year-boundary-sentinel--newer" data-boundary-direction="newer" ref={topSentinelRef} aria-hidden="true" />
+      ) : null}
+
+      {renderAdjacentBoundaryState("newer")}
+
       {newerTarget ? (
         <nav className="archive-year-boundary archive-year-boundary--newer" aria-label={`Beginning of ${activeYear}`}>
           <button type="button" onClick={() => commitBoundary(newerTarget)}>
@@ -925,60 +1328,36 @@ function YearWindowGrid({
         </nav>
       ) : null}
 
-      <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`} ref={yearHeadingRef}>
-        <h1 id={`year-${activeYear}-title`}>{activeYear}</h1>
-      </section>
-
-      {!collection ? (
-        <section className={`year-window-loading year-window-loading--${state?.status || "index-loading"}`} aria-live="polite">
-          <strong>{activeYear}</strong>
-          <span>{targetAlbum ? formatPublicArchiveAlbumLabel(targetAlbum.name, activeYear) : "Preparing this year"}</span>
-          {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry year</button> : null}
+      <section className="year-segment year-segment--active" data-segment-year={activeYear} data-year={activeYear} ref={activeSegmentRef}>
+        <section className="archive-year-heading archive-year-heading--inline" data-year={activeYear} aria-labelledby={`year-${activeYear}-title`} ref={yearHeadingRef}>
+          <h1 id={`year-${activeYear}-title`}>{activeYear}</h1>
         </section>
-      ) : null}
 
-      <div id="photo-grid" className="virtual-album-stack" ref={ref} style={{ height: layout.totalHeight || undefined }}>
-        {diagnosticsEnabled() && collection ? (
-          <div className="archive-diagnostic-overlays" aria-hidden="true">
-            <div className="archive-diagnostic-boundary archive-diagnostic-boundary--year archive-diagnostic-boundary--measured" style={{ top: 0, height: Math.max(1, layout.totalHeight) }}>
-              <span>{activeYear} · mounted year window</span>
-            </div>
-            {layout.albumAnchors.map((album) => (
-              <div className="archive-diagnostic-boundary archive-diagnostic-boundary--album" key={`debug-album-${activeYear}-${album.id}`} style={{ top: album.top, height: Math.max(1, album.bottom - album.top) }}>
-                <span>{activeYear} · {album.id}</span>
-              </div>
-            ))}
-            <div className="archive-diagnostic-anchor" style={{ top: Math.max(0, localViewportTop + RESTORE_OFFSET_PX) }}><span>stable local anchor</span></div>
-          </div>
+        {!collection ? (
+          <section className={`year-window-loading year-window-loading--${state?.status || "index-loading"}`} aria-live="polite">
+            <strong>{activeYear}</strong>
+            <span>{targetAlbum ? formatPublicArchiveAlbumLabel(targetAlbum.name, activeYear) : "Preparing this year"}</span>
+            {state?.status === "error" ? <button type="button" onClick={() => onRetryYear(activeYear)}>Retry year</button> : null}
+          </section>
         ) : null}
-        {visibleEntries.map((entry) => {
-          if (entry.type === "heading") {
-            return (
-              <div className="album-group__heading virtual-entry" data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }}>
-                <h2><span className="album-heading__folder">{albumFolderLabel(entry.album)}</span></h2>
+
+        <div id="photo-grid" className="virtual-album-stack" ref={ref} style={{ height: layout.totalHeight || undefined }}>
+          {diagnosticsEnabled() && collection ? (
+            <div className="archive-diagnostic-overlays" aria-hidden="true">
+              <div className="archive-diagnostic-boundary archive-diagnostic-boundary--year archive-diagnostic-boundary--measured" style={{ top: 0, height: Math.max(1, layout.totalHeight) }}>
+                <span>{activeYear} · mounted year window</span>
               </div>
-            );
-          }
-          if (entry.type === "album-error") {
-            const loading = entry.album.loadState === "loading";
-            return (
-              <div className={`album-error album-error--${entry.album.loadState} virtual-entry`} data-entry-type={entry.type} data-year={activeYear} data-album-id={entry.album.id} key={entry.id} style={{ top: entry.top, height: entry.height }} role={loading ? "status" : "alert"}>
-                <span>{loading ? "Loading album" : entry.album.errorMessage || "Album could not be loaded"}</span>
-                {!loading ? <button type="button" onClick={() => onRetryAlbum(activeYear, entry.album.id)}>Retry</button> : null}
-              </div>
-            );
-          }
-          return (
-            <div className={`photo-row photo-row--${entry.tone} virtual-entry`} data-entry-type={entry.type} data-row-tone={entry.tone} data-year={activeYear} data-album-id={entry.albumId} key={entry.id} style={{ top: entry.top, height: entry.height, gap: entry.gap }}>
-              {entry.items.map((item) => (
-                <button className={`photo-tile photo-tile--${item.photo.orientation}`} key={item.photo.id} type="button" data-photo-id={item.photo.id} style={{ width: item.width, height: item.height }} onClick={() => onOpenPhoto(activeYear, item.photo.id)} aria-label={`Open photo ${(indexById.get(item.photo.id) || 0) + 1}`}>
-                  <img src={mediaUrl(item.photo.thumbnailKey)} alt="" loading="eager" decoding="async" width={item.photo.width} height={item.photo.height} />
-                </button>
+              {layout.albumAnchors.map((album) => (
+                <div className="archive-diagnostic-boundary archive-diagnostic-boundary--album" key={`debug-album-${activeYear}-${album.id}`} style={{ top: album.top, height: Math.max(1, album.bottom - album.top) }}>
+                  <span>{activeYear} · {album.id}</span>
+                </div>
               ))}
+              <div className="archive-diagnostic-anchor" style={{ top: Math.max(0, localViewportTop + RESTORE_OFFSET_PX) }}><span>stable local anchor</span></div>
             </div>
-          );
-        })}
-      </div>
+          ) : null}
+          {collection ? renderLayoutEntries(activeYear, collection, visibleEntries) : null}
+        </div>
+      </section>
 
       {olderTarget ? (
         <nav className="archive-year-boundary archive-year-boundary--older" aria-label={`End of ${activeYear}`}>
@@ -987,6 +1366,14 @@ function YearWindowGrid({
           </button>
         </nav>
       ) : null}
+
+      {renderAdjacentBoundaryState("older")}
+
+      {segmentedMode && !olderMountedYear ? (
+        <div className="year-boundary-sentinel year-boundary-sentinel--older" data-boundary-direction="older" ref={bottomSentinelRef} aria-hidden="true" />
+      ) : null}
+
+      {renderAdjacentSegment(olderMountedYear)}
 
       <ArchiveScrubber
         model={timelineModel}

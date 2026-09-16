@@ -30,7 +30,7 @@ export interface ArchiveYearState {
   message?: string;
 }
 
-export type ArchiveLoadReason = "initial" | "scrub" | "jump" | "boundary" | "history" | "retry";
+export type ArchiveLoadReason = "initial" | "scrub" | "jump" | "boundary" | "history" | "retry" | "prefetch" | "passive";
 
 export interface ArchiveYearCache {
   states: Map<string, ArchiveYearState>;
@@ -39,8 +39,13 @@ export interface ArchiveYearCache {
   cachedYears: string[];
   loadingYears: string[];
   loadYear: (year: string, reason?: ArchiveLoadReason) => void;
+  cancelYearLoad: (year: string) => void;
   retryYear: (year: string) => void;
   retryAlbum: (year: string, albumId: string) => void;
+}
+
+export interface ArchiveYearCacheOptions {
+  maxConcurrentAlbumRequests?: number;
 }
 
 interface ActiveRequest {
@@ -55,7 +60,38 @@ interface RetryRequest {
   restore: () => void;
 }
 
-export function useArchiveYearCache(catalog: Catalog | null, initialYear: string | null): ArchiveYearCache {
+export async function loadAlbumResults(
+  albums: YearIndex["albums"],
+  signal: AbortSignal,
+  maxConcurrentAlbumRequests = Number.POSITIVE_INFINITY
+): Promise<Array<PromiseSettledResult<AlbumLoadResult>>> {
+  const concurrency = Number.isFinite(maxConcurrentAlbumRequests)
+    ? Math.max(1, Math.floor(maxConcurrentAlbumRequests))
+    : albums.length || 1;
+  const results: Array<PromiseSettledResult<AlbumLoadResult>> = new Array(albums.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < albums.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await loadAlbum(albums[index], signal) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, albums.length) }, () => worker()));
+  return results;
+}
+
+export function useArchiveYearCache(
+  catalog: Catalog | null,
+  initialYear: string | null,
+  options: ArchiveYearCacheOptions = {}
+): ArchiveYearCache {
   const [states, setStatesValue] = useState<Map<string, ArchiveYearState>>(new Map());
   const statesRef = useRef(states);
   const lruRef = useRef<string[]>([]);
@@ -174,7 +210,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
       return next;
     });
 
-    void Promise.allSettled(sourceIndex.albums.map((album) => loadAlbum(album, controller.signal)))
+    void loadAlbumResults(sourceIndex.albums, controller.signal, options.maxConcurrentAlbumRequests)
       .then((settled) => {
         if (!requestIsCurrent(generationRef.current.get(year) || 0, generation, controller.signal.aborted)) return;
         const results = settled.map((result, index): AlbumLoadResult => result.status === "fulfilled"
@@ -205,7 +241,7 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
         const current = requestsRef.current.get(year);
         if (current?.generation === generation) requestsRef.current.delete(year);
       });
-  }, [cancelObsoleteRequests, retainCollection, setStates, touchReadyCollection]);
+  }, [cancelObsoleteRequests, options.maxConcurrentAlbumRequests, retainCollection, setStates, touchReadyCollection]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -258,7 +294,10 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
   }, [catalog, setStates]);
 
   useEffect(() => {
-    if (initialYear && !pendingRef.current.has(initialYear)) pendingRef.current.set(initialYear, "initial");
+    const initialState = initialYear ? states.get(initialYear) : null;
+    if (initialYear && initialState?.status !== "ready" && !pendingRef.current.has(initialYear)) {
+      pendingRef.current.set(initialYear, "initial");
+    }
     for (const [year, reason] of [...pendingRef.current]) {
       const state = states.get(year);
       if (state?.index && state.status !== "index-loading") {
@@ -377,5 +416,5 @@ export function useArchiveYearCache(catalog: Catalog | null, initialYear: string
   const cachedYears = lruRef.current.filter((year) => collections.has(year));
   const loadingYears = [...states].filter(([, state]) => state.status === "loading").map(([year]) => year);
 
-  return { states, indexes, collections, cachedYears, loadingYears, loadYear, retryYear, retryAlbum };
+  return { states, indexes, collections, cachedYears, loadingYears, loadYear, cancelYearLoad: cancelRequest, retryYear, retryAlbum };
 }
