@@ -65,6 +65,15 @@ export async function loadAlbumResults(
   signal: AbortSignal,
   maxConcurrentAlbumRequests = Number.POSITIVE_INFINITY
 ): Promise<Array<PromiseSettledResult<AlbumLoadResult>>> {
+  return loadAlbumResultsWithProgress(albums, signal, maxConcurrentAlbumRequests);
+}
+
+export async function loadAlbumResultsWithProgress(
+  albums: YearIndex["albums"],
+  signal: AbortSignal,
+  maxConcurrentAlbumRequests = Number.POSITIVE_INFINITY,
+  onResult?: (index: number, result: PromiseSettledResult<AlbumLoadResult>) => void
+): Promise<Array<PromiseSettledResult<AlbumLoadResult>>> {
   const concurrency = Number.isFinite(maxConcurrentAlbumRequests)
     ? Math.max(1, Math.floor(maxConcurrentAlbumRequests))
     : albums.length || 1;
@@ -80,6 +89,7 @@ export async function loadAlbumResults(
       } catch (reason) {
         results[index] = { status: "rejected", reason };
       }
+      onResult?.(index, results[index]);
     }
   }
 
@@ -201,6 +211,7 @@ export function useArchiveYearCache(
     requestsRef.current.set(year, { controller, generation, reason });
     const sourceIndex = state.index;
     const years = [...statesRef.current.keys()];
+    const progressiveResults: AlbumLoadResult[] = sourceIndex.albums.map((album) => ({ status: "loading", album }));
     recordDiagnostic("manifest-load-start", { year, reason, albumCount: sourceIndex.albums.length });
     setStates((current) => {
       const latest = current.get(year);
@@ -210,7 +221,22 @@ export function useArchiveYearCache(
       return next;
     });
 
-    void loadAlbumResults(sourceIndex.albums, controller.signal, options.maxConcurrentAlbumRequests)
+    const publishProgressiveCollection = (index: number, settled: PromiseSettledResult<AlbumLoadResult>) => {
+      if (!requestIsCurrent(generationRef.current.get(year) || 0, generation, controller.signal.aborted)) return;
+      progressiveResults[index] = settled.status === "fulfilled"
+        ? settled.value
+        : { status: "error", album: sourceIndex.albums[index], errorMessage: publicAlbumError(settled.reason) };
+      const collection = buildYearCollection(years, sourceIndex, progressiveResults);
+      setStates((current) => {
+        const latest = current.get(year);
+        if (!latest || latest.status !== "loading") return current;
+        const next = new Map(current);
+        next.set(year, { ...latest, collection });
+        return next;
+      });
+    };
+
+    void loadAlbumResultsWithProgress(sourceIndex.albums, controller.signal, options.maxConcurrentAlbumRequests, publishProgressiveCollection)
       .then((settled) => {
         if (!requestIsCurrent(generationRef.current.get(year) || 0, generation, controller.signal.aborted)) return;
         const results = settled.map((result, index): AlbumLoadResult => result.status === "fulfilled"
@@ -411,7 +437,7 @@ export function useArchiveYearCache(
   const collections = new Map<string, YearCollection>();
   for (const [year, state] of states) {
     if (state.index) indexes.set(year, state.index);
-    if (state.collection) collections.set(year, state.collection);
+    if (state.status === "ready" && state.collection) collections.set(year, state.collection);
   }
   const cachedYears = lruRef.current.filter((year) => collections.has(year));
   const loadingYears = [...states].filter(([, state]) => state.status === "loading").map(([year]) => year);

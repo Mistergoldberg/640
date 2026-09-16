@@ -177,6 +177,20 @@ img {
   display: block;
 }
 
+.year-segment-leadin {
+  display: block;
+  opacity: 0.98;
+}
+
+.year-segment-leadin .photo-tile {
+  cursor: default;
+}
+
+.year-segment-leadin .photo-tile:hover::after,
+.year-segment-leadin .photo-tile:focus-visible::after {
+  border-color: rgba(255, 255, 255, 0);
+}
+
 .collection-shell[data-render-mode="segmented-year-window"],
 .collection-shell[data-render-mode="segmented-year-window"] * {
   overflow-anchor: none;

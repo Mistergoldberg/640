@@ -181,7 +181,7 @@ test("top sentinel prepends 2013 without visual jump and hands off upward", asyn
   expectBounded(metrics);
 });
 
-test("slow adjacent load shows loading state without premature image elements", async ({ page }) => {
+test("slow adjacent load stays quiet without premature image elements", async ({ page }) => {
   await installInstrumentation(page);
   let releaseAlbums: (() => void) | null = null;
   const blocked = new Promise<void>((resolve) => {
@@ -195,13 +195,44 @@ test("slow adjacent load shows loading state without premature image elements", 
   await page.goto("/?debug=1");
   await waitForActiveYear(page, "2013");
   await scrollNearActiveBottom(page);
-  await expect(page.getByText("Preparing adjacent year")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText("Preparing adjacent year")).toHaveCount(0);
   let metrics = await segmentMetrics(page);
   expect(metrics.mountedYears).toEqual(["2013"]);
   expect(metrics.images).toBeLessThan(120);
   expect(metrics.inactiveImages).toBe(0);
 
   releaseAlbums?.();
+  await waitForMountedYear(page, "2002");
+  metrics = await segmentMetrics(page);
+  expect(metrics.mountedYears).toEqual(["2013", "2002"]);
+  expectBounded(metrics);
+});
+
+test("partial adjacent year renders a bounded photo lead-in instead of loading copy", async ({ page }) => {
+  await installInstrumentation(page);
+  let releaseSecondAlbum: (() => void) | null = null;
+  const blocked = new Promise<void>((resolve) => {
+    releaseSecondAlbum = resolve;
+  });
+  await page.route("**/data/2002/albums/2002-when-canada-0fed0859.json", async (route) => {
+    await blocked;
+    await route.continue();
+  });
+
+  await page.goto("/?debug=1");
+  await waitForActiveYear(page, "2013");
+  await scrollNearActiveBottom(page);
+  const leadIn = page.locator(".year-segment-leadin[data-year='2002']");
+  await expect(leadIn).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Preparing adjacent year")).toHaveCount(0);
+  await expect(leadIn.locator(".photo-tile")).not.toHaveCount(0);
+  await expect(leadIn.locator(".photo-tile[aria-disabled='true']").first()).toBeVisible();
+  let metrics = await segmentMetrics(page);
+  expect(metrics.mountedYears).toEqual(["2013", "2002"]);
+  expect(metrics.images).toBeLessThan(120);
+  expect(metrics.inactiveImages).toBe(0);
+
+  releaseSecondAlbum?.();
   await waitForMountedYear(page, "2002");
   metrics = await segmentMetrics(page);
   expect(metrics.mountedYears).toEqual(["2013", "2002"]);
