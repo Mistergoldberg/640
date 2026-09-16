@@ -2,7 +2,7 @@ export function requestIsCurrent(currentGeneration: number, requestGeneration: n
   return currentGeneration === requestGeneration && !aborted;
 }
 
-export const YEAR_COLLECTION_CACHE_CAPACITY = 2;
+export const YEAR_COLLECTION_CACHE_CAPACITY = 3;
 
 export interface BoundedYearCacheUpdate {
   order: string[];

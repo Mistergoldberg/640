@@ -77,6 +77,36 @@ export interface SegmentRetryResult<TCollection, TRowPlan> {
   request: SegmentLoadRequest;
 }
 
+export type SegmentReclamationBlockReason =
+  | "not-mounted"
+  | "active-year"
+  | "visual-anchor"
+  | "protected-operation"
+  | "pending-operation"
+  | "inside-viewport"
+  | "inside-safety-margin"
+  | "missing-geometry"
+  | "not-needed";
+
+export interface SegmentReclamationEligibilityInput<TCollection = unknown, TRowPlan = GridLayout> {
+  segment: YearSegment<TCollection, TRowPlan> | null | undefined;
+  activeYear: string;
+  visualAnchorYear: string | null;
+  pendingYears?: ReadonlySet<string>;
+  protectedYears?: ReadonlySet<string>;
+  viewportTop: number;
+  viewportBottom: number;
+  safetyMargin: number;
+  segmentTop: number;
+  segmentBottom: number;
+  neededForWindow: boolean;
+}
+
+export interface SegmentReclamationEligibility {
+  eligible: boolean;
+  reasons: SegmentReclamationBlockReason[];
+}
+
 export function segmentIdentity(year: string, catalogueRevision: string) {
   return `${catalogueRevision}:${year}`;
 }
@@ -352,4 +382,32 @@ export function retainedCollectionCount(state: YearSegmentControllerState) {
 
 export function mountedSegmentCount(state: YearSegmentControllerState) {
   return mountedSegments(state).length;
+}
+
+export function segmentReclamationEligibility<TCollection, TRowPlan>({
+  segment,
+  activeYear,
+  visualAnchorYear,
+  pendingYears = new Set(),
+  protectedYears = new Set(),
+  viewportTop,
+  viewportBottom,
+  safetyMargin,
+  segmentTop,
+  segmentBottom,
+  neededForWindow
+}: SegmentReclamationEligibilityInput<TCollection, TRowPlan>): SegmentReclamationEligibility {
+  const reasons: SegmentReclamationBlockReason[] = [];
+  if (!segment || segment.status !== "mounted") reasons.push("not-mounted");
+  if (segment?.year === activeYear) reasons.push("active-year");
+  if ((segment?.year && segment.year === visualAnchorYear) || segment?.containsVisualAnchor) reasons.push("visual-anchor");
+  if (segment?.year && protectedYears.has(segment.year)) reasons.push("protected-operation");
+  if ((segment?.year && pendingYears.has(segment.year)) || segment?.status === "prefetching") reasons.push("pending-operation");
+  const outsideViewport = segmentBottom <= viewportTop || segmentTop >= viewportBottom;
+  if (!outsideViewport) reasons.push("inside-viewport");
+  const beyondMargin = segmentBottom < viewportTop - safetyMargin || segmentTop > viewportBottom + safetyMargin;
+  if (!beyondMargin) reasons.push("inside-safety-margin");
+  if (!segment || (segment.calculatedHeight <= 0 && segment.spacerHeight <= 0)) reasons.push("missing-geometry");
+  if (!neededForWindow) reasons.push("not-needed");
+  return { eligible: reasons.length === 0, reasons };
 }

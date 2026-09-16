@@ -11,6 +11,8 @@ import {
   mountedSegmentCount,
   retainedCollectionCount,
   mountSegment,
+  replaceSegmentWithSpacer,
+  restoreSegmentFromSpacer,
   type YearSegmentControllerState
 } from "./yearSegmentController";
 import { buildArchiveTimelineModel, orderedArchiveYears } from "./archiveTimelineModel";
@@ -250,6 +252,85 @@ describe("year segment synthetic scale model", () => {
       retainedCollections: retainedCollectionCount(state),
       retainedPhotoRecords,
       heapDeltaBytes: heapBeforeController && heapAfterController ? heapAfterController - heapBeforeController : null
+    });
+  });
+
+  it("projects large archive document heights without DOM images or unsafe scroll geometry", () => {
+    const cssScrollSafetyBudgetPx = 24_000_000;
+    const projected250k = syntheticYearCollection("2036", 250_000, 80);
+    const projectedLayout = layoutFor(projected250k, 1024);
+    const fiftyYears = Array.from({ length: 50 }, (_, index) => {
+      const year = String(2099 - index);
+      return layoutFor(syntheticYearCollection(year, 5_000, 8), 1024).totalHeight;
+    });
+    const fiftyYearDocumentHeight = fiftyYears.reduce((sum, height) => sum + height, 0);
+
+    expect(projected250k.availableCount).toBe(250_000);
+    expect(projectedLayout.photoTops.size).toBe(250_000);
+    expect(projectedLayout.entries.length).toBeLessThan(250_000);
+    expect(projectedLayout.totalHeight).toBeLessThan(cssScrollSafetyBudgetPx);
+    expect(fiftyYearDocumentHeight).toBeLessThan(cssScrollSafetyBudgetPx);
+    expect(typeof document === "undefined" ? 0 : document.querySelectorAll("img").length).toBe(0);
+    reportScaleMetrics({
+      scenario: "projected-document-height",
+      projectedPhotoRecords: 250_000,
+      projected250kHeight: projectedLayout.totalHeight,
+      syntheticYears: fiftyYears.length,
+      syntheticPhotosPerYear: 5_000,
+      fiftyYearDocumentHeight,
+      cssScrollSafetyBudgetPx,
+      domImageElements: typeof document === "undefined" ? 0 : document.querySelectorAll("img").length
+    });
+  }, 30_000);
+
+  it("restores spacer row plans across repeated synthetic crossings without growing retained state", () => {
+    const years = Array.from({ length: 12 }, (_, index) => String(2050 - index));
+    const collections = new Map(years.map((year) => [year, syntheticYearCollection(year, 72, 3)]));
+    let state = createYearSegmentController<YearCollection, GridLayout>({
+      years,
+      activeYear: years[5],
+      catalogueRevision: "synthetic-crossings",
+      maxMountedSegments: 2,
+      maxRetainedCollections: 3
+    });
+
+    const maxima = { mounted: 0, retained: 0, segments: 0 };
+    const visit = (year: string) => {
+      state = loadSegment(state, year, collections.get(year)!);
+      state = mountSegment(state, year, year === years[5]);
+      const replaceable = [...state.segments.values()].find((segment) => segment.status === "mounted" && segment.year !== years[5] && !segment.containsVisualAnchor);
+      if (replaceable) {
+        const replaced = replaceSegmentWithSpacer(state, replaceable.year);
+        state = replaced.state;
+        expect(state.segments.get(replaceable.year)?.status).toBe("spacer");
+        state = restoreSegmentFromSpacer(state, replaceable.year, layoutFor(collections.get(replaceable.year)!, 768));
+      }
+      maxima.mounted = Math.max(maxima.mounted, mountedSegmentCount(state));
+      maxima.retained = Math.max(maxima.retained, retainedCollectionCount(state));
+      maxima.segments = Math.max(maxima.segments, state.segments.size);
+    };
+
+    const forward = years.slice(6, 11);
+    const backward = years.slice(1, 6).reverse();
+    for (const year of forward) visit(year);
+    for (const year of backward) visit(year);
+    for (let index = 0; index < 30; index += 1) {
+      visit(years[4]);
+      visit(years[6]);
+    }
+
+    expect(maxima.mounted).toBeLessThanOrEqual(2);
+    expect(maxima.retained).toBeLessThanOrEqual(3);
+    expect(maxima.segments).toBeLessThanOrEqual(years.length);
+    reportScaleMetrics({
+      scenario: "synthetic-crossing-cycles",
+      representedYears: years.length,
+      forwardCrossings: forward.length,
+      backwardCrossings: backward.length,
+      repeatedCycles: 30,
+      mountedSegments: maxima.mounted,
+      retainedCollections: maxima.retained,
+      representedSegments: maxima.segments
     });
   });
 });

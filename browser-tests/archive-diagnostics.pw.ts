@@ -46,7 +46,7 @@ test("debug mode exposes local diagnostics, overlays, copy, download, and reset"
   expect(copied.mountedPhotos).toBeGreaterThan(0);
   expect(copied.mountedYears).toEqual(["2013"]);
   expect(copied.inactiveImageElements).toBe(0);
-  expect(copied.yearCacheEntries).toBe(2);
+  expect(copied.yearCacheEntries).toBe(3);
   expect(copied.retainedYearLayouts).toEqual(["2013"]);
   expect(copied.events.filter((event: { type: string }) => event.type === "archive-bound-warning")).toHaveLength(0);
 

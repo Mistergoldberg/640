@@ -170,10 +170,16 @@ img {
   display: block;
   width: 100%;
   pointer-events: none;
+  overflow-anchor: none;
 }
 
 .year-segment {
   display: block;
+}
+
+.collection-shell[data-render-mode="segmented-year-window"],
+.collection-shell[data-render-mode="segmented-year-window"] * {
+  overflow-anchor: none;
 }
 
 .year-boundary-sentinel {

@@ -11,6 +11,7 @@ import {
   retainedCollectionCount,
   retrySegment,
   mountSegment,
+  segmentReclamationEligibility,
   type YearSegmentControllerState
 } from "./yearSegmentController";
 import type { GridLayout } from "./yearSegmentLayout";
@@ -149,5 +150,101 @@ describe("year segment controller", () => {
     expect(restored.segments.get("2023")?.status).toBe("ready");
     expect(restored.segments.get("2023")?.calculatedHeight).toBe(1234);
     expect(restored.segments.get("2023")?.rowPlan).toEqual(rowPlan(1234));
+  });
+
+  it("allows reclamation only for offscreen mounted segments needed by the window", () => {
+    let state = createYearSegmentController<{ photos: number }, GridLayout>({
+      years: ["2025", "2024", "2023"],
+      activeYear: "2024",
+      catalogueRevision: "catalog-a"
+    });
+    state = loaded(state, "2025", 1000);
+    state = mountSegment(state, "2025");
+    const segment = state.segments.get("2025");
+
+    expect(segmentReclamationEligibility({
+      segment,
+      activeYear: "2024",
+      visualAnchorYear: "2024",
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    })).toEqual({ eligible: true, reasons: [] });
+
+    expect(segmentReclamationEligibility({
+      segment,
+      activeYear: "2025",
+      visualAnchorYear: "2024",
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    }).reasons).toContain("active-year");
+
+    expect(segmentReclamationEligibility({
+      segment: { ...segment!, containsVisualAnchor: true },
+      activeYear: "2024",
+      visualAnchorYear: "2025",
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    }).reasons).toContain("visual-anchor");
+
+    expect(segmentReclamationEligibility({
+      segment,
+      activeYear: "2024",
+      visualAnchorYear: "2024",
+      pendingYears: new Set(["2025"]),
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    }).reasons).toContain("pending-operation");
+
+    expect(segmentReclamationEligibility({
+      segment,
+      activeYear: "2024",
+      visualAnchorYear: "2024",
+      viewportTop: 900,
+      viewportBottom: 1800,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    }).reasons).toContain("inside-viewport");
+
+    expect(segmentReclamationEligibility({
+      segment: { ...segment!, calculatedHeight: 0, spacerHeight: 0 },
+      activeYear: "2024",
+      visualAnchorYear: "2024",
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: true
+    }).reasons).toContain("missing-geometry");
+
+    expect(segmentReclamationEligibility({
+      segment,
+      activeYear: "2024",
+      visualAnchorYear: "2024",
+      viewportTop: 10_000,
+      viewportBottom: 11_000,
+      safetyMargin: 640,
+      segmentTop: 0,
+      segmentBottom: 1000,
+      neededForWindow: false
+    }).reasons).toContain("not-needed");
   });
 });

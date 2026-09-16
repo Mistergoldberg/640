@@ -67,6 +67,11 @@ let sequence = 0;
 let initialized = false;
 let scrollTimer = 0;
 
+function publishDiagnosticsSnapshot() {
+  if (typeof window === "undefined" || !enabled) return;
+  (window as typeof window & { __PIXILATION_ARCHIVE_DIAGNOSTICS__?: DiagnosticSnapshot }).__PIXILATION_ARCHIVE_DIAGNOSTICS__ = snapshot;
+}
+
 export function diagnosticModeEnabled(search = typeof window === "undefined" ? "" : window.location.search) {
   return new URLSearchParams(search).get("debug") === "1";
 }
@@ -226,6 +231,7 @@ export function updateDiagnostics(fields: Partial<Omit<DiagnosticSnapshot, "even
     });
   }
   snapshot = { ...snapshot, ...(typeof window === "undefined" ? {} : readViewport()), ...fields, events, lastStateTimestamp: timestamp };
+  publishDiagnosticsSnapshot();
   emit();
 }
 

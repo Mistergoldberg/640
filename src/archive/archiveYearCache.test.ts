@@ -13,21 +13,21 @@ afterEach(() => {
 });
 
 describe("bounded archive year cache", () => {
-  it("keeps only the active and most recently used full collections", () => {
+  it("keeps the active year and two adjacent/restorable full collections", () => {
     let order: string[] = [];
     order = touchBoundedYearCache(order, "2013").order;
     order = touchBoundedYearCache(order, "2002").order;
     const update = touchBoundedYearCache(order, "2001");
-    expect(YEAR_COLLECTION_CACHE_CAPACITY).toBe(2);
-    expect(update.order).toEqual(["2002", "2001"]);
-    expect(update.evicted).toEqual(["2013"]);
+    expect(YEAR_COLLECTION_CACHE_CAPACITY).toBe(3);
+    expect(update.order).toEqual(["2013", "2002", "2001"]);
+    expect(update.evicted).toEqual([]);
   });
 
   it("refreshes a revisited year before evicting the least recent collection", () => {
-    const refreshed = touchBoundedYearCache(["2013", "2002"], "2013");
-    expect(refreshed.order).toEqual(["2002", "2013"]);
-    expect(touchBoundedYearCache(refreshed.order, "2001")).toEqual({
-      order: ["2013", "2001"],
+    const refreshed = touchBoundedYearCache(["2013", "2002", "2001"], "2013");
+    expect(refreshed.order).toEqual(["2002", "2001", "2013"]);
+    expect(touchBoundedYearCache(refreshed.order, "2000")).toEqual({
+      order: ["2001", "2013", "2000"],
       evicted: ["2002"]
     });
   });
