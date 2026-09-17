@@ -171,6 +171,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     landscapeRail: false
   }));
   const cacheRef = useRef(new Map<number, CacheEntry>());
+  const rollingWarmupLaunchKeyRef = useRef<string | null>(null);
+  const rollingWarmupFrameRef = useRef<number | null>(null);
   const [cacheRevision, setCacheRevision] = useState(0);
   const musicIframeRef = useRef<HTMLIFrameElement | null>(null);
   const soundCloudWidgetRef = useRef<SoundCloudWidget | null>(null);
@@ -676,7 +678,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       if (phase === "first-five-forward" || phase === "first-five-backward") {
         if (settledRange(statuses, 5, Math.min(15, photos.length))) {
           if (second.length) {
-            for (let index = 15; index < Math.min(photos.length, 45); index += 1) preloadPhoto(index);
             dispatch({ type: "WARMUP_FRAME", index: second[0], phase: second.length > 1 ? "next-ten-forward" : "next-ten-backward" });
           } else {
             dispatch({ type: "WARMUP_EXIT" });
@@ -745,6 +746,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     const isInitialMount = resetKeyRef.current === resetKey;
     if (!isInitialMount) {
       resetKeyRef.current = resetKey;
+      rollingWarmupLaunchKeyRef.current = null;
+      if (rollingWarmupFrameRef.current !== null) {
+        window.cancelAnimationFrame(rollingWarmupFrameRef.current);
+        rollingWarmupFrameRef.current = null;
+      }
       frameInteractionRef.current?.destroy();
       framePointerIdRef.current = null;
       clearInitialDelayTimer();
@@ -789,6 +795,23 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   useEffect(() => {
     if (playerState.warmupPhase === "inactive") warmBuffer(currentIndex);
   }, [currentIndex, playerState.warmupPhase, warmBuffer]);
+
+  useEffect(() => {
+    if (launchMode !== "homepage-autoplay" || playerState.warmupPhase !== "next-ten-forward") return;
+    if (rollingWarmupLaunchKeyRef.current === resetKey) return;
+    rollingWarmupLaunchKeyRef.current = resetKey;
+    rollingWarmupFrameRef.current = window.requestAnimationFrame(() => {
+      rollingWarmupFrameRef.current = null;
+      if (resetKeyRef.current !== resetKey || stateRef.current.warmupPhase !== "next-ten-forward") return;
+      for (let index = 15; index < Math.min(photos.length, 45); index += 1) preloadPhoto(index);
+    });
+    return () => {
+      if (rollingWarmupFrameRef.current !== null) {
+        window.cancelAnimationFrame(rollingWarmupFrameRef.current);
+        rollingWarmupFrameRef.current = null;
+      }
+    };
+  }, [launchMode, photos.length, playerState.warmupPhase, preloadPhoto, resetKey]);
 
   useEffect(() => {
     if (launchMode !== "homepage-autoplay" || stateRef.current.warmupPhase !== "loading-first-five") return;
@@ -1080,6 +1103,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
+      if (rollingWarmupFrameRef.current !== null) {
+        window.cancelAnimationFrame(rollingWarmupFrameRef.current);
+        rollingWarmupFrameRef.current = null;
+      }
       if (controlsTimerRef.current !== null) {
         window.clearTimeout(controlsTimerRef.current);
       }

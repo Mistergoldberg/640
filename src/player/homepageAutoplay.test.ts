@@ -36,4 +36,13 @@ describe("homepage autoplay buffers", () => {
     expect(settledRange(statuses, 0, 4)).toBe(false);
     expect(usableRange(statuses, 0, 3)).toEqual([0, 2]);
   });
+
+  it("keeps failed first-five and next-ten buffers ordered and fully settleable", () => {
+    const statuses = new Map<number, "ready" | "failed">();
+    for (let index = 0; index < 15; index += 1) statuses.set(index, index === 2 || index === 8 ? "failed" : "ready");
+    expect(settledRange(statuses, 0, 5)).toBe(true);
+    expect(settledRange(statuses, 5, 15)).toBe(true);
+    expect(usableRange(statuses, 0, 5)).toEqual([0, 1, 3, 4]);
+    expect(usableRange(statuses, 5, 15)).toEqual([5, 6, 7, 9, 10, 11, 12, 13, 14]);
+  });
 });

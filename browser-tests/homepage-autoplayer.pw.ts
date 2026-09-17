@@ -3,6 +3,46 @@ import { expect, test } from "@playwright/test";
 const enabled = process.env.VITE_HOMEPAGE_AUTOPLAYER === "1";
 test.skip(!enabled, "homepage autoplay tests require VITE_HOMEPAGE_AUTOPLAYER=1");
 
+async function installAutoplayOrderingProbe(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    type ProbeEvent = { ordinal: number; type: "phase" | "image"; value: string };
+    const target = window as typeof window & { __homepageAutoplayProbe?: { events: ProbeEvent[]; seen: string[]; ordinal: number } };
+    const probe = { events: [] as ProbeEvent[], seen: [] as string[], assignments: {} as Record<string, number>, ordinal: 0 };
+    target.__homepageAutoplayProbe = probe;
+    const record = (type: ProbeEvent["type"], value: string) => probe.events.push({ ordinal: ++probe.ordinal, type, value });
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    if (descriptor?.get && descriptor.set) {
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set(value: string) {
+          if (value.includes("/display/") && !probe.seen.includes(value)) {
+            probe.seen.push(value);
+            record("image", value);
+          }
+          if (value.includes("/display/")) probe.assignments[value] = (probe.assignments[value] || 0) + 1;
+          descriptor.set?.call(this, value);
+        }
+      });
+    }
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type !== "attributes") continue;
+        const element = mutation.target as HTMLElement;
+        const phase = element.dataset.playerWarmupPhase;
+        if (phase) record("phase", phase);
+      }
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ["data-player-warmup-phase"] });
+  });
+}
+
+async function autoplayProbe(page: import("@playwright/test").Page) {
+  return page.evaluate(() => (window as typeof window & {
+    __homepageAutoplayProbe?: { events: Array<{ ordinal: number; type: "phase" | "image"; value: string }>; seen: string[]; assignments: Record<string, number> };
+  }).__homepageAutoplayProbe!);
+}
+
 test("clean homepage and cache-busting entry autoplay without pushing history", async ({ page }) => {
   for (const path of ["/", "/?v=autoplay-test"]) {
     await page.goto(path);
@@ -75,4 +115,61 @@ test("startup and steady playback remain resource bounded", async ({ page }) => 
   expect(peak.pending).toBeLessThanOrEqual(45);
   expect(peak.cache).toBeLessThanOrEqual(51);
   expect(peak.images).toBeLessThanOrEqual(80);
+});
+
+test("committed Stage 2 precedes rolling lookahead by deterministic event ordinal", async ({ page }) => {
+  const networkRequests = new Map<string, number>();
+  page.on("request", (request) => {
+    if (!request.url().includes("/display/")) return;
+    networkRequests.set(request.url(), (networkRequests.get(request.url()) || 0) + 1);
+  });
+  await installAutoplayOrderingProbe(page);
+  await page.goto("/");
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-warmup-phase", "next-ten-forward", { timeout: 30_000 });
+  await expect.poll(async () => (await autoplayProbe(page)).seen.length).toBeGreaterThanOrEqual(45);
+  const probe = await autoplayProbe(page);
+  const stage2 = probe.events.find((event) => event.type === "phase" && event.value === "next-ten-forward");
+  const firstRollingUrl = probe.seen[15];
+  const firstRolling = probe.events.find((event) => event.type === "image" && event.value === firstRollingUrl);
+  expect(stage2).toBeTruthy();
+  expect(firstRolling).toBeTruthy();
+  expect(stage2!.ordinal).toBeLessThan(firstRolling!.ordinal);
+  expect(probe.seen.slice(0, 15)).toHaveLength(15);
+  expect(new Set(probe.seen).size).toBe(probe.seen.length);
+  expect(Math.max(...networkRequests.values())).toBe(1);
+});
+
+test("manual navigation before Stage 2 cannot commit a stale Stage 2 transition", async ({ page }) => {
+  await installAutoplayOrderingProbe(page);
+  await page.route("**/2013/display/*.jpg", async (route) => {
+    const probe = await autoplayProbe(page);
+    const knownIndex = probe.seen.indexOf(route.request().url());
+    if (knownIndex >= 5 && knownIndex < 15) await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await page.goto("/");
+  await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => (await autoplayProbe(page)).seen.length).toBeGreaterThanOrEqual(5);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-warmup-phase", "inactive");
+  await page.waitForTimeout(1200);
+  const probe = await autoplayProbe(page);
+  expect(probe.events.some((event) => event.type === "phase" && event.value === "next-ten-forward")).toBe(false);
+});
+
+test("closing before Stage 2 prevents a stale rolling preload", async ({ page }) => {
+  await installAutoplayOrderingProbe(page);
+  await page.route("**/2013/display/*.jpg", async (route) => {
+    const probe = await autoplayProbe(page);
+    const knownIndex = probe.seen.indexOf(route.request().url());
+    if (knownIndex >= 5 && knownIndex < 15) await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await page.goto("/");
+  await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => (await autoplayProbe(page)).seen.length).toBeGreaterThanOrEqual(5);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  await page.waitForTimeout(1200);
+  expect((await autoplayProbe(page)).seen.length).toBeLessThanOrEqual(15);
 });
