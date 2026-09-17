@@ -27,6 +27,8 @@ export interface PlayerState {
   initialDelayToken: number;
   frameGestureActive: boolean;
   scope: PlayerScope;
+  launchMode: "standard" | "homepage-autoplay";
+  warmupPhase: import("./homepageAutoplay").HomepageWarmupPhase;
 }
 
 export type PlayerEvent =
@@ -47,18 +49,22 @@ export type PlayerEvent =
   | { type: "REACH_END" }
   | { type: "CHANGE_SPEED"; delayMs: number }
   | { type: "RESET"; initialIndex: number; total: number; scope: PlayerScope; delayMs?: number }
-  | { type: "CLOSE" };
+  | { type: "CLOSE" }
+  | { type: "WARMUP_FRAME"; index: number; phase: import("./homepageAutoplay").HomepageWarmupPhase }
+  | { type: "WARMUP_EXIT" };
 
 export function createPlayerState({
   initialIndex,
   total,
   delayMs = 100,
-  scope
+  scope,
+  launchMode = "standard"
 }: {
   initialIndex: number;
   total: number;
   delayMs?: number;
   scope: PlayerScope;
+  launchMode?: "standard" | "homepage-autoplay";
 }): PlayerState {
   return {
     currentIndex: clampIndex(initialIndex, total),
@@ -70,7 +76,9 @@ export function createPlayerState({
     resumeDelayMs: null,
     initialDelayToken: 0,
     frameGestureActive: false,
-    scope
+    scope,
+    launchMode,
+    warmupPhase: launchMode === "homepage-autoplay" ? "loading-first-five" : "inactive"
   };
 }
 
@@ -92,14 +100,15 @@ function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number
     return state;
   }
 
-  if (!canAutoResumeAfterManual(state.status)) {
+  if (!canAutoResumeAfterManual(state.status) && !(state.launchMode === "homepage-autoplay" && state.warmupPhase !== "inactive")) {
     return {
       ...state,
       currentIndex: nextIndex,
       status: "explicitly-paused",
       bufferTargetIndex: null,
       frameGestureActive: false,
-      resumeDelayMs: null
+      resumeDelayMs: null,
+      warmupPhase: "inactive"
     };
   }
 
@@ -110,7 +119,8 @@ function manualStep(state: PlayerState, direction: -1 | 1, resumeDelayMs: number
     bufferTargetIndex: null,
     frameGestureActive: resumeDelayMs === null ? state.frameGestureActive : false,
     resumeToken: resumeDelayMs === null ? state.resumeToken : state.resumeToken + 1,
-    resumeDelayMs
+    resumeDelayMs,
+    warmupPhase: "inactive"
   };
 }
 
@@ -124,7 +134,8 @@ function frameGestureStart(state: PlayerState): PlayerState {
     status: "temporarily-paused",
     bufferTargetIndex: null,
     frameGestureActive: true,
-    resumeDelayMs: null
+    resumeDelayMs: null,
+    warmupPhase: "inactive"
   };
 }
 
@@ -148,6 +159,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
       if (state.status !== "loading") {
         return state;
       }
+
+      if (state.launchMode === "homepage-autoplay") return state;
 
       if (state.currentIndex >= state.total - 1) {
         return {
@@ -216,7 +229,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         status: "explicitly-paused",
         bufferTargetIndex: null,
         frameGestureActive: false,
-        resumeDelayMs: null
+        resumeDelayMs: null,
+        warmupPhase: state.warmupPhase === "inactive" ? "inactive" : "paused"
       };
 
     case "MANUAL_NEXT":
@@ -257,7 +271,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         status: "playing",
         bufferTargetIndex: null,
         frameGestureActive: false,
-        resumeDelayMs: null
+        resumeDelayMs: null,
+        warmupPhase: "steady-forward"
       };
 
     case "BUFFER_EMPTY":
@@ -330,8 +345,22 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         initialIndex: event.initialIndex,
         total: event.total,
         delayMs: event.delayMs ?? state.delayMs,
-        scope: event.scope
+        scope: event.scope,
+        launchMode: state.launchMode
       });
+
+    case "WARMUP_FRAME":
+      if (state.launchMode !== "homepage-autoplay" || state.warmupPhase === "inactive" || state.warmupPhase === "paused") return state;
+      return {
+        ...state,
+        currentIndex: clampIndex(event.index, state.total),
+        status: event.phase === "loading-first-five" || event.phase === "loading-next-ten" ? "loading" : "playing",
+        warmupPhase: event.phase,
+        bufferTargetIndex: null
+      };
+
+    case "WARMUP_EXIT":
+      return { ...state, warmupPhase: "inactive" };
 
     case "CLOSE":
       return {
@@ -339,7 +368,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         status: "explicitly-paused",
         bufferTargetIndex: null,
         frameGestureActive: false,
-        resumeDelayMs: null
+        resumeDelayMs: null,
+        warmupPhase: "inactive"
       };
 
     default:

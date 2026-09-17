@@ -157,3 +157,32 @@ describe("playerReducer speed changes", () => {
     expect(ended.status).toBe("ended");
   });
 });
+
+describe("homepage autoplay integration", () => {
+  it("bypasses the ordinary opening delay and exposes explicit warm-up phases", () => {
+    const scope = { type: "year" as const, year: "current" };
+    let state = createPlayerState({ initialIndex: 0, total: 20, scope, launchMode: "homepage-autoplay" });
+    expect(state.warmupPhase).toBe("loading-first-five");
+    expect(playerReducer(state, { type: "READY" }).status).toBe("loading");
+    state = playerReducer(state, { type: "WARMUP_FRAME", index: 0, phase: "first-five-forward" });
+    expect(state.status).toBe("playing");
+    state = playerReducer(state, { type: "WARMUP_FRAME", index: 4, phase: "first-five-backward" });
+    expect(state).toMatchObject({ currentIndex: 4, warmupPhase: "first-five-backward" });
+    state = playerReducer(state, { type: "WARMUP_FRAME", index: 5, phase: "next-ten-forward" });
+    expect(state).toMatchObject({ currentIndex: 5, warmupPhase: "next-ten-forward" });
+    state = playerReducer(state, { type: "WARMUP_EXIT" });
+    expect(state.warmupPhase).toBe("inactive");
+  });
+
+  it("lets pause and manual intent permanently override warm-up", () => {
+    const scope = { type: "year" as const, year: "current" };
+    const opening = playerReducer(
+      createPlayerState({ initialIndex: 0, total: 20, scope, launchMode: "homepage-autoplay" }),
+      { type: "WARMUP_FRAME", index: 0, phase: "first-five-forward" }
+    );
+    expect(playerReducer(opening, { type: "PAUSE" }).warmupPhase).toBe("paused");
+    const manual = playerReducer(opening, { type: "MANUAL_NEXT" });
+    expect(manual).toMatchObject({ currentIndex: 1, status: "temporarily-paused", warmupPhase: "inactive" });
+    expect(playerReducer(manual, { type: "TEMPORARY_RESUME" })).toMatchObject({ status: "playing", warmupPhase: "steady-forward" });
+  });
+});

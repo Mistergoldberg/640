@@ -45,6 +45,7 @@ import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 import { segmentIdentity } from "./archive/yearSegmentController";
+import { HOMEPAGE_AUTOPLAYER_ENABLED, isEligibleHomepageAutoplayUrl } from "./player/homepageAutoplay";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
 const GRID_MIN_OVERSCAN_PX = 260;
@@ -372,12 +373,22 @@ function App() {
   const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [activePhotoYear, setActivePhotoYear] = useState<string | null>(null);
+  const [homepageAutoplayActive, setHomepageAutoplayActive] = useState(false);
   const activeYearRef = useRef<string | null>(null);
   const activePhotoIdRef = useRef<string | null>(null);
   const activePhotoYearRef = useRef<string | null>(null);
   const fullscreenLaunchPhotoIdRef = useRef<string | null>(null);
   const pendingClosePhotoIdRef = useRef<string | null>(null);
   const initializedRef = useRef(false);
+  const homepageAutoplayEligibleRef = useRef(
+    HOMEPAGE_AUTOPLAYER_ENABLED
+      && typeof window !== "undefined"
+      && isEligibleHomepageAutoplayUrl(window.location.href, diagnosticsEnabled())
+  );
+  const homepageAutoplayPathRef = useRef(
+    typeof window === "undefined" ? "/" : `${window.location.pathname}${window.location.search}${window.location.hash}`
+  );
+  const homepageAutoplayDismissedRef = useRef(false);
   const savedAnchorsRef = useRef(new Map<string, Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">>());
   const { states, indexes, collections, cachedYears, loadingYears, loadYear, cancelYearLoad, retryYear, retryAlbum } = useArchiveYearCache(
     catalog,
@@ -522,6 +533,18 @@ function App() {
   }, [catalog, navigateToArchiveTarget]);
 
   useEffect(() => {
+    if (!homepageAutoplayEligibleRef.current || homepageAutoplayDismissedRef.current || homepageAutoplayActive || !activeYear) return;
+    const collection = collections.get(activeYear);
+    const firstPhoto = collection?.photos[0];
+    if (!firstPhoto) return;
+    recordDiagnostic("homepage-autoplayer-open", { year: activeYear, photoId: firstPhoto.id });
+    setActivePhotoId(firstPhoto.id);
+    setActivePhotoYear(activeYear);
+    setHomepageAutoplayActive(true);
+    window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+  }, [activeYear, collections, homepageAutoplayActive]);
+
+  useEffect(() => {
     if (!catalog) return;
     const handlePopState = () => {
       fullscreenLaunchPhotoIdRef.current = null;
@@ -584,6 +607,11 @@ function App() {
   }, [catalogueId, collections]);
 
   const closePlayer = useCallback((photoId: string) => {
+    if (homepageAutoplayActive) {
+      homepageAutoplayDismissedRef.current = true;
+      homepageAutoplayEligibleRef.current = false;
+      setHomepageAutoplayActive(false);
+    }
     fullscreenLaunchPhotoIdRef.current = null;
     const restoreId = photoId || activePhotoIdRef.current;
     const year = activePhotoYearRef.current || activeYearRef.current;
@@ -602,7 +630,10 @@ function App() {
     setActivePhotoId(null);
     setActivePhotoYear(null);
     pendingClosePhotoIdRef.current = null;
-  }, [catalogueId, navigateToArchiveTarget]);
+    if (homepageAutoplayActive) {
+      window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+    }
+  }, [catalogueId, homepageAutoplayActive, navigateToArchiveTarget]);
 
   if (catalogState.status === "loading") return <SystemState title="640×480" message={catalogState.message} />;
   if (catalogState.status === "error") return <SystemState title="640×480" message={catalogState.message} />;
@@ -642,6 +673,7 @@ function App() {
           initialIndex={activePhotoIndex}
           openInFullscreen={fullscreenLaunchPhotoIdRef.current === activePhotoId}
           scope={{ type: "year", year: playerCollection.year }}
+          launchMode={homepageAutoplayActive ? "homepage-autoplay" : "standard"}
           onClose={closePlayer}
         />
       ) : null}

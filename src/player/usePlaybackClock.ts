@@ -18,6 +18,11 @@ export function usePlaybackClock({
     let nextFrameAt = performance.now() + delayMs;
 
     const tick = (now: number) => {
+      if (document.hidden) {
+        nextFrameAt = now + delayMs;
+        animationFrame = window.requestAnimationFrame(tick);
+        return;
+      }
       if (now >= nextFrameAt) {
         const didAdvance = onTick();
         if (didAdvance) {

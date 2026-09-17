@@ -16,6 +16,7 @@ import {
   shouldSuppressSyntheticClick
 } from "./playerTouchNavigation";
 import { usePlaybackClock } from "./usePlaybackClock";
+import { settledRange, usableRange } from "./homepageAutoplay";
 
 const PRELOAD_AHEAD = 30;
 const PRELOAD_BEHIND = 8;
@@ -61,6 +62,7 @@ interface PhotoPlayerProps {
   openInFullscreen?: boolean;
   scope: PlayerScope;
   onClose: (photoId: string) => void;
+  launchMode?: "standard" | "homepage-autoplay";
 }
 
 let soundCloudApiPromise: Promise<void> | null = null;
@@ -153,8 +155,8 @@ function visibleRect(element: Element) {
   return rect;
 }
 
-export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose }: PhotoPlayerProps) {
-  const [playerState, dispatch] = useReducer(playerReducer, { initialIndex, total: photos.length, scope }, createPlayerState);
+export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard" }: PhotoPlayerProps) {
+  const [playerState, dispatch] = useReducer(playerReducer, { initialIndex, total: photos.length, scope, launchMode }, createPlayerState);
   const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hasMusicLoaded, setHasMusicLoaded] = useState(false);
@@ -169,6 +171,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     landscapeRail: false
   }));
   const cacheRef = useRef(new Map<number, CacheEntry>());
+  const [cacheRevision, setCacheRevision] = useState(0);
   const musicIframeRef = useRef<HTMLIFrameElement | null>(null);
   const soundCloudWidgetRef = useRef<SoundCloudWidget | null>(null);
   const stateRef = useRef<PlayerState>(playerState);
@@ -280,6 +283,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         }
         entry.ready = true;
         entry.failed = false;
+        entry.image.onload = null;
+        entry.image.onerror = null;
+        setCacheRevision((revision) => revision + 1);
         markBufferedImageReady(index);
       };
 
@@ -288,6 +294,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           return;
         }
         entry.failed = true;
+        entry.image.onload = null;
+        entry.image.onerror = null;
+        setCacheRevision((revision) => revision + 1);
         markBufferedImageReady(index);
       };
 
@@ -352,6 +361,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     clearInitialDelayTimer();
     clearResumeTimer();
     warmBuffer(currentIndexRef.current);
+    dispatch({ type: "WARMUP_EXIT" });
     dispatch({ type: "PLAY" });
   }, [clearInitialDelayTimer, clearResumeTimer, revealControls, warmBuffer]);
 
@@ -635,6 +645,68 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       return false;
     }
 
+    if (state.launchMode === "homepage-autoplay" && state.warmupPhase !== "inactive" && state.warmupPhase !== "steady-forward") {
+      const statuses = new Map<number, "ready" | "failed">();
+      for (const [index, entry] of cacheRef.current) {
+        if (entry.ready) statuses.set(index, "ready");
+        else if (entry.failed) statuses.set(index, "failed");
+      }
+      const first = usableRange(statuses, 0, Math.min(5, photos.length));
+      const second = usableRange(statuses, 5, Math.min(15, photos.length));
+      const phase = state.warmupPhase;
+      const moveWithin = (indices: number[], forward: boolean, forwardPhase: PlayerState["warmupPhase"], backwardPhase: PlayerState["warmupPhase"]) => {
+        const position = indices.indexOf(state.currentIndex);
+        if (forward && position >= 0 && position < indices.length - 1) {
+          dispatch({ type: "WARMUP_FRAME", index: indices[position + 1], phase: forwardPhase });
+          return true;
+        }
+        if (forward && indices.length > 1) {
+          dispatch({ type: "WARMUP_FRAME", index: indices[indices.length - 2], phase: backwardPhase });
+          return true;
+        }
+        if (!forward && position > 0) {
+          dispatch({ type: "WARMUP_FRAME", index: indices[position - 1], phase: backwardPhase });
+          return true;
+        }
+        return false;
+      };
+
+      if (phase === "first-five-forward" && moveWithin(first, true, "first-five-forward", "first-five-backward")) return true;
+      if (phase === "first-five-backward" && moveWithin(first, false, "first-five-forward", "first-five-backward")) return true;
+      if (phase === "first-five-forward" || phase === "first-five-backward") {
+        if (settledRange(statuses, 5, Math.min(15, photos.length))) {
+          if (second.length) {
+            for (let index = 15; index < Math.min(photos.length, 45); index += 1) preloadPhoto(index);
+            dispatch({ type: "WARMUP_FRAME", index: second[0], phase: second.length > 1 ? "next-ten-forward" : "next-ten-backward" });
+          } else {
+            dispatch({ type: "WARMUP_EXIT" });
+          }
+          return true;
+        }
+        if (first.length > 1) {
+          dispatch({ type: "WARMUP_FRAME", index: first[1], phase: "first-five-forward" });
+          return true;
+        }
+        return false;
+      }
+
+      if (phase === "next-ten-forward" && moveWithin(second, true, "next-ten-forward", "next-ten-backward")) return true;
+      if (phase === "next-ten-backward" && moveWithin(second, false, "next-ten-forward", "next-ten-backward")) return true;
+      if (phase === "next-ten-forward" || phase === "next-ten-backward") {
+        const steadyReady = photos.length <= 15 || Boolean(cacheRef.current.get(15)?.ready || cacheRef.current.get(15)?.failed);
+        if (steadyReady) {
+          dispatch({ type: "WARMUP_EXIT" });
+          dispatch({ type: "ADVANCE" });
+          return true;
+        }
+        if (second.length > 1) {
+          dispatch({ type: "WARMUP_FRAME", index: second[1], phase: "next-ten-forward" });
+          return true;
+        }
+        return false;
+      }
+    }
+
     const nextIndex = state.currentIndex + 1;
     if (nextIndex >= photos.length) {
       dispatch({ type: "REACH_END" });
@@ -687,7 +759,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       });
     }
 
-    warmBuffer(initialIndex);
+    if (launchMode === "homepage-autoplay") {
+      for (let index = 0; index < Math.min(5, photos.length); index += 1) preloadPhoto(index);
+    } else {
+      warmBuffer(initialIndex);
+    }
     revealControls();
     const frame = window.requestAnimationFrame(() => {
       surfaceRef.current?.focus({ preventScroll: true });
@@ -705,12 +781,36 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     revealControls,
     scope.type,
     scope.year,
-    warmBuffer
+    warmBuffer,
+    launchMode,
+    preloadPhoto
   ]);
 
   useEffect(() => {
-    warmBuffer(currentIndex);
-  }, [currentIndex, warmBuffer]);
+    if (playerState.warmupPhase === "inactive") warmBuffer(currentIndex);
+  }, [currentIndex, playerState.warmupPhase, warmBuffer]);
+
+  useEffect(() => {
+    if (launchMode !== "homepage-autoplay" || stateRef.current.warmupPhase !== "loading-first-five") return;
+    const statuses = new Map<number, "ready" | "failed">();
+    for (const [index, entry] of cacheRef.current) {
+      if (entry.ready) statuses.set(index, "ready");
+      else if (entry.failed) statuses.set(index, "failed");
+    }
+    const firstEnd = Math.min(5, photos.length);
+    const usable = usableRange(statuses, 0, firstEnd);
+    if (usable.length && stateRef.current.currentIndex !== usable[0]) {
+      dispatch({ type: "WARMUP_FRAME", index: usable[0], phase: "loading-first-five" });
+    }
+    if (!settledRange(statuses, 0, firstEnd)) return;
+    if (!usable.length) return;
+    for (let index = 5; index < Math.min(15, photos.length); index += 1) preloadPhoto(index);
+    if (usable.length === 1 && photos.length <= 5) {
+      dispatch({ type: "WARMUP_FRAME", index: usable[0], phase: "steady-forward" });
+      return;
+    }
+    dispatch({ type: "WARMUP_FRAME", index: usable[0], phase: "first-five-forward" });
+  }, [cacheRevision, launchMode, photos.length, preloadPhoto]);
 
   useEffect(() => {
     markVisibleImageReady();
@@ -1035,6 +1135,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       role="dialog"
       aria-modal="true"
       aria-label="Photo player"
+      data-player-warmup-phase={playerState.warmupPhase}
+      data-player-cache-entries={cacheRef.current.size}
+      data-player-pending-images={[...cacheRef.current.values()].filter((entry) => !entry.ready && !entry.failed).length}
+      data-player-decoded-images={[...cacheRef.current.values()].filter((entry) => entry.ready).length}
       onMouseMove={revealControls}
       onTouchStart={revealControls}
     >
@@ -1228,6 +1332,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             draggable={false}
             onLoad={markVisibleImageReady}
             onError={() => {
+              if (stateRef.current.launchMode === "homepage-autoplay" && stateRef.current.warmupPhase !== "inactive") {
+                return;
+              }
               if (!atEnd) {
                 dispatch({ type: "ADVANCE" });
               } else {
