@@ -373,7 +373,6 @@ function App() {
   const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [activePhotoYear, setActivePhotoYear] = useState<string | null>(null);
-  const [homepageAutoplayActive, setHomepageAutoplayActive] = useState(false);
   const activeYearRef = useRef<string | null>(null);
   const activePhotoIdRef = useRef<string | null>(null);
   const activePhotoYearRef = useRef<string | null>(null);
@@ -389,6 +388,7 @@ function App() {
     typeof window === "undefined" ? "/" : `${window.location.pathname}${window.location.search}${window.location.hash}`
   );
   const homepageAutoplayDismissedRef = useRef(false);
+  const [homepageAutoplayActive, setHomepageAutoplayActive] = useState(() => homepageAutoplayEligibleRef.current);
   const savedAnchorsRef = useRef(new Map<string, Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">>());
   const { states, indexes, collections, cachedYears, loadingYears, loadYear, cancelYearLoad, retryYear, retryAlbum } = useArchiveYearCache(
     catalog,
@@ -526,6 +526,9 @@ function App() {
     initializedRef.current = true;
     clearOwnedLegacyRestorationState(catalog.years.map(({ year }) => year));
     navigateToArchiveTarget(target, "initial");
+    if (homepageAutoplayEligibleRef.current && !homepageAutoplayDismissedRef.current) {
+      window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+    }
     if (photoId) {
       setActivePhotoId(photoId);
       setActivePhotoYear(target.year);
@@ -533,16 +536,15 @@ function App() {
   }, [catalog, navigateToArchiveTarget]);
 
   useEffect(() => {
-    if (!homepageAutoplayEligibleRef.current || homepageAutoplayDismissedRef.current || homepageAutoplayActive || !activeYear) return;
+    if (!homepageAutoplayEligibleRef.current || homepageAutoplayDismissedRef.current || activePhotoIdRef.current || !activeYear) return;
     const collection = collections.get(activeYear);
     const firstPhoto = collection?.photos[0];
     if (!firstPhoto) return;
     recordDiagnostic("homepage-autoplayer-open", { year: activeYear, photoId: firstPhoto.id });
     setActivePhotoId(firstPhoto.id);
     setActivePhotoYear(activeYear);
-    setHomepageAutoplayActive(true);
     window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
-  }, [activeYear, collections, homepageAutoplayActive]);
+  }, [activeYear, collections]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -635,44 +637,55 @@ function App() {
     }
   }, [catalogueId, homepageAutoplayActive, navigateToArchiveTarget]);
 
-  if (catalogState.status === "loading") return <SystemState title="640×480" message={catalogState.message} />;
-  if (catalogState.status === "error") return <SystemState title="640×480" message={catalogState.message} />;
-  if (!activeYear || !states.size) return <SystemState title="640×480" message="Building archive index" />;
-
   const ArchiveGrid = SEAMLESS_YEAR_SEGMENTS_ENABLED ? SegmentedYearGrid : YearWindowGrid;
+  const archiveView = catalogState.status === "loading"
+    ? <SystemState title="640×480" message={catalogState.message} />
+    : catalogState.status === "error"
+      ? <SystemState title="640×480" message={catalogState.message} />
+      : !activeYear || !states.size
+        ? <SystemState title="640×480" message="Building archive index" />
+        : (
+          <ArchiveGrid
+            years={years}
+            states={states}
+            timelineModel={timelineModel}
+            activeYear={activeYear}
+            protectedPhotoYear={activePhotoYear}
+            restoration={restoration}
+            onNavigate={navigateToArchiveTarget}
+            onRestorationWait={(generation) => dispatchRestoration({ type: "wait-for-layout", generation })}
+            onRestorationApply={(generation) => dispatchRestoration({ type: "apply", generation })}
+            onRestorationSettle={(generation, visibleYear) => dispatchRestoration({ type: "settle", generation, visibleYear })}
+            onRestorationCancel={(generation) => dispatchRestoration({ type: "cancel", generation })}
+            onPersistAnchor={(anchor) => {
+              savedAnchorsRef.current.set(anchor.year, anchor);
+              if (!activePhotoIdRef.current) replaceCurrentHistoryAnchor(catalogueId, anchor);
+            }}
+            onOpenPhoto={openPhoto}
+            onRequestYear={(year, reason) => loadYear(year, reason)}
+            onCancelYearRequest={cancelYearLoad}
+            onPassiveHandoff={passiveHandoffToYear}
+            onRetryYear={retryYear}
+            onRetryAlbum={retryAlbum}
+          />
+        );
+  const homepageCollection = activeYear ? collections.get(activeYear) || null : null;
+  const showPlayer = homepageAutoplayActive || Boolean(activePhotoId && activePhotoIndex !== null && playerCollection);
+  const displayedCollection = homepageAutoplayActive ? homepageCollection : playerCollection;
+  const displayedPhotos = displayedCollection?.photos || [];
+  const displayedInitialIndex = homepageAutoplayActive ? Math.max(0, activePhotoIndex || 0) : activePhotoIndex || 0;
+  const displayedYear = displayedCollection?.year || activeYear || "homepage-loading";
 
   return (
     <>
-      <ArchiveGrid
-        years={years}
-        states={states}
-        timelineModel={timelineModel}
-        activeYear={activeYear}
-        protectedPhotoYear={activePhotoYear}
-        restoration={restoration}
-        onNavigate={navigateToArchiveTarget}
-        onRestorationWait={(generation) => dispatchRestoration({ type: "wait-for-layout", generation })}
-        onRestorationApply={(generation) => dispatchRestoration({ type: "apply", generation })}
-        onRestorationSettle={(generation, visibleYear) => dispatchRestoration({ type: "settle", generation, visibleYear })}
-        onRestorationCancel={(generation) => dispatchRestoration({ type: "cancel", generation })}
-        onPersistAnchor={(anchor) => {
-          savedAnchorsRef.current.set(anchor.year, anchor);
-          if (!activePhotoIdRef.current) replaceCurrentHistoryAnchor(catalogueId, anchor);
-        }}
-        onOpenPhoto={openPhoto}
-        onRequestYear={(year, reason) => loadYear(year, reason)}
-        onCancelYearRequest={cancelYearLoad}
-        onPassiveHandoff={passiveHandoffToYear}
-        onRetryYear={retryYear}
-        onRetryAlbum={retryAlbum}
-      />
-      {activePhotoId && activePhotoIndex !== null && playerCollection ? (
+      {homepageAutoplayActive ? <div aria-hidden="true" {...({ inert: "" } as Record<string, string>)}>{archiveView}</div> : archiveView}
+      {showPlayer ? (
         <PhotoPlayerView
-          key={`${playerCollection.year}:${activePhotoId}`}
-          photos={playerCollection.photos}
-          initialIndex={activePhotoIndex}
+          key={homepageAutoplayActive ? "homepage-autoplayer-session" : `${displayedYear}:${activePhotoId}`}
+          photos={displayedPhotos}
+          initialIndex={displayedInitialIndex}
           openInFullscreen={fullscreenLaunchPhotoIdRef.current === activePhotoId}
-          scope={{ type: "year", year: playerCollection.year }}
+          scope={{ type: "year", year: displayedYear }}
           launchMode={homepageAutoplayActive ? "homepage-autoplay" : "standard"}
           onClose={closePlayer}
         />

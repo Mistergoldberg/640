@@ -1137,7 +1137,37 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, [currentPhoto, imageMode, playerViewport.height, playerViewport.landscapeRail, playerViewport.width]);
 
   if (!currentPhoto) {
-    return null;
+    if (launchMode !== "homepage-autoplay") return null;
+    return (
+      <div
+        className="player-overlay has-visible-controls"
+        data-player-layout={playerViewport.landscapeRail ? "mobile-landscape-rail" : "standard"}
+        data-player-warmup-phase="loading-first-five"
+        data-player-shell-state="loading"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Photo player"
+      >
+        <div className="player-media-stage" ref={mediaStageRef}>
+          <button
+            ref={surfaceRef}
+            className="player-surface player-surface--fit"
+            type="button"
+            aria-label="Loading photographs"
+            onClick={revealControls}
+          >
+            <span className="player-buffer" role="status">Loading photographs</span>
+          </button>
+        </div>
+        <div className="player-control-frame">
+          <div className="player-topbar">
+            <button className="icon-button" type="button" onClick={close} aria-label="Close" title="Close">
+              <X size={22} strokeWidth={2.2} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const playerImageStyle =

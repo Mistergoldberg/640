@@ -43,6 +43,130 @@ async function autoplayProbe(page: import("@playwright/test").Page) {
   }).__homepageAutoplayProbe!);
 }
 
+async function installShellMountProbe(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    const target = window as typeof window & {
+      __homepageShellMounts?: number;
+      __homepageStartupEvents?: Array<{ ordinal: number; type: string }>;
+      __recordHomepageStartupEvent?: (type: string) => void;
+    };
+    target.__homepageShellMounts = 0;
+    target.__homepageStartupEvents = [];
+    target.__recordHomepageStartupEvent = (type) => {
+      target.__homepageStartupEvents!.push({ ordinal: target.__homepageStartupEvents!.length + 1, type });
+    };
+    target.__recordHomepageStartupEvent("eligibilityCaptured");
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches('[aria-label="Photo player"]') || node.querySelector('[aria-label="Photo player"]')) {
+            target.__homepageShellMounts = (target.__homepageShellMounts || 0) + 1;
+            target.__recordHomepageStartupEvent?.("playerShellCommitted");
+          }
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
+}
+
+test("eligible homepage commits one inert-backed player shell before catalogue resolution", async ({ page }) => {
+  let releaseCatalog!: () => void;
+  const catalogueGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+  await installShellMountProbe(page);
+  await page.route("**/data/catalog.json", async (route) => {
+    await catalogueGate;
+    await route.continue();
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await expect(page.getByLabel("Loading photographs")).toBeFocused();
+  await expect(page.locator('[aria-hidden="true"][inert]')).toHaveCount(1);
+  await expect(page.locator(".collection-shell")).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe("");
+  const catalogResponse = page.waitForResponse("**/data/catalog.json");
+  releaseCatalog();
+  await catalogResponse;
+  await page.evaluate(() => (window as typeof window & { __recordHomepageStartupEvent?: (type: string) => void })
+    .__recordHomepageStartupEvent?.("catalogueResolved"));
+  await expect(page.locator(".player-image")).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => (window as typeof window & { __homepageShellMounts?: number }).__homepageShellMounts)).toBe(1);
+  const events = await page.evaluate(() => (window as typeof window & {
+    __homepageStartupEvents?: Array<{ ordinal: number; type: string }>;
+  }).__homepageStartupEvents || []);
+  expect(events.map(({ type }) => type).slice(0, 3)).toEqual([
+    "eligibilityCaptured",
+    "playerShellCommitted",
+    "catalogueResolved",
+  ]);
+});
+
+test("player shell remains mounted while the year collection is unresolved", async ({ page }) => {
+  let releaseAlbums!: () => void;
+  const albumGate = new Promise<void>((resolve) => { releaseAlbums = resolve; });
+  await installShellMountProbe(page);
+  await page.route("**/data/2013/albums/*.json", async (route) => {
+    await albumGate;
+    await route.continue();
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await page.waitForTimeout(1000);
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
+  await expect(page.locator('[aria-hidden="true"][inert]')).toHaveCount(1);
+  releaseAlbums();
+  await expect(page.locator(".player-image")).toBeVisible({ timeout: 30_000 });
+  await page.evaluate(() => (window as typeof window & { __recordHomepageStartupEvent?: (type: string) => void })
+    .__recordHomepageStartupEvent?.("yearCollectionResolved"));
+  expect(await page.evaluate(() => (window as typeof window & { __homepageShellMounts?: number }).__homepageShellMounts)).toBe(1);
+  const events = await page.evaluate(() => (window as typeof window & {
+    __homepageStartupEvents?: Array<{ ordinal: number; type: string }>;
+  }).__homepageStartupEvents || []);
+  expect(events.find(({ type }) => type === "playerShellCommitted")!.ordinal)
+    .toBeLessThan(events.find(({ type }) => type === "yearCollectionResolved")!.ordinal);
+});
+
+test("closing before catalogue completion prevents a late autoplay session", async ({ page }) => {
+  let releaseCatalog!: () => void;
+  const catalogueGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+  await page.route("**/data/catalog.json", async (route) => {
+    await catalogueGate;
+    await route.continue();
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  releaseCatalog();
+  await expect(page.locator(".collection-shell")).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(500);
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+});
+
+test("a failed catalogue leaves the loading shell closable without reopening", async ({ page }) => {
+  await page.route("**/data/catalog.json", (route) => route.fulfill({ status: 503, body: "catalogue unavailable" }));
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  await page.waitForTimeout(500);
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe("");
+});
+
+test("a failed year collection leaves the loading shell closable without reopening", async ({ page }) => {
+  await page.route("**/data/2013/albums/*.json", (route) => route.fulfill({ status: 503, body: "album unavailable" }));
+  const failedAlbum = page.waitForResponse((response) => response.url().includes("/data/2013/albums/") && response.status() === 503);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  await failedAlbum;
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  await page.waitForTimeout(500);
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe("");
+});
+
 test("clean homepage and cache-busting entry autoplay without pushing history", async ({ page }) => {
   for (const path of ["/", "/?v=autoplay-test"]) {
     await page.goto(path);
