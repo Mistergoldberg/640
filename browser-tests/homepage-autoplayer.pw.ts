@@ -70,6 +70,63 @@ async function installShellMountProbe(page: import("@playwright/test").Page) {
   });
 }
 
+interface DocumentLifecycleProbe {
+  documentId: string;
+  shellMounts: number;
+  mediaAssignments: string[];
+}
+
+async function installDocumentLifecycleProbe(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    const target = window as typeof window & { __homepageDocumentLifecycleProbe?: DocumentLifecycleProbe };
+    const probe: DocumentLifecycleProbe = {
+      documentId: crypto.randomUUID(),
+      shellMounts: 0,
+      mediaAssignments: []
+    };
+    target.__homepageDocumentLifecycleProbe = probe;
+    const mountedShells = new WeakSet<Element>();
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const shell = node.matches('[aria-label="Photo player"]')
+            ? node
+            : node.querySelector('[aria-label="Photo player"]');
+          if (shell && !mountedShells.has(shell)) {
+            mountedShells.add(shell);
+            probe.shellMounts += 1;
+          }
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    if (descriptor?.get && descriptor.set) {
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set(value: string) {
+          if (String(value).includes("/display/")) probe.mediaAssignments.push(String(value));
+          descriptor.set?.call(this, value);
+        }
+      });
+    }
+  });
+}
+
+async function documentLifecycleProbe(page: import("@playwright/test").Page) {
+  return page.evaluate(() => (window as typeof window & {
+    __homepageDocumentLifecycleProbe?: DocumentLifecycleProbe;
+  }).__homepageDocumentLifecycleProbe!);
+}
+
+async function closePlayerThroughDom(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Close", exact: true }).evaluate((button) => button.click());
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+}
+
 test("eligible homepage commits one inert-backed player shell before catalogue resolution", async ({ page }) => {
   let releaseCatalog!: () => void;
   const catalogueGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
@@ -203,6 +260,198 @@ test("closing suppresses reopen for the document and reload restores eligibility
 
   await page.reload();
   await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+});
+
+test("loading dismissal stays document-scoped and reload mounts one fresh shell before catalogue resolution", async ({ page }) => {
+  let releaseFirstCatalog!: () => void;
+  let releaseSecondCatalog!: () => void;
+  const firstCatalogGate = new Promise<void>((resolve) => { releaseFirstCatalog = resolve; });
+  const secondCatalogGate = new Promise<void>((resolve) => { releaseSecondCatalog = resolve; });
+  let catalogRequests = 0;
+  await installDocumentLifecycleProbe(page);
+  await page.route("**/data/catalog.json", async (route) => {
+    catalogRequests += 1;
+    if (catalogRequests === 1) await firstCatalogGate;
+    if (catalogRequests === 2) await secondCatalogGate;
+    await route.continue();
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
+  const originalDocument = await documentLifecycleProbe(page);
+  const originalHistoryLength = await page.evaluate(() => history.length);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+
+  releaseFirstCatalog();
+  await expect(page.locator(".collection-shell")).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1000);
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe("");
+  expect((await documentLifecycleProbe(page)).documentId).toBe(originalDocument.documentId);
+  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
+  await expect(page.locator('[aria-hidden="true"][inert]')).toHaveCount(1);
+  await expect(page.locator(".collection-shell")).toHaveCount(0);
+  const reloadedDocument = await documentLifecycleProbe(page);
+  expect(reloadedDocument.documentId).not.toBe(originalDocument.documentId);
+  expect(reloadedDocument.shellMounts).toBe(1);
+  expect(await page.evaluate(() => performance.getEntriesByType("navigation")[0]?.type)).toBe("reload");
+  expect(await page.evaluate(() => history.length)).toBe(originalHistoryLength);
+  expect(new URL(page.url()).search).toBe("");
+
+  releaseSecondCatalog();
+  await expect(page.locator(".player-image")).toBeVisible({ timeout: 30_000 });
+  const settledProbe = await documentLifecycleProbe(page);
+  expect(settledProbe.shellMounts).toBe(1);
+});
+
+test("pre-reload catalogue completion cannot mutate the new player session", async ({ page }) => {
+  let releaseStaleCatalog!: () => void;
+  const staleCatalogGate = new Promise<void>((resolve) => { releaseStaleCatalog = resolve; });
+  let catalogRequests = 0;
+  await installDocumentLifecycleProbe(page);
+  await page.route("**/data/catalog.json", async (route) => {
+    catalogRequests += 1;
+    if (catalogRequests === 1) {
+      await staleCatalogGate;
+      try {
+        await route.continue();
+      } catch {
+        // The old document's request is expected to be cancelled by reload.
+      }
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible();
+  const oldDocumentId = (await documentLifecycleProbe(page)).documentId;
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+
+  const reload = page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+  releaseStaleCatalog();
+  await reload;
+  await expect(page.locator(".player-image")).toBeVisible({ timeout: 30_000 });
+  const newDocument = await documentLifecycleProbe(page);
+  expect(newDocument.documentId).not.toBe(oldDocumentId);
+  expect(newDocument.shellMounts).toBe(1);
+  expect(new URL(page.url()).search).toBe("");
+});
+
+test("Stage 1 and steady playback dismissals reset only after a full reload", async ({ page }) => {
+  await installDocumentLifecycleProbe(page);
+  for (const phase of ["first-five-forward", "inactive"]) {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-warmup-phase", phase, { timeout: 30_000 });
+    const dismissedDocumentId = (await documentLifecycleProbe(page)).documentId;
+    await closePlayerThroughDom(page);
+    await page.waitForTimeout(1000);
+    await expect(page.getByLabel("Photo player")).toHaveCount(0);
+    expect((await documentLifecycleProbe(page)).documentId).toBe(dismissedDocumentId);
+    expect(new URL(page.url()).search).toBe("");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
+    const reloadedDocument = await documentLifecycleProbe(page);
+    expect(reloadedDocument.documentId).not.toBe(dismissedDocumentId);
+    expect(reloadedDocument.shellMounts).toBe(1);
+    expect(new URL(page.url()).search).toBe("");
+  }
+});
+
+test("same-document navigation and Back preserve dismissal", async ({ page }) => {
+  await installDocumentLifecycleProbe(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByLabel("Photo player")).toHaveAttribute(
+    "data-player-warmup-phase",
+    "first-five-forward",
+    { timeout: 30_000 }
+  );
+  await closePlayerThroughDom(page);
+  await expect(page.locator('.collection-shell[data-active-year="2013"]')).toBeVisible({ timeout: 30_000 });
+  const dismissedDocumentId = (await documentLifecycleProbe(page)).documentId;
+
+  await page.evaluate(() => {
+    history.pushState(history.state, "", "/?year=2002");
+    window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+  });
+  await expect(page.locator('.collection-shell[data-active-year="2002"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  expect((await documentLifecycleProbe(page)).documentId).toBe(dismissedDocumentId);
+
+  await page.goBack({ waitUntil: "commit" });
+  await expect(page.locator('.collection-shell[data-active-year="2013"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  expect((await documentLifecycleProbe(page)).documentId).toBe(dismissedDocumentId);
+  expect(new URL(page.url()).search).toBe("");
+});
+
+test("excluded entries remain excluded across reload", async ({ page }) => {
+  for (const path of ["/?year=2002", "/?debug=1", "/other"]) {
+    await page.goto(path);
+    await expect(page.locator(".collection-shell")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByLabel("Photo player")).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator(".collection-shell")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  }
+
+  await page.goto("/?year=2013&photo=2013-4651b733c14c76");
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-warmup-phase", "inactive", { timeout: 30_000 });
+  await page.reload();
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-warmup-phase", "inactive", { timeout: 30_000 });
+});
+
+test("ten close-reload cycles create one bounded player session per document", async ({ page }) => {
+  await installDocumentLifecycleProbe(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const historyLength = await page.evaluate(() => history.length);
+  const documentIds = new Set<string>();
+  const maxima = { cache: 0, images: 0, dom: 0, heap: 0 };
+  const samples: Array<typeof maxima> = [];
+
+  for (let cycle = 0; cycle < 10; cycle += 1) {
+    await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".player-image")).toBeVisible({ timeout: 30_000 });
+    const probe = await documentLifecycleProbe(page);
+    documentIds.add(probe.documentId);
+    expect(probe.shellMounts).toBe(1);
+    const sample = await page.evaluate(() => {
+      const player = document.querySelector<HTMLElement>('[aria-label="Photo player"]');
+      const memory = performance as Performance & { memory?: { usedJSHeapSize: number } };
+      return {
+        cache: Number(player?.dataset.playerCacheEntries || 0),
+        images: document.images.length,
+        dom: document.getElementsByTagName("*").length,
+        heap: memory.memory?.usedJSHeapSize || 0
+      };
+    });
+    samples.push(sample);
+    for (const key of Object.keys(maxima) as Array<keyof typeof maxima>) maxima[key] = Math.max(maxima[key], sample[key]);
+
+    await closePlayerThroughDom(page);
+    await page.waitForTimeout(750);
+    await expect(page.getByLabel("Photo player")).toHaveCount(0);
+    expect(new URL(page.url()).search).toBe("");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+  }
+
+  await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
+  documentIds.add((await documentLifecycleProbe(page)).documentId);
+  expect(documentIds.size).toBe(11);
+  expect(maxima.cache).toBeLessThanOrEqual(15);
+  expect(maxima.images).toBeLessThanOrEqual(45);
+  expect(maxima.dom).toBeLessThanOrEqual(220);
+  expect(Math.max(...samples.map(({ images }) => images)) - Math.min(...samples.map(({ images }) => images))).toBeLessThanOrEqual(20);
+  expect(Math.max(...samples.map(({ dom }) => dom)) - Math.min(...samples.map(({ dom }) => dom))).toBeLessThanOrEqual(30);
+  console.log(JSON.stringify({ homepageReloadCycles: { cycles: 10, documents: documentIds.size, maxima, samples } }));
 });
 
 test("the homepage player keeps mobile portrait and landscape layouts", async ({ browser }) => {

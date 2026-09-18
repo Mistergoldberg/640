@@ -45,7 +45,11 @@ import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
 import type { Catalog } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 import { segmentIdentity } from "./archive/yearSegmentController";
-import { HOMEPAGE_AUTOPLAYER_ENABLED, isEligibleHomepageAutoplayUrl } from "./player/homepageAutoplay";
+import {
+  createHomepageAutoplayDocumentState,
+  dismissHomepageAutoplayForDocument,
+  HOMEPAGE_AUTOPLAYER_ENABLED
+} from "./player/homepageAutoplay";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
 const GRID_MIN_OVERSCAN_PX = 260;
@@ -379,16 +383,14 @@ function App() {
   const fullscreenLaunchPhotoIdRef = useRef<string | null>(null);
   const pendingClosePhotoIdRef = useRef<string | null>(null);
   const initializedRef = useRef(false);
-  const homepageAutoplayEligibleRef = useRef(
-    HOMEPAGE_AUTOPLAYER_ENABLED
-      && typeof window !== "undefined"
-      && isEligibleHomepageAutoplayUrl(window.location.href, diagnosticsEnabled())
+  const homepageAutoplayDocumentRef = useRef(
+    createHomepageAutoplayDocumentState(
+      typeof window === "undefined" ? "/" : window.location.href,
+      HOMEPAGE_AUTOPLAYER_ENABLED,
+      diagnosticsEnabled()
+    )
   );
-  const homepageAutoplayPathRef = useRef(
-    typeof window === "undefined" ? "/" : `${window.location.pathname}${window.location.search}${window.location.hash}`
-  );
-  const homepageAutoplayDismissedRef = useRef(false);
-  const [homepageAutoplayActive, setHomepageAutoplayActive] = useState(() => homepageAutoplayEligibleRef.current);
+  const [homepageAutoplayActive, setHomepageAutoplayActive] = useState(() => homepageAutoplayDocumentRef.current.eligible);
   const savedAnchorsRef = useRef(new Map<string, Omit<StoredArchiveAnchor, "schema" | "catalogueId" | "entryId">>());
   const { states, indexes, collections, cachedYears, loadingYears, loadYear, cancelYearLoad, retryYear, retryAlbum } = useArchiveYearCache(
     catalog,
@@ -526,8 +528,8 @@ function App() {
     initializedRef.current = true;
     clearOwnedLegacyRestorationState(catalog.years.map(({ year }) => year));
     navigateToArchiveTarget(target, "initial");
-    if (homepageAutoplayEligibleRef.current && !homepageAutoplayDismissedRef.current) {
-      window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+    if (homepageAutoplayDocumentRef.current.eligible) {
+      window.history.replaceState(window.history.state, "", homepageAutoplayDocumentRef.current.initialPath);
     }
     if (photoId) {
       setActivePhotoId(photoId);
@@ -536,14 +538,14 @@ function App() {
   }, [catalog, navigateToArchiveTarget]);
 
   useEffect(() => {
-    if (!homepageAutoplayEligibleRef.current || homepageAutoplayDismissedRef.current || activePhotoIdRef.current || !activeYear) return;
+    if (!homepageAutoplayDocumentRef.current.eligible || homepageAutoplayDocumentRef.current.dismissed || activePhotoIdRef.current || !activeYear) return;
     const collection = collections.get(activeYear);
     const firstPhoto = collection?.photos[0];
     if (!firstPhoto) return;
     recordDiagnostic("homepage-autoplayer-open", { year: activeYear, photoId: firstPhoto.id });
     setActivePhotoId(firstPhoto.id);
     setActivePhotoYear(activeYear);
-    window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+    window.history.replaceState(window.history.state, "", homepageAutoplayDocumentRef.current.initialPath);
   }, [activeYear, collections]);
 
   useEffect(() => {
@@ -610,8 +612,7 @@ function App() {
 
   const closePlayer = useCallback((photoId: string) => {
     if (homepageAutoplayActive) {
-      homepageAutoplayDismissedRef.current = true;
-      homepageAutoplayEligibleRef.current = false;
+      dismissHomepageAutoplayForDocument(homepageAutoplayDocumentRef.current);
       setHomepageAutoplayActive(false);
     }
     fullscreenLaunchPhotoIdRef.current = null;
@@ -633,7 +634,7 @@ function App() {
     setActivePhotoYear(null);
     pendingClosePhotoIdRef.current = null;
     if (homepageAutoplayActive) {
-      window.history.replaceState(window.history.state, "", homepageAutoplayPathRef.current);
+      window.history.replaceState(window.history.state, "", homepageAutoplayDocumentRef.current.initialPath);
     }
   }, [catalogueId, homepageAutoplayActive, navigateToArchiveTarget]);
 

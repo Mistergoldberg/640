@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { homepageAutoplayerEnabled, isEligibleHomepageAutoplayUrl, pingPongOrder, settledRange, usableRange } from "./homepageAutoplay";
+import {
+  createHomepageAutoplayDocumentState,
+  dismissHomepageAutoplayForDocument,
+  homepageAutoplayerEnabled,
+  isEligibleHomepageAutoplayUrl,
+  pingPongOrder,
+  settledRange,
+  usableRange
+} from "./homepageAutoplay";
 
 describe("homepage autoplay eligibility", () => {
   it("defaults off and accepts only explicit enabled values", () => {
@@ -17,6 +25,31 @@ describe("homepage autoplay eligibility", () => {
     expect(isEligibleHomepageAutoplayUrl("https://pixilation.org/?debug=1")).toBe(false);
     expect(isEligibleHomepageAutoplayUrl("https://pixilation.org/other")).toBe(false);
     expect(isEligibleHomepageAutoplayUrl("https://pixilation.org/", true)).toBe(false);
+  });
+
+  it("owns dismissal for one document without changing its initial eligibility or path", () => {
+    const documentState = createHomepageAutoplayDocumentState("https://pixilation.org/?v=123", true);
+    expect(documentState).toEqual({ eligible: true, initialPath: "/?v=123", dismissed: false });
+
+    dismissHomepageAutoplayForDocument(documentState);
+
+    expect(documentState).toEqual({ eligible: true, initialPath: "/?v=123", dismissed: true });
+  });
+
+  it("creates fresh dismissal state for each document and keeps excluded entries ineligible", () => {
+    const dismissedDocument = createHomepageAutoplayDocumentState("https://pixilation.org/", true);
+    dismissHomepageAutoplayForDocument(dismissedDocument);
+
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/", true)).toEqual({
+      eligible: true,
+      initialPath: "/",
+      dismissed: false
+    });
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/?year=2013", true).eligible).toBe(false);
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/?photo=x", true).eligible).toBe(false);
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/?debug=1", true).eligible).toBe(false);
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/other", true).eligible).toBe(false);
+    expect(createHomepageAutoplayDocumentState("https://pixilation.org/", false).eligible).toBe(false);
   });
 });
 

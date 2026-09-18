@@ -15,6 +15,29 @@ export function isEligibleHomepageAutoplayUrl(href: string, diagnostics = false)
     && !diagnostics;
 }
 
+export interface HomepageAutoplayDocumentState {
+  readonly eligible: boolean;
+  readonly initialPath: string;
+  dismissed: boolean;
+}
+
+export function createHomepageAutoplayDocumentState(
+  href: string,
+  enabled: boolean,
+  diagnostics = false
+): HomepageAutoplayDocumentState {
+  const url = new URL(href, "https://pixilation.org");
+  return {
+    eligible: enabled && isEligibleHomepageAutoplayUrl(url.href, diagnostics),
+    initialPath: `${url.pathname}${url.search}${url.hash}`,
+    dismissed: false
+  };
+}
+
+export function dismissHomepageAutoplayForDocument(state: HomepageAutoplayDocumentState) {
+  state.dismissed = true;
+}
+
 export type HomepageWarmupPhase =
   | "inactive"
   | "loading-first-five"
