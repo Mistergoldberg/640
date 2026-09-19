@@ -25,3 +25,26 @@ Manual navigation exits warm-up and retains the normal delayed automatic
 resume. Explicit pause does not restart warm-up. Speed changes retain the
 current phase. Closing clears timers, event handlers, and cache entries through
 the established player cleanup and restores the current stable photo anchor.
+
+## Resource accounting
+
+Player preloads and document images are different resource classes. Each
+decoded player-cache entry owns an off-DOM `Image` object created with
+`new Image()`; those objects are not included in `document.images` or
+`document.querySelectorAll("img")`. The player itself renders one connected
+current-frame `<img>` and does not retain a hidden previous frame or crossfade
+image.
+
+The archive remains mounted beneath the inert player so that closing restores
+the stable archive position. At the 1440×900 browser-test viewport, its bounded
+virtual window can contain 45 connected thumbnail `<img>` elements after a
+reload. The expected settled connected-DOM composition is therefore at most 45
+archive thumbnails plus one current player frame, or 46 total. This total is
+independent of the player cache's separate 45-entry steady warm-up window.
+
+Resource gates must report and bound player cache entries, connected player
+images, connected archive images, inactive/spacer images, and total connected
+DOM images independently. A close removes the current player frame immediately
+and clears the cache's handlers and ownership. Unreferenced preload objects may
+remain observable until normal garbage collection, so their pre-GC presence is
+not itself a retained-resource leak.

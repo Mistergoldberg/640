@@ -413,7 +413,17 @@ test("ten close-reload cycles create one bounded player session per document", a
   await page.goto("/", { waitUntil: "domcontentloaded" });
   const historyLength = await page.evaluate(() => history.length);
   const documentIds = new Set<string>();
-  const maxima = { cache: 0, images: 0, dom: 0, heap: 0 };
+  const maxima = {
+    playerCacheEntries: 0,
+    connectedDomImages: 0,
+    connectedPlayerImages: 0,
+    connectedArchiveImages: 0,
+    inactiveArchiveImages: 0,
+    spacerArchiveImages: 0,
+    otherConnectedImages: 0,
+    domNodes: 0,
+    heap: 0
+  };
   const samples: Array<typeof maxima> = [];
 
   for (let cycle = 0; cycle < 10; cycle += 1) {
@@ -424,20 +434,34 @@ test("ten close-reload cycles create one bounded player session per document", a
     expect(probe.shellMounts).toBe(1);
     const sample = await page.evaluate(() => {
       const player = document.querySelector<HTMLElement>('[aria-label="Photo player"]');
+      const images = [...document.images];
+      const playerImages = images.filter((image) => image.closest('[aria-label="Photo player"]'));
+      const archiveImages = images.filter((image) => image.closest(".photo-tile"));
+      const activeYear = document.querySelector<HTMLElement>(".collection-shell")?.dataset.activeYear;
       const memory = performance as Performance & { memory?: { usedJSHeapSize: number } };
       return {
-        cache: Number(player?.dataset.playerCacheEntries || 0),
-        images: document.images.length,
-        dom: document.getElementsByTagName("*").length,
+        playerCacheEntries: Number(player?.dataset.playerCacheEntries || 0),
+        connectedDomImages: document.images.length,
+        connectedPlayerImages: playerImages.length,
+        connectedArchiveImages: archiveImages.length,
+        inactiveArchiveImages: archiveImages.filter((image) => image.closest<HTMLElement>("[data-year]")?.dataset.year !== activeYear).length,
+        spacerArchiveImages: archiveImages.filter((image) => image.closest(".year-segment-spacer")).length,
+        otherConnectedImages: images.length - playerImages.length - archiveImages.length,
+        domNodes: document.getElementsByTagName("*").length,
         heap: memory.memory?.usedJSHeapSize || 0
       };
     });
+    expect(sample.connectedPlayerImages).toBe(1);
+    expect(sample.inactiveArchiveImages).toBe(0);
+    expect(sample.spacerArchiveImages).toBe(0);
+    expect(sample.otherConnectedImages).toBe(0);
     samples.push(sample);
     for (const key of Object.keys(maxima) as Array<keyof typeof maxima>) maxima[key] = Math.max(maxima[key], sample[key]);
 
     await closePlayerThroughDom(page);
     await page.waitForTimeout(750);
     await expect(page.getByLabel("Photo player")).toHaveCount(0);
+    await expect(page.locator('[aria-label="Photo player"] img')).toHaveCount(0);
     expect(new URL(page.url()).search).toBe("");
     await page.reload({ waitUntil: "domcontentloaded" });
     expect(await page.evaluate(() => history.length)).toBe(historyLength);
@@ -446,11 +470,16 @@ test("ten close-reload cycles create one bounded player session per document", a
   await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
   documentIds.add((await documentLifecycleProbe(page)).documentId);
   expect(documentIds.size).toBe(11);
-  expect(maxima.cache).toBeLessThanOrEqual(15);
-  expect(maxima.images).toBeLessThanOrEqual(45);
-  expect(maxima.dom).toBeLessThanOrEqual(220);
-  expect(Math.max(...samples.map(({ images }) => images)) - Math.min(...samples.map(({ images }) => images))).toBeLessThanOrEqual(20);
-  expect(Math.max(...samples.map(({ dom }) => dom)) - Math.min(...samples.map(({ dom }) => dom))).toBeLessThanOrEqual(30);
+  expect(maxima.playerCacheEntries).toBeLessThanOrEqual(15);
+  expect(maxima.connectedPlayerImages).toBe(1);
+  expect(maxima.connectedArchiveImages).toBeLessThanOrEqual(45);
+  expect(maxima.connectedDomImages).toBeLessThanOrEqual(46);
+  expect(maxima.inactiveArchiveImages).toBe(0);
+  expect(maxima.spacerArchiveImages).toBe(0);
+  expect(maxima.otherConnectedImages).toBe(0);
+  expect(maxima.domNodes).toBeLessThanOrEqual(220);
+  expect(Math.max(...samples.map(({ connectedDomImages }) => connectedDomImages)) - Math.min(...samples.map(({ connectedDomImages }) => connectedDomImages))).toBeLessThanOrEqual(20);
+  expect(Math.max(...samples.map(({ domNodes }) => domNodes)) - Math.min(...samples.map(({ domNodes }) => domNodes))).toBeLessThanOrEqual(30);
   console.log(JSON.stringify({ homepageReloadCycles: { cycles: 10, documents: documentIds.size, maxima, samples } }));
 });
 
@@ -467,7 +496,7 @@ test("the homepage player keeps mobile portrait and landscape layouts", async ({
 test("startup and steady playback remain resource bounded", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 30_000 });
-  const peak = { pending: 0, decoded: 0, cache: 0, images: 0, dom: 0, heap: 0 };
+  const peak = { pending: 0, decoded: 0, cache: 0, connectedDomImages: 0, dom: 0, heap: 0 };
   for (let sample = 0; sample < 50; sample += 1) {
     const current = await page.evaluate(() => {
       const player = document.querySelector<HTMLElement>('[aria-label="Photo player"]');
@@ -476,7 +505,7 @@ test("startup and steady playback remain resource bounded", async ({ page }) => 
         pending: Number(player?.dataset.playerPendingImages || 0),
         decoded: Number(player?.dataset.playerDecodedImages || 0),
         cache: Number(player?.dataset.playerCacheEntries || 0),
-        images: document.images.length,
+        connectedDomImages: document.images.length,
         dom: document.getElementsByTagName("*").length,
         heap: memory.memory?.usedJSHeapSize || 0
       };
@@ -487,7 +516,7 @@ test("startup and steady playback remain resource bounded", async ({ page }) => 
   console.log(JSON.stringify({ homepageAutoplayerPeak: peak }));
   expect(peak.pending).toBeLessThanOrEqual(45);
   expect(peak.cache).toBeLessThanOrEqual(51);
-  expect(peak.images).toBeLessThanOrEqual(80);
+  expect(peak.connectedDomImages).toBeLessThanOrEqual(80);
 });
 
 test("committed Stage 2 precedes rolling lookahead by deterministic event ordinal", async ({ page }) => {
