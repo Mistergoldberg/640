@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, type MutableRefObject } from "react";
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, Music, Pause, Play, Share2 } from "lucide-react";
 import { PLAYER_SPEED_OPTIONS, speedOption } from "./playerControlState";
 
@@ -13,6 +13,12 @@ interface PlayerControlsProps {
   shareActionLabel: "Share player link" | "Link copied" | "Share failed";
   shareIsActive: boolean;
   screenModeActive: boolean;
+  tutorialStep: 1 | 2 | 3 | null;
+  speedControlRef: MutableRefObject<HTMLButtonElement | null>;
+  musicControlRef: MutableRefObject<HTMLButtonElement | null>;
+  speedDescriptionId?: string;
+  musicDescriptionId?: string;
+  onTrustedInteraction: () => void;
   onPrevious: () => void;
   onTogglePlayback: () => void;
   onNext: () => void;
@@ -36,6 +42,12 @@ export function PlayerControls({
   shareActionLabel,
   shareIsActive,
   screenModeActive,
+  tutorialStep,
+  speedControlRef,
+  musicControlRef,
+  speedDescriptionId,
+  musicDescriptionId,
+  onTrustedInteraction,
   onPrevious,
   onTogglePlayback,
   onNext,
@@ -52,6 +64,7 @@ export function PlayerControls({
   const speedMenuRef = useRef<HTMLDivElement | null>(null);
   const speedMenuId = useId();
   const selectedSpeed = speedOption(delayMs);
+  const tutorialActive = tutorialStep !== null;
 
   useEffect(() => {
     if (!speedMenuOpen) {
@@ -129,7 +142,12 @@ export function PlayerControls({
     };
   }, [onCloseSpeedMenu, speedMenuOpen]);
 
+  useEffect(() => {
+    if (tutorialStep !== 2 && speedMenuOpen) onCloseSpeedMenu();
+  }, [onCloseSpeedMenu, speedMenuOpen, tutorialStep]);
+
   const runAction = (action: () => void) => {
+    onTrustedInteraction();
     onCloseSpeedMenu();
     onReveal();
     action();
@@ -143,6 +161,7 @@ export function PlayerControls({
       aria-label="Player controls"
       onPointerDown={(event) => {
         event.stopPropagation();
+        onTrustedInteraction();
         onReveal();
       }}
       onPointerUp={(event) => event.stopPropagation()}
@@ -153,7 +172,7 @@ export function PlayerControls({
         data-player-control="back"
         type="button"
         onClick={() => runAction(onPrevious)}
-        disabled={atStart}
+        disabled={atStart || tutorialActive}
         aria-label="Previous photo"
         title="Previous photo"
       >
@@ -164,6 +183,7 @@ export function PlayerControls({
         data-player-control="playback"
         type="button"
         onClick={() => runAction(onTogglePlayback)}
+        disabled={tutorialActive}
         aria-label={primaryActionLabel}
         title={primaryActionLabel}
       >
@@ -178,17 +198,21 @@ export function PlayerControls({
         data-player-control="forward"
         type="button"
         onClick={() => runAction(onNext)}
-        disabled={atEnd}
+        disabled={atEnd || tutorialActive}
         aria-label="Next photo"
         title="Next photo"
       >
         <ChevronRight aria-hidden="true" size={20} strokeWidth={2.25} />
       </button>
       <button
-        ref={speedTriggerRef}
+        ref={(element) => {
+          speedTriggerRef.current = element;
+          speedControlRef.current = element;
+        }}
         className={`icon-button icon-button--speed ${speedMenuOpen ? "is-selected" : ""}`}
         data-player-control="speed"
         type="button"
+        disabled={tutorialActive && tutorialStep !== 2}
         onClick={() => {
           onReveal();
           onToggleSpeedMenu();
@@ -196,19 +220,23 @@ export function PlayerControls({
         aria-label={`Playback speed: ${selectedSpeed.accessibleLabel}`}
         aria-controls={speedMenuId}
         aria-expanded={speedMenuOpen}
+        aria-describedby={speedDescriptionId}
         title={`Playback speed: ${selectedSpeed.accessibleLabel}`}
       >
         <Gauge aria-hidden="true" size={18} strokeWidth={2.25} />
         <span className="speed-trigger__value" aria-hidden="true">{selectedSpeed.shortLabel}</span>
       </button>
       <button
+        ref={musicControlRef}
         className={`icon-button icon-button--music ${musicIsActive ? "is-selected" : ""}`}
         data-player-secondary="true"
         data-player-control="music"
         type="button"
+        disabled={tutorialActive && tutorialStep !== 3}
         onClick={() => runAction(onToggleMusic)}
         aria-label={musicActionLabel}
         aria-pressed={musicIsActive}
+        aria-describedby={musicDescriptionId}
         title={musicActionLabel}
       >
         <Music aria-hidden="true" size={19} strokeWidth={2.3} />
@@ -218,6 +246,7 @@ export function PlayerControls({
         data-player-secondary="true"
         data-player-control="share"
         type="button"
+        disabled={tutorialActive}
         onClick={() => runAction(onShare)}
         aria-label={shareActionLabel}
         aria-pressed={shareIsActive}
@@ -234,6 +263,7 @@ export function PlayerControls({
         data-player-secondary="true"
         data-player-control="screen-mode"
         type="button"
+        disabled={tutorialActive}
         onClick={() => runAction(onToggleScreenMode)}
         aria-label={screenModeActive ? "Exit full screen" : "Full screen"}
         aria-pressed={screenModeActive}

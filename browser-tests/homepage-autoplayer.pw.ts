@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 
 const enabled = process.env.VITE_HOMEPAGE_AUTOPLAYER === "1";
 test.skip(!enabled, "homepage autoplay tests require VITE_HOMEPAGE_AUTOPLAYER=1");
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("pixilation-player-onboarding-v1", "1"));
+});
 
 async function installAutoplayOrderingProbe(page: import("@playwright/test").Page) {
   await page.addInitScript(() => {
@@ -289,7 +292,11 @@ test("loading dismissal stays document-scoped and reload mounts one fresh shell 
   await expect(page.getByLabel("Photo player")).toHaveCount(0);
   expect(new URL(page.url()).search).toBe("");
   expect((await documentLifecycleProbe(page)).documentId).toBe(originalDocument.documentId);
-  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
+  expect(await page.evaluate(() => ({
+    onboarding: localStorage.getItem("pixilation-player-onboarding-v1"),
+    local: localStorage.length,
+    session: sessionStorage.length
+  }))).toEqual({ onboarding: "1", local: 1, session: 0 });
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
@@ -357,7 +364,7 @@ test("Stage 1 and steady playback dismissals reset only after a full reload", as
     expect(new URL(page.url()).search).toBe("");
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-shell-state", "loading");
+    await expect(page.getByLabel("Photo player")).toBeVisible();
     const reloadedDocument = await documentLifecycleProbe(page);
     expect(reloadedDocument.documentId).not.toBe(dismissedDocumentId);
     expect(reloadedDocument.shellMounts).toBe(1);

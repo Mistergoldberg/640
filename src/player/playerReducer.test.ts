@@ -185,4 +185,18 @@ describe("homepage autoplay integration", () => {
     expect(manual).toMatchObject({ currentIndex: 1, status: "temporarily-paused", warmupPhase: "inactive" });
     expect(playerReducer(manual, { type: "TEMPORARY_RESUME" })).toMatchObject({ status: "playing", warmupPhase: "steady-forward" });
   });
+
+  it("starts homepage autoplay paused when reduced motion is requested", () => {
+    const state = createPlayerState({
+      initialIndex: 0,
+      total: 20,
+      scope,
+      launchMode: "homepage-autoplay",
+      reducedMotion: true
+    });
+
+    expect(state.status).toBe("explicitly-paused");
+    expect(state.warmupPhase).toBe("paused");
+    expect(playerReducer(state, { type: "READY" })).toBe(state);
+  });
 });

@@ -48,7 +48,7 @@ export type PlayerEvent =
   | { type: "ADVANCE" }
   | { type: "REACH_END" }
   | { type: "CHANGE_SPEED"; delayMs: number }
-  | { type: "RESET"; initialIndex: number; total: number; scope: PlayerScope; delayMs?: number }
+  | { type: "RESET"; initialIndex: number; total: number; scope: PlayerScope; delayMs?: number; reducedMotion?: boolean }
   | { type: "CLOSE" }
   | { type: "WARMUP_FRAME"; index: number; phase: import("./homepageAutoplay").HomepageWarmupPhase }
   | { type: "WARMUP_EXIT" };
@@ -58,17 +58,20 @@ export function createPlayerState({
   total,
   delayMs = 100,
   scope,
-  launchMode = "standard"
+  launchMode = "standard",
+  reducedMotion = false
 }: {
   initialIndex: number;
   total: number;
   delayMs?: number;
   scope: PlayerScope;
   launchMode?: "standard" | "homepage-autoplay";
+  reducedMotion?: boolean;
 }): PlayerState {
+  const reducedHomepageAutoplay = launchMode === "homepage-autoplay" && reducedMotion;
   return {
     currentIndex: clampIndex(initialIndex, total),
-    status: "loading",
+    status: reducedHomepageAutoplay ? "explicitly-paused" : "loading",
     delayMs,
     total,
     bufferTargetIndex: null,
@@ -78,7 +81,9 @@ export function createPlayerState({
     frameGestureActive: false,
     scope,
     launchMode,
-    warmupPhase: launchMode === "homepage-autoplay" ? "loading-first-five" : "inactive"
+    warmupPhase: launchMode === "homepage-autoplay"
+      ? reducedHomepageAutoplay ? "paused" : "loading-first-five"
+      : "inactive"
   };
 }
 
@@ -346,7 +351,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         total: event.total,
         delayMs: event.delayMs ?? state.delayMs,
         scope: event.scope,
-        launchMode: state.launchMode
+        launchMode: state.launchMode,
+        reducedMotion: event.reducedMotion
       });
 
     case "WARMUP_FRAME":
