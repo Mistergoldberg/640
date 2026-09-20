@@ -1,5 +1,19 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Gauge,
+  Headphones,
+  Mouse,
+  MousePointer2,
+  Music,
+  Play,
+  Timer,
+  Volume2,
+  X,
+  Zap,
+  type LucideIcon
+} from "lucide-react";
 import type { PlayerOnboardingExitReason } from "./playerOnboarding";
 
 interface PlayerOnboardingProps {
@@ -12,23 +26,59 @@ interface PlayerOnboardingProps {
   onExit: (reason: PlayerOnboardingExitReason) => void;
 }
 
-const COPY = {
+interface InstructionItem {
+  icon: LucideIcon;
+  text: string;
+}
+
+interface TutorialCopy {
+  title: string;
+  mobile: InstructionItem[];
+  desktop: InstructionItem[];
+}
+
+const COPY: Record<1 | 2 | 3, TutorialCopy> = {
   1: {
     title: "Play the pictures",
-    mobile: "Tap the right half to move forward. Tap the left half to move back. Press and hold either half to keep moving.",
-    desktop: "Press → to move forward and ← to move back. Hold either key to keep moving. You can also click or hold either half of the picture, or scroll over it: down or right moves forward; up or left moves back."
+    mobile: [
+      { icon: ArrowRight, text: "Tap the right half to move forward" },
+      { icon: ArrowLeft, text: "Tap the left half to move back" },
+      { icon: MousePointer2, text: "Press and hold either half to keep moving" }
+    ],
+    desktop: [
+      { icon: ArrowRight, text: "Press → or click the right half to move forward" },
+      { icon: ArrowLeft, text: "Press ← or click the left half to move back" },
+      { icon: MousePointer2, text: "Hold an arrow key or mouse button to keep moving" },
+      { icon: Mouse, text: "Scroll down/right for next; up/left for previous" }
+    ]
   },
   2: {
     title: "Set the speed",
-    mobile: "Playback speed is seconds per photo. Choose 0.1s, 0.25s, 0.5s, 1s, or 2s. Smaller numbers play faster.",
-    desktop: "Playback speed is seconds per photo. Choose 0.1s, 0.25s, 0.5s, 1s, or 2s. Smaller numbers play faster."
+    mobile: [
+      { icon: Timer, text: "Speed is measured in seconds per photo" },
+      { icon: Gauge, text: "Choose 0.1s, 0.25s, 0.5s, 1s, or 2s" },
+      { icon: Zap, text: "Smaller numbers play the pictures faster" }
+    ],
+    desktop: [
+      { icon: Timer, text: "Speed is measured in seconds per photo" },
+      { icon: Gauge, text: "Choose 0.1s, 0.25s, 0.5s, 1s, or 2s" },
+      { icon: Zap, text: "Smaller numbers play the pictures faster" }
+    ]
   },
   3: {
     title: "Add music",
-    mobile: "Music is optional. Choose Play music to load and start the soundtrack. Pixilation never starts music on its own.",
-    desktop: "Music is optional. Choose Play music to load and start the soundtrack. Pixilation never starts music on its own."
+    mobile: [
+      { icon: Music, text: "Choose Play music to load the soundtrack" },
+      { icon: Headphones, text: "Music is optional and can be stopped anytime" },
+      { icon: Volume2, text: "Pixilation never starts music on its own" }
+    ],
+    desktop: [
+      { icon: Music, text: "Choose Play music to load and start the soundtrack" },
+      { icon: Headphones, text: "Music is optional and can be stopped anytime" },
+      { icon: Volume2, text: "Pixilation never starts music on its own" }
+    ]
   }
-} as const;
+};
 
 interface TargetRect {
   top: number;
@@ -57,7 +107,7 @@ export function PlayerOnboardingTour({
   const panelRef = useRef<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const copy = COPY[step];
-  const body = desktopInstructions ? copy.desktop : copy.mobile;
+  const instructions = desktopInstructions ? copy.desktop : copy.mobile;
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -143,21 +193,43 @@ export function PlayerOnboardingTour({
           <X aria-hidden="true" size={20} strokeWidth={2.2} />
         </button>
         <div className="player-onboarding__step-label">Step {step} of 3</div>
-        <div className="player-onboarding__progress" aria-hidden="true">
+        <div className="player-onboarding__progress" aria-label={`Step ${step} of 3`}>
           {[1, 2, 3].map((indicator) => (
-            <span key={indicator} className={indicator === step ? "is-current" : indicator < step ? "is-complete" : ""}>{indicator}</span>
+            <span
+              key={indicator}
+              className={indicator === step ? "is-current" : indicator < step ? "is-complete" : ""}
+              aria-current={indicator === step ? "step" : undefined}
+            >{indicator}</span>
           ))}
         </div>
         <h2 id={`${descriptionId}-title`}>{copy.title}</h2>
-        <p id={descriptionId}>{body}</p>
+        <div className="player-onboarding__instructions" id={descriptionId}>
+          {instructions.map(({ icon: Icon, text }) => (
+            <div className="player-onboarding__instruction" key={text}>
+              <span className="player-onboarding__instruction-icon" aria-hidden="true">
+                <Icon size={19} strokeWidth={2} />
+              </span>
+              <span>{text}</span>
+            </div>
+          ))}
+        </div>
+        <p className="player-onboarding__note">You can skip the tour at any time.</p>
         <div className="player-onboarding__actions">
           <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
           <div className="player-onboarding__navigation">
-            {step > 1 ? <button type="button" onClick={onBack}>Back</button> : null}
+            {step > 1 ? (
+              <button type="button" onClick={onBack} className="player-onboarding__back">
+                <ArrowLeft aria-hidden="true" size={17} /> Back
+              </button>
+            ) : null}
             {step < 3 ? (
-              <button type="button" onClick={onNext} className="player-onboarding__primary">Next</button>
+              <button type="button" onClick={onNext} className="player-onboarding__primary">
+                Next <ArrowRight aria-hidden="true" size={18} />
+              </button>
             ) : (
-              <button type="button" onClick={() => onExit("complete")} className="player-onboarding__primary">Play the pictures</button>
+              <button type="button" onClick={() => onExit("complete")} className="player-onboarding__primary">
+                Play the pictures <Play aria-hidden="true" size={17} fill="currentColor" />
+              </button>
             )}
           </div>
         </div>

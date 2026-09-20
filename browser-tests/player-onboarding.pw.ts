@@ -20,6 +20,16 @@ async function playerIndex(page: Page) {
   return Number(match[1]);
 }
 
+async function expectTourCardInsideViewport(page: Page) {
+  expect(await page.locator(".player-onboarding__card").evaluate((card) => {
+    const rect = card.getBoundingClientRect();
+    return rect.top >= 0
+      && rect.left >= 0
+      && rect.right <= window.innerWidth
+      && rect.bottom <= window.innerHeight;
+  })).toBe(true);
+}
+
 test("first visit demonstrates presented frames, teaches real controls, and persists only on exit", async ({ page }) => {
   const soundCloudRequests: string[] = [];
   page.on("request", (request) => {
@@ -29,6 +39,9 @@ test("first visit demonstrates presented frames, teaches real controls, and pers
   await waitForPaintedPlayer(page);
   await expect(page.getByRole("heading", { name: "Play the pictures" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
+  await expect(page.locator(".player-onboarding__instruction")).toHaveCount(4);
+  await expect(page.locator(".player-onboarding__progress [aria-current='step']")).toHaveText("1");
+  await expectTourCardInsideViewport(page);
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
   await expect(page.locator(".player-surface")).toBeFocused();
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
@@ -42,6 +55,7 @@ test("first visit demonstrates presented frames, teaches real controls, and pers
 
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Set the speed" })).toBeVisible();
+  await expect(page.locator(".player-onboarding__progress [aria-current='step']")).toHaveText("2");
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
   await expect(page.locator("[data-player-control='playback']")).toBeDisabled();
   await page.keyboard.press("Enter");
@@ -53,6 +67,7 @@ test("first visit demonstrates presented frames, teaches real controls, and pers
 
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Add music" })).toBeVisible();
+  await expect(page.locator(".player-onboarding__progress [aria-current='step']")).toHaveText("3");
   await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toHaveCount(0);
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
   expect(soundCloudRequests).toEqual([]);
@@ -120,5 +135,26 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   await page.getByRole("button", { name: "Play the pictures" }).click();
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Pause");
   await expect.poll(() => playerIndex(page), { timeout: 2_000 }).toBeGreaterThan(first);
+  await context.close();
+});
+
+test("reference-style instruction card stays contained in mobile landscape", async ({ browser }) => {
+  const context = await (browser as Browser).newContext({
+    viewport: { width: 844, height: 390 },
+    screen: { width: 844, height: 390 },
+    isMobile: true,
+    hasTouch: true
+  });
+  await context.addInitScript((key) => localStorage.setItem(key, "1"), STORAGE_KEY);
+  const page = await context.newPage();
+  await page.goto("/");
+  await waitForPaintedPlayer(page);
+  await page.getByRole("button", { name: "Player help" }).click();
+  await expect(page.locator(".player-onboarding__instruction")).toHaveCount(3);
+  await expectTourCardInsideViewport(page);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expectTourCardInsideViewport(page);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expectTourCardInsideViewport(page);
   await context.close();
 });
