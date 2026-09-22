@@ -92,12 +92,20 @@ The card and spotlight recalculate for resize, orientation, and visual viewport
 changes. Mobile landscape preserves the existing right-hand control rail; small
 portrait layouts retain 44-pixel control targets.
 
+Mobile supporting graphics explain the action at the point of use. Step 1
+alternates a soft highlight between labelled `Tap or hold / Previous` and
+`Tap or hold / Next` cues without changing the real tap zones. Steps 2 and 3
+apply a restrained pulse to the live Speed or Music control and connect it to a
+short `Tap to…` label. The sequence is deliberately staggered so only one cue
+asks for attention at a time.
+
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and
 Shift+Tab cycle through the target and tutorial controls, Escape exits, each step
 is announced, and focus returns to the player surface or Help control. Numbered
 progress and text prevent color from carrying meaning alone. Reduced-motion CSS
-removes tutorial animation and transitions.
+removes every tutorial highlight, ripple, pulse, and transition while retaining
+the same labels and static outlines.
 
 ## Verification
 

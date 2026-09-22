@@ -167,13 +167,40 @@ export function PlayerOnboardingTour({
   } as CSSProperties : undefined, [targetRect]);
 
   return (
-    <div className={`player-onboarding player-onboarding--step-${step}`} data-onboarding-step={step}>
+    <div
+      className={`player-onboarding player-onboarding--step-${step} player-onboarding--${desktopInstructions ? "desktop" : "mobile"}`}
+      data-onboarding-step={step}
+    >
       {step === 1 ? (
         <div className="player-onboarding__frame-zones" aria-hidden="true">
-          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--back"><span>←</span></span>
-          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--forward"><span>→</span></span>
+          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--back">
+            <span className="player-onboarding__gesture-cue">
+              <span className="player-onboarding__gesture-icon"><ArrowLeft size={21} strokeWidth={2} /></span>
+              {!desktopInstructions ? (
+                <span className="player-onboarding__gesture-copy"><strong>Tap or hold</strong><small>Previous</small></span>
+              ) : null}
+            </span>
+          </span>
+          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--forward">
+            <span className="player-onboarding__gesture-cue">
+              <span className="player-onboarding__gesture-icon"><ArrowRight size={21} strokeWidth={2} /></span>
+              {!desktopInstructions ? (
+                <span className="player-onboarding__gesture-copy"><strong>Tap or hold</strong><small>Next</small></span>
+              ) : null}
+            </span>
+          </span>
         </div>
-      ) : targetRect ? <div className="player-onboarding__spotlight" style={spotlightStyle} aria-hidden="true" /> : null}
+      ) : targetRect ? (
+        <>
+          <div className="player-onboarding__spotlight" style={spotlightStyle} aria-hidden="true" />
+          {!desktopInstructions ? (
+            <div className="player-onboarding__target-hint" style={spotlightStyle} aria-hidden="true">
+              <span className="player-onboarding__target-hint-dot" />
+              {step === 2 ? "Tap to choose speed" : "Tap to add music"}
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       <section
         ref={panelRef}

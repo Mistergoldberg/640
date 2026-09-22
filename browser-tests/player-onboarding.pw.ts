@@ -121,6 +121,7 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   await page.goto("/");
   await waitForPaintedPlayer(page);
   await expect(page.getByRole("heading", { name: "Play the pictures" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "none");
   const first = await playerIndex(page);
   await page.waitForTimeout(1_000);
   expect(await playerIndex(page)).toBe(first);
@@ -151,10 +152,14 @@ test("reference-style instruction card stays contained in mobile landscape", asy
   await waitForPaintedPlayer(page);
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.locator(".player-onboarding__instruction")).toHaveCount(3);
+  await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(2);
+  await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).not.toHaveCSS("animation-name", "none");
   await expectTourCardInsideViewport(page);
   await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByText("Tap to choose speed", { exact: true })).toBeVisible();
   await expectTourCardInsideViewport(page);
   await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByText("Tap to add music", { exact: true })).toBeVisible();
   await expectTourCardInsideViewport(page);
   await context.close();
 });
