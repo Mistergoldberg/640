@@ -94,7 +94,9 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Browse photos" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
   await expect(page.locator(".player-onboarding__summary")).toHaveText("Click either side or use ← →. Hold to keep moving; scroll works too.");
-  await expect(page.locator(".player-onboarding__progress")).toHaveAttribute("data-step", "1");
+  await expect(page.getByRole("button", { name: "Close tutorial" })).toHaveCount(0);
+  await expect(page.getByText("Quick tour", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__progress")).toHaveCount(0);
   await expectTourCardInsideViewport(page);
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
   await expect(page.locator(".player-surface")).toBeFocused();
@@ -109,7 +111,6 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
 
   await page.getByRole("button", { name: "Speed", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Set the pace" })).toBeVisible();
-  await expect(page.locator(".player-onboarding__progress")).toHaveAttribute("data-step", "2");
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
   await expect(page.locator("[data-player-control='playback']")).toBeDisabled();
   await page.keyboard.press("Enter");
@@ -121,7 +122,6 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
 
   await page.getByRole("button", { name: "Music", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Add music" })).toBeVisible();
-  await expect(page.locator(".player-onboarding__progress")).toHaveAttribute("data-step", "3");
   await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toHaveCount(0);
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
   expect(soundCloudRequests).toEqual([]);
@@ -141,7 +141,7 @@ test("returning and direct-photo visitors use permanent Help without automatic i
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.getByRole("heading", { name: "Browse photos" })).toBeVisible();
-  await page.getByRole("button", { name: "Close tutorial" }).click();
+  await page.getByRole("button", { name: "Skip" }).click();
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Player help" })).toBeFocused();
 
@@ -215,7 +215,7 @@ test("reference-style instruction card stays contained in mobile landscape", asy
   await context.close();
 });
 
-test("portrait chrome and playback controls recover after Help closes across rotation", async ({ browser }) => {
+test("portrait chrome and playback controls recover after Help exits across rotation", async ({ browser }) => {
   const context = await (browser as Browser).newContext({
     viewport: { width: 390, height: 844 },
     screen: { width: 390, height: 844 },
@@ -234,7 +234,7 @@ test("portrait chrome and playback controls recover after Help closes across rot
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "landscape");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "portrait");
-  await page.getByRole("button", { name: "Close tutorial" }).click();
+  await page.getByRole("button", { name: "Skip" }).click();
 
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
   await expect(page.locator(".player-counter")).toBeHidden();

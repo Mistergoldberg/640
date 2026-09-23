@@ -956,62 +956,8 @@ img {
   bottom: auto;
 }
 
-.player-onboarding__close {
-  position: absolute;
-  top: 11px;
-  right: 11px;
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(244, 241, 234, 0.14);
-  border-radius: 8px;
-  color: #f4f1ea;
-  background: rgba(244, 241, 234, 0.07);
-  cursor: pointer;
-}
-
-.player-onboarding__step-label {
-  padding-right: 48px;
-  color: rgba(244, 241, 234, 0.64);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.player-onboarding__progress {
-  position: absolute;
-  top: 28px;
-  right: 72px;
-  display: flex;
-  gap: 5px;
-  align-items: center;
-}
-
-.player-onboarding__progress span {
-  display: block;
-  width: 7px;
-  height: 7px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(244, 241, 234, 0.25);
-  transition: width 160ms ease, background 160ms ease;
-}
-
-.player-onboarding__progress span.is-complete {
-  background: rgba(124, 158, 255, 0.58);
-}
-
-.player-onboarding__progress span.is-current {
-  width: 22px;
-  background: #7c9eff;
-  box-shadow: 0 0 10px rgba(124, 158, 255, 0.5);
-}
-
 .player-onboarding__card h2 {
-  margin: 24px 0 7px;
+  margin: 0 0 7px;
   font-size: 1.55rem;
   line-height: 1.12;
   letter-spacing: -0.02em;
@@ -1690,27 +1636,8 @@ img {
     padding: 12px 14px;
   }
 
-  .player-onboarding__step-label {
-    font-size: 0.64rem;
-  }
-
-  .player-onboarding__progress {
-    top: 19px;
-    right: 66px;
-    gap: 4px;
-  }
-
-  .player-onboarding__progress span {
-    width: 6px;
-    height: 6px;
-  }
-
-  .player-onboarding__progress span.is-current {
-    width: 18px;
-  }
-
   .player-onboarding__card h2 {
-    margin: 17px 0 4px;
+    margin: 0 0 4px;
     font-size: 1.12rem;
   }
 

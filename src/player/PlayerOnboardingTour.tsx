@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Play,
-  X,
 } from "lucide-react";
 import type { PlayerOnboardingExitReason } from "./playerOnboarding";
 
@@ -171,24 +170,6 @@ export function PlayerOnboardingTour({
         aria-labelledby={`${descriptionId}-title`}
         aria-describedby={descriptionId}
       >
-        <button
-          className="player-onboarding__close"
-          type="button"
-          onClick={() => onExit("close")}
-          aria-label="Close tutorial"
-          title="Close tutorial"
-        >
-          <X aria-hidden="true" size={20} strokeWidth={2.2} />
-        </button>
-        <div className="player-onboarding__step-label">Quick tour</div>
-        <div className="player-onboarding__progress" data-step={step} aria-hidden="true">
-          {[1, 2, 3].map((indicator) => (
-            <span
-              key={indicator}
-              className={indicator === step ? "is-current" : indicator < step ? "is-complete" : ""}
-            />
-          ))}
-        </div>
         <h2 id={`${descriptionId}-title`}>{copy.title}</h2>
         <p className="player-onboarding__summary" id={descriptionId}>{instruction}</p>
         <div className="player-onboarding__actions">

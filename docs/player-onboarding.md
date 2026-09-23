@@ -24,7 +24,7 @@ key: pixilation-player-onboarding-v1
 value: 1
 ```
 
-Tutorial completion, Skip, Close, or Escape may write this value, but it no
+Tutorial completion, Skip, or Escape may write this value, but it no
 longer controls entry. Missing, present, unavailable, or stale storage values
 all produce the same landing behavior: no tutorial until Help is pressed.
 
@@ -52,15 +52,15 @@ use the real interface:
    loaded or played without a user action.
 
 Only the current real target, its open speed choices, and tutorial controls are
-interactive. Back, Speed, Music, Skip, Close, Escape, progress indicators, and
-the final `Start` action are available. Manual Help captures whether playback
+interactive. Back, Speed, Music, Skip, Escape, and the final `Start` action are
+available. Manual Help captures whether playback
 was active, including during the initial loading/warm-up state, pauses cleanly,
 and restores that state on ordinary exit. Player controls are interactive again
 as soon as the tutorial closes.
 
 For visitors requesting reduced motion, automatic homepage playback is paused
-from its first usable frame and the demonstration is omitted. Skip, Close, and
-Escape leave playback paused, including during a Help replay. Only the explicit
+from its first usable frame and the demonstration is omitted. Skip and Escape
+leave playback paused, including during a Help replay. Only the explicit
 Play control or final tutorial `Start` action starts photographs moving.
 
 ## Responsive and accessible behavior
@@ -74,9 +74,10 @@ Help at the top left and Close at the top right. The photograph number counter
 is not displayed in any player layout.
 
 The visible card is a compact coach mark rather than a second copy of the player
-manual. It names the current function in one short sentence, replaces numbered
-circles with a quiet three-position indicator, and leaves the live teaching
-graphics visible. Screen readers still announce the exact step number.
+manual. It contains only the current function, one short sentence, and its
+navigation actions. It has no close icon, tour label, or visible progress
+indicator, leaving the live teaching graphics visible. Screen readers still
+announce the exact step number.
 
 Mobile supporting graphics explain the action at the point of use. Step 1
 alternates a soft highlight between labelled `Previous / Tap or hold` and
