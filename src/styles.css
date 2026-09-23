@@ -726,7 +726,7 @@ img {
   gap: 6px;
 }
 
-.player-help {
+.icon-button.player-help {
   position: fixed;
   top: max(12px, env(safe-area-inset-top));
   left: calc(max(12px, env(safe-area-inset-left)) + 50px);
@@ -755,6 +755,10 @@ img {
   border-left: 1px solid rgba(244, 241, 234, 0.18);
   color: rgba(244, 241, 234, 0.48);
   text-transform: uppercase;
+}
+
+.player-counter {
+  display: none;
 }
 
 .player-controls {
@@ -1864,6 +1868,33 @@ img {
     width: auto;
     height: 100vh;
   }
+}
+
+.player-overlay[data-player-orientation="portrait"] .player-help {
+  top: max(8px, env(safe-area-inset-top));
+  right: auto;
+  left: max(8px, env(safe-area-inset-left));
+  z-index: 8;
+}
+
+.player-overlay[data-player-orientation="portrait"] .player-topbar {
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  left: auto;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  pointer-events: none;
+}
+
+.player-overlay[data-player-orientation="portrait"] .player-topbar__actions,
+.player-overlay[data-player-orientation="portrait"] .player-topbar__actions > .icon-button {
+  width: 44px;
+  height: 44px;
+}
+
+.player-overlay[data-player-orientation="portrait"] .player-topbar__actions > .icon-button {
+  pointer-events: auto;
 }
 
 @media (pointer: coarse) and (orientation: portrait) {

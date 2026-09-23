@@ -163,3 +163,51 @@ test("reference-style instruction card stays contained in mobile landscape", asy
   await expectTourCardInsideViewport(page);
   await context.close();
 });
+
+test("portrait chrome and playback controls recover after Help closes across rotation", async ({ browser }) => {
+  const context = await (browser as Browser).newContext({
+    viewport: { width: 390, height: 844 },
+    screen: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true
+  });
+  await context.addInitScript((key) => localStorage.setItem(key, "1"), STORAGE_KEY);
+  const page = await context.newPage();
+  await page.goto("/");
+  await waitForPaintedPlayer(page);
+
+  const playback = page.locator("[data-player-control='playback']");
+  await page.getByRole("button", { name: "Player help" }).click();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "landscape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "portrait");
+  await page.getByRole("button", { name: "Close tutorial" }).click();
+
+  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-counter")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Player help" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+  const positions = await page.evaluate(() => {
+    const help = document.querySelector<HTMLElement>(".player-help")?.getBoundingClientRect();
+    const close = document.querySelector<HTMLElement>(".player-topbar button")?.getBoundingClientRect();
+    return { helpLeft: help?.left, closeRight: close?.right };
+  });
+  expect(positions.helpLeft).toBeLessThan(70);
+  expect(positions.closeRight).toBeGreaterThan(320);
+
+  await expect(playback).toHaveAttribute("aria-label", "Pause");
+  await playback.click();
+  await expect(playback).toHaveAttribute("aria-label", "Play");
+
+  const initial = await playerIndex(page);
+  await page.locator("[data-player-control='forward']").click();
+  await expect.poll(() => playerIndex(page)).toBe(initial + 1);
+  await page.locator("[data-player-control='back']").click();
+  await expect.poll(() => playerIndex(page)).toBe(initial);
+  await expect(playback).toHaveAttribute("aria-label", "Play");
+  await playback.click();
+  await expect(playback).toHaveAttribute("aria-label", "Pause");
+  await expect.poll(() => playerIndex(page), { timeout: 2_000 }).toBeGreaterThan(initial);
+  await context.close();
+});

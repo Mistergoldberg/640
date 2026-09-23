@@ -40,9 +40,9 @@ bottom controls.
 The left rail reads top to bottom as Close, Previous, Next, Play/Pause and Share.
 Music and Speed form a second rail at the bottom right. Play/Pause and Speed
 retain the primary light treatment, while every action keeps a minimum 44×44px
-touch target. The image counter and Screen Mode control are hidden only in this
-compact landscape layout because neither is needed there; both remain available
-in portrait and desktop layouts.
+touch target. The image counter is hidden in every player layout. Screen Mode is
+hidden only in this compact landscape layout and remains available in portrait
+and desktop layouts.
 
 Speed shows the current compact value. Its five 44px choices open as a vertical
 stack immediately to the left of the right rail. Selection closes the menu

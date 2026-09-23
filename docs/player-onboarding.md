@@ -77,7 +77,9 @@ interface:
 Only the current real target, its open speed choices, and tutorial controls are
 interactive. Back, Next, Skip, Close, Escape, progress indicators, and the final
 `Play the pictures` action are available. Manual Help captures whether playback
-was active, pauses cleanly, and restores that state on ordinary exit.
+was active, including during the initial loading/warm-up state, pauses cleanly,
+and restores that state on ordinary exit. Player controls are interactive again
+as soon as the tutorial closes.
 
 For visitors requesting reduced motion, automatic homepage playback is paused
 from its first usable frame and the demonstration is omitted. Skip, Close, and
@@ -90,7 +92,9 @@ Copy is capability-based: fine-pointer visitors receive desktop mouse, wheel,
 and keyboard instructions; coarse-pointer visitors receive tap and hold copy.
 The card and spotlight recalculate for resize, orientation, and visual viewport
 changes. Mobile landscape preserves the existing right-hand control rail; small
-portrait layouts retain 44-pixel control targets.
+portrait layouts retain 44-pixel control targets. Portrait places permanent
+Help at the top left and Close at the top right. The photograph number counter
+is not displayed in any player layout.
 
 Mobile supporting graphics explain the action at the point of use. Step 1
 alternates a soft highlight between labelled `Tap or hold / Previous` and

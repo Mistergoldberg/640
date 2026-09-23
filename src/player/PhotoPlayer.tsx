@@ -175,7 +175,11 @@ function playerOnboardingStorage() {
 }
 
 function shouldResumeAfterHelp(status: PlayerState["status"]) {
-  return status === "initial-delay" || status === "playing" || status === "buffering" || status === "temporarily-paused";
+  return status === "loading"
+    || status === "initial-delay"
+    || status === "playing"
+    || status === "buffering"
+    || status === "temporarily-paused";
 }
 
 function visibleRect(element: Element) {
@@ -1416,6 +1420,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     <div
       className={`player-overlay ${controlsVisible ? "has-visible-controls" : ""}`}
       data-player-layout={playerViewport.landscapeRail ? "mobile-landscape-rail" : "standard"}
+      data-player-orientation={playerViewport.height > playerViewport.width ? "portrait" : "landscape"}
       role="dialog"
       aria-modal="true"
       aria-label="Photo player"
@@ -1668,7 +1673,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               <X aria-hidden="true" size={22} strokeWidth={2.2} />
             </button>
           </div>
-          <div className="player-counter" aria-live="polite">
+          <div className="player-counter sr-only" aria-live="polite">
             {currentIndex + 1} / {photos.length}
             {initialPlayPending ? <span className="player-counter__status">starts</span> : null}
             {!initialPlayPending && temporaryResumePending ? <span className="player-counter__status">resumes</span> : null}
