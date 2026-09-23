@@ -75,8 +75,8 @@ interface:
    loaded or played without a user action.
 
 Only the current real target, its open speed choices, and tutorial controls are
-interactive. Back, Next, Skip, Close, Escape, progress indicators, and the final
-`Play the pictures` action are available. Manual Help captures whether playback
+interactive. Back, Speed, Music, Skip, Close, Escape, progress indicators, and
+the final `Start` action are available. Manual Help captures whether playback
 was active, including during the initial loading/warm-up state, pauses cleanly,
 and restores that state on ordinary exit. Player controls are interactive again
 as soon as the tutorial closes.
@@ -84,7 +84,7 @@ as soon as the tutorial closes.
 For visitors requesting reduced motion, automatic homepage playback is paused
 from its first usable frame and the demonstration is omitted. Skip, Close, and
 Escape leave playback paused, including during a Help replay. Only the explicit
-Play control or final `Play the pictures` action starts photographs moving.
+Play control or final tutorial `Start` action starts photographs moving.
 
 ## Responsive and accessible behavior
 
@@ -96,9 +96,14 @@ portrait layouts retain 44-pixel control targets. Portrait places permanent
 Help at the top left and Close at the top right. The photograph number counter
 is not displayed in any player layout.
 
+The visible card is a compact coach mark rather than a second copy of the player
+manual. It names the current function in one short sentence, replaces numbered
+circles with a quiet three-position indicator, and leaves the live teaching
+graphics visible. Screen readers still announce the exact step number.
+
 Mobile supporting graphics explain the action at the point of use. Step 1
-alternates a soft highlight between labelled `Tap or hold / Previous` and
-`Tap or hold / Next` cues without changing the real tap zones. Steps 2 and 3
+alternates a soft highlight between labelled `Previous / Tap or hold` and
+`Next / Tap or hold` cues without changing the real tap zones. Steps 2 and 3
 apply a restrained pulse to the live Speed or Music control and connect it to a
 short `Tap to…` label. The sequence is deliberately staggered so only one cue
 asks for attention at a time.
@@ -106,10 +111,10 @@ asks for attention at a time.
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and
 Shift+Tab cycle through the target and tutorial controls, Escape exits, each step
-is announced, and focus returns to the player surface or Help control. Numbered
-progress and text prevent color from carrying meaning alone. Reduced-motion CSS
-removes every tutorial highlight, ripple, pulse, and transition while retaining
-the same labels and static outlines.
+is announced with its numeric position, and focus returns to the player surface
+or Help control. Text labels prevent color from carrying meaning alone.
+Reduced-motion CSS removes every tutorial highlight, ripple, pulse, and
+transition while retaining the same labels and static outlines.
 
 ## Verification
 

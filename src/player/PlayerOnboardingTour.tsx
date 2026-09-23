@@ -2,17 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import {
   ArrowLeft,
   ArrowRight,
-  Gauge,
-  Headphones,
-  Mouse,
-  MousePointer2,
-  Music,
   Play,
-  Timer,
-  Volume2,
   X,
-  Zap,
-  type LucideIcon
 } from "lucide-react";
 import type { PlayerOnboardingExitReason } from "./playerOnboarding";
 
@@ -26,57 +17,27 @@ interface PlayerOnboardingProps {
   onExit: (reason: PlayerOnboardingExitReason) => void;
 }
 
-interface InstructionItem {
-  icon: LucideIcon;
-  text: string;
-}
-
 interface TutorialCopy {
   title: string;
-  mobile: InstructionItem[];
-  desktop: InstructionItem[];
+  mobile: string;
+  desktop: string;
 }
 
 const COPY: Record<1 | 2 | 3, TutorialCopy> = {
   1: {
-    title: "Play the pictures",
-    mobile: [
-      { icon: ArrowRight, text: "Tap the right half to move forward" },
-      { icon: ArrowLeft, text: "Tap the left half to move back" },
-      { icon: MousePointer2, text: "Press and hold either half to keep moving" }
-    ],
-    desktop: [
-      { icon: ArrowRight, text: "Press → or click the right half to move forward" },
-      { icon: ArrowLeft, text: "Press ← or click the left half to move back" },
-      { icon: MousePointer2, text: "Hold an arrow key or mouse button to keep moving" },
-      { icon: Mouse, text: "Scroll down/right for next; up/left for previous" }
-    ]
+    title: "Browse photos",
+    mobile: "Tap either side to browse. Press and hold to keep moving.",
+    desktop: "Click either side or use ← →. Hold to keep moving; scroll works too."
   },
   2: {
-    title: "Set the speed",
-    mobile: [
-      { icon: Timer, text: "Speed is measured in seconds per photo" },
-      { icon: Gauge, text: "Choose 0.1s, 0.25s, 0.5s, 1s, or 2s" },
-      { icon: Zap, text: "Smaller numbers play the pictures faster" }
-    ],
-    desktop: [
-      { icon: Timer, text: "Speed is measured in seconds per photo" },
-      { icon: Gauge, text: "Choose 0.1s, 0.25s, 0.5s, 1s, or 2s" },
-      { icon: Zap, text: "Smaller numbers play the pictures faster" }
-    ]
+    title: "Set the pace",
+    mobile: "0.1s is fastest. 2s is slowest.",
+    desktop: "0.1s is fastest. 2s is slowest."
   },
   3: {
     title: "Add music",
-    mobile: [
-      { icon: Music, text: "Choose Play music to load the soundtrack" },
-      { icon: Headphones, text: "Music is optional and can be stopped anytime" },
-      { icon: Volume2, text: "Pixilation never starts music on its own" }
-    ],
-    desktop: [
-      { icon: Music, text: "Choose Play music to load and start the soundtrack" },
-      { icon: Headphones, text: "Music is optional and can be stopped anytime" },
-      { icon: Volume2, text: "Pixilation never starts music on its own" }
-    ]
+    mobile: "Optional. Music starts only when you tap it.",
+    desktop: "Optional. Music starts only when you choose Play music."
   }
 };
 
@@ -107,7 +68,7 @@ export function PlayerOnboardingTour({
   const panelRef = useRef<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const copy = COPY[step];
-  const instructions = desktopInstructions ? copy.desktop : copy.mobile;
+  const instruction = desktopInstructions ? copy.desktop : copy.mobile;
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -177,7 +138,7 @@ export function PlayerOnboardingTour({
             <span className="player-onboarding__gesture-cue">
               <span className="player-onboarding__gesture-icon"><ArrowLeft size={21} strokeWidth={2} /></span>
               {!desktopInstructions ? (
-                <span className="player-onboarding__gesture-copy"><strong>Tap or hold</strong><small>Previous</small></span>
+                <span className="player-onboarding__gesture-copy"><strong>Previous</strong><small>Tap or hold</small></span>
               ) : null}
             </span>
           </span>
@@ -185,7 +146,7 @@ export function PlayerOnboardingTour({
             <span className="player-onboarding__gesture-cue">
               <span className="player-onboarding__gesture-icon"><ArrowRight size={21} strokeWidth={2} /></span>
               {!desktopInstructions ? (
-                <span className="player-onboarding__gesture-copy"><strong>Tap or hold</strong><small>Next</small></span>
+                <span className="player-onboarding__gesture-copy"><strong>Next</strong><small>Tap or hold</small></span>
               ) : null}
             </span>
           </span>
@@ -219,28 +180,17 @@ export function PlayerOnboardingTour({
         >
           <X aria-hidden="true" size={20} strokeWidth={2.2} />
         </button>
-        <div className="player-onboarding__step-label">Step {step} of 3</div>
-        <div className="player-onboarding__progress" aria-label={`Step ${step} of 3`}>
+        <div className="player-onboarding__step-label">Quick tour</div>
+        <div className="player-onboarding__progress" data-step={step} aria-hidden="true">
           {[1, 2, 3].map((indicator) => (
             <span
               key={indicator}
               className={indicator === step ? "is-current" : indicator < step ? "is-complete" : ""}
-              aria-current={indicator === step ? "step" : undefined}
-            >{indicator}</span>
+            />
           ))}
         </div>
         <h2 id={`${descriptionId}-title`}>{copy.title}</h2>
-        <div className="player-onboarding__instructions" id={descriptionId}>
-          {instructions.map(({ icon: Icon, text }) => (
-            <div className="player-onboarding__instruction" key={text}>
-              <span className="player-onboarding__instruction-icon" aria-hidden="true">
-                <Icon size={19} strokeWidth={2} />
-              </span>
-              <span>{text}</span>
-            </div>
-          ))}
-        </div>
-        <p className="player-onboarding__note">You can skip the tour at any time.</p>
+        <p className="player-onboarding__summary" id={descriptionId}>{instruction}</p>
         <div className="player-onboarding__actions">
           <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
           <div className="player-onboarding__navigation">
@@ -251,11 +201,16 @@ export function PlayerOnboardingTour({
             ) : null}
             {step < 3 ? (
               <button type="button" onClick={onNext} className="player-onboarding__primary">
-                Next <ArrowRight aria-hidden="true" size={18} />
+                {step === 1 ? "Speed" : "Music"} <ArrowRight aria-hidden="true" size={18} />
               </button>
             ) : (
-              <button type="button" onClick={() => onExit("complete")} className="player-onboarding__primary">
-                Play the pictures <Play aria-hidden="true" size={17} fill="currentColor" />
+              <button
+                type="button"
+                onClick={() => onExit("complete")}
+                className="player-onboarding__primary"
+                aria-label="Start slideshow"
+              >
+                Start <Play aria-hidden="true" size={17} fill="currentColor" />
               </button>
             )}
           </div>
