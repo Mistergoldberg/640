@@ -20,9 +20,9 @@ async function playerIndex(page: Page) {
   return Number(match[1]);
 }
 
-async function expectTourCardInsideViewport(page: Page) {
-  expect(await page.locator(".player-onboarding__card").evaluate((card) => {
-    const rect = card.getBoundingClientRect();
+async function expectActionBarInsideViewport(page: Page) {
+  expect(await page.locator(".player-onboarding__action-bar").evaluate((bar) => {
+    const rect = bar.getBoundingClientRect();
     return rect.top >= 0
       && rect.left >= 0
       && rect.right <= window.innerWidth
@@ -30,12 +30,12 @@ async function expectTourCardInsideViewport(page: Page) {
   })).toBe(true);
 }
 
-async function expectGestureCuesClearOfCard(page: Page) {
+async function expectGestureCuesClearOfActionBar(page: Page) {
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toBeVisible();
   await expect(page.locator(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue")).toBeVisible();
   const geometry = await page.evaluate(() => {
     const rect = (selector: string) => document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
-    const card = rect(".player-onboarding__card");
+    const actionBar = rect(".player-onboarding__action-bar");
     const back = rect(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue");
     const forward = rect(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue");
     const overlaps = (first?: DOMRect, second?: DOMRect) => Boolean(first && second
@@ -44,22 +44,22 @@ async function expectGestureCuesClearOfCard(page: Page) {
       && first.bottom > second.top
       && first.top < second.bottom);
     return {
-      cardBottom: card?.bottom ?? 0,
-      cardHeight: card?.height ?? 0,
+      actionBarBottom: actionBar?.bottom ?? 0,
+      actionBarHeight: actionBar?.height ?? 0,
       backTop: back?.top ?? 0,
       backWidth: back?.width ?? 0,
       forwardTop: forward?.top ?? 0,
       forwardWidth: forward?.width ?? 0,
-      backOverlap: overlaps(card, back),
-      forwardOverlap: overlaps(card, forward),
+      backOverlap: overlaps(actionBar, back),
+      forwardOverlap: overlaps(actionBar, forward),
       viewportHeight: window.innerHeight
     };
   });
-  expect(geometry.backWidth).toBeGreaterThan(100);
-  expect(geometry.forwardWidth).toBeGreaterThan(100);
-  expect(geometry.cardHeight).toBeLessThan(geometry.viewportHeight * 0.62);
-  expect(geometry.backTop).toBeGreaterThan(geometry.cardBottom + 12);
-  expect(geometry.forwardTop).toBeGreaterThan(geometry.cardBottom + 12);
+  expect(geometry.backWidth).toBeGreaterThan(130);
+  expect(geometry.forwardWidth).toBeGreaterThan(130);
+  expect(geometry.actionBarHeight).toBeLessThan(60);
+  expect(geometry.backTop).toBeGreaterThan(geometry.actionBarBottom + 12);
+  expect(geometry.forwardTop).toBeGreaterThan(geometry.actionBarBottom + 12);
   expect(geometry.backOverlap).toBe(false);
   expect(geometry.forwardOverlap).toBe(false);
 }
@@ -71,13 +71,13 @@ test("homepage autoplay never opens instructions without a Help request", async 
   });
   await page.goto("/");
   await waitForPaintedPlayer(page);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "ineligible");
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
   const first = await playerIndex(page);
   await expect.poll(() => playerIndex(page), { timeout: 3_500 }).toBeGreaterThan(first);
   await page.waitForTimeout(2_600);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Pause");
   expect(soundCloudRequests).toEqual([]);
 });
@@ -89,15 +89,16 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   });
   await page.goto("/");
   await waitForPaintedPlayer(page);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.getByRole("heading", { name: "Browse photos" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".player-onboarding__action-bar")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
-  await expect(page.locator(".player-onboarding__summary")).toHaveText("Click either side or use ← →. Hold to keep moving; scroll works too.");
+  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 3, Browse photos");
   await expect(page.getByRole("button", { name: "Close tutorial" })).toHaveCount(0);
   await expect(page.getByText("Quick tour", { exact: true })).toHaveCount(0);
   await expect(page.locator(".player-onboarding__progress")).toHaveCount(0);
-  await expectTourCardInsideViewport(page);
+  await expectActionBarInsideViewport(page);
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
   await expect(page.locator(".player-surface")).toBeFocused();
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
@@ -110,7 +111,7 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   expect(await playerIndex(page)).toBe(pausedIndex + 1);
 
   await page.getByRole("button", { name: "Speed", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Set the pace" })).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText("Step 2 of 3, Set the pace");
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
   await expect(page.locator("[data-player-control='playback']")).toBeDisabled();
   await page.keyboard.press("Enter");
@@ -121,13 +122,13 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toBeVisible();
 
   await page.getByRole("button", { name: "Music", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Add music" })).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText("Step 3 of 3, Add music");
   await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toHaveCount(0);
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
   expect(soundCloudRequests).toEqual([]);
 
-  await page.getByRole("button", { name: "Start slideshow", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Add music" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Play slideshow", exact: true }).click();
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Pause");
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
   expect(soundCloudRequests).toEqual([]);
@@ -138,17 +139,17 @@ test("returning and direct-photo visitors use permanent Help without automatic i
   await page.goto("/");
   await waitForPaintedPlayer(page);
   await page.waitForTimeout(3_000);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.getByRole("heading", { name: "Browse photos" })).toBeVisible();
+  await expect(page.locator(".player-onboarding__action-bar")).toBeVisible();
   await page.getByRole("button", { name: "Skip" }).click();
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Player help" })).toBeFocused();
 
   await page.goto(`/?year=2002&photo=${DIRECT_PHOTO}`);
   await waitForPaintedPlayer(page);
   await page.waitForTimeout(500);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Player help" })).toBeVisible();
 });
 
@@ -163,7 +164,7 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   const page = await context.newPage();
   await page.goto("/");
   await waitForPaintedPlayer(page);
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "ineligible");
   const first = await playerIndex(page);
   await page.waitForTimeout(1_000);
@@ -171,7 +172,7 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
 
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.getByRole("heading", { name: "Browse photos" })).toBeVisible();
+  await expect(page.locator(".player-onboarding__action-bar")).toBeVisible();
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "none");
   await page.getByRole("button", { name: "Skip" }).click();
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
@@ -181,13 +182,13 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   await page.getByRole("button", { name: "Player help" }).click();
   await page.getByRole("button", { name: "Speed", exact: true }).click();
   await page.getByRole("button", { name: "Music", exact: true }).click();
-  await page.getByRole("button", { name: "Start slideshow", exact: true }).click();
+  await page.getByRole("button", { name: "Play slideshow", exact: true }).click();
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Pause");
   await expect.poll(() => playerIndex(page), { timeout: 2_000 }).toBeGreaterThan(first);
   await context.close();
 });
 
-test("reference-style instruction card stays contained in mobile landscape", async ({ browser }) => {
+test("compact action bar and enlarged callouts stay clear in mobile landscape", async ({ browser }) => {
   const context = await (browser as Browser).newContext({
     viewport: { width: 844, height: 390 },
     screen: { width: 844, height: 390 },
@@ -199,19 +200,21 @@ test("reference-style instruction card stays contained in mobile landscape", asy
   await page.goto("/");
   await waitForPaintedPlayer(page);
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.locator(".player-onboarding__summary")).toHaveText("Tap either side to browse. Press and hold to keep moving.");
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 3, Browse photos");
   await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(2);
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).not.toHaveCSS("animation-name", "none");
-  await expectTourCardInsideViewport(page);
-  await expectGestureCuesClearOfCard(page);
-  await page.addStyleTag({ content: ".player-onboarding__card { top: 59px !important; }" });
-  await expectGestureCuesClearOfCard(page);
+  await expect(page.locator(".player-onboarding__gesture-copy strong").first()).toHaveCSS("font-size", "14.4px");
+  await expectActionBarInsideViewport(page);
+  await expectGestureCuesClearOfActionBar(page);
+  await page.addStyleTag({ content: ".player-onboarding__action-bar { top: 59px !important; }" });
+  await expectGestureCuesClearOfActionBar(page);
   await page.getByRole("button", { name: "Speed", exact: true }).click();
   await expect(page.getByText("Tap to choose speed", { exact: true })).toBeVisible();
-  await expectTourCardInsideViewport(page);
+  await expect(page.locator(".player-onboarding__target-hint")).toHaveCSS("font-size", "15.04px");
+  await expectActionBarInsideViewport(page);
   await page.getByRole("button", { name: "Music", exact: true }).click();
   await expect(page.getByText("Tap to add music", { exact: true })).toBeVisible();
-  await expectTourCardInsideViewport(page);
+  await expectActionBarInsideViewport(page);
   await context.close();
 });
 
@@ -229,14 +232,14 @@ test("portrait chrome and playback controls recover after Help exits across rota
 
   const playback = page.locator("[data-player-control='playback']");
   await page.getByRole("button", { name: "Player help" }).click();
-  await expectGestureCuesClearOfCard(page);
+  await expectGestureCuesClearOfActionBar(page);
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "landscape");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "portrait");
   await page.getByRole("button", { name: "Skip" }).click();
 
-  await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await expect(page.locator(".player-counter")).toBeHidden();
   await expect(page.getByRole("button", { name: "Player help" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Close", exact: true })).toBeEnabled();

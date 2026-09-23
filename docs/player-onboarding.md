@@ -52,8 +52,9 @@ use the real interface:
    loaded or played without a user action.
 
 Only the current real target, its open speed choices, and tutorial controls are
-interactive. Back, Speed, Music, Skip, Escape, and the final `Start` action are
-available. Manual Help captures whether playback
+interactive. A single compact action bar contains `Skip` beside the current
+blue next action: `Speed`, `Music`, or `Play`. Escape is also available. Manual
+Help captures whether playback
 was active, including during the initial loading/warm-up state, pauses cleanly,
 and restores that state on ordinary exit. Player controls are interactive again
 as soon as the tutorial closes.
@@ -61,31 +62,31 @@ as soon as the tutorial closes.
 For visitors requesting reduced motion, automatic homepage playback is paused
 from its first usable frame and the demonstration is omitted. Skip and Escape
 leave playback paused, including during a Help replay. Only the explicit
-Play control or final tutorial `Start` action starts photographs moving.
+Play control or final tutorial `Play` action starts photographs moving.
 
 ## Responsive and accessible behavior
 
 Copy is capability-based: fine-pointer visitors receive desktop mouse, wheel,
 and keyboard instructions; coarse-pointer visitors receive tap and hold copy.
-The card and spotlight recalculate for resize, orientation, and visual viewport
-changes. Mobile landscape preserves the existing right-hand control rail; small
+The spotlight and control callouts recalculate for resize, orientation, and
+visual viewport changes. Mobile landscape preserves the existing right-hand control rail; small
 portrait layouts retain 44-pixel control targets. Portrait places permanent
 Help at the top left and Close at the top right. The photograph number counter
 is not displayed in any player layout.
 
-The visible card is a compact coach mark rather than a second copy of the player
-manual. It contains only the current function, one short sentence, and its
-navigation actions. It has no close icon, tour label, or visible progress
-indicator, leaving the live teaching graphics visible. Screen readers still
-announce the exact step number.
+There is no visible instruction card. The highlighted real control and its
+short animated callout carry the instruction. A top-center, two-part rounded
+action bar keeps `Skip` on black and the next action on blue without covering
+the teaching graphic. Screen readers still receive the step title, explanatory
+copy, and exact step number.
 
 Mobile supporting graphics explain the action at the point of use. Step 1
 alternates a soft highlight between labelled `Previous / Tap or hold` and
 `Next / Tap or hold` cues without changing the real tap zones. Steps 2 and 3
 apply a restrained pulse to the live Speed or Music control and connect it to a
-short `Tap to…` label. The sequence is deliberately staggered so only one cue
+larger `Tap to…` label. The sequence is deliberately staggered so only one cue
 asks for attention at a time. In mobile landscape, the Previous and Next cues
-are anchored below the card rather than sharing its vertical space.
+are anchored in the lower corners, clear of the top-center action bar.
 
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and

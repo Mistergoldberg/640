@@ -1709,7 +1709,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           desktopInstructions={desktopInstructions}
           targetRef={onboardingTargetRef}
           descriptionId={onboardingDescriptionId}
-          onBack={() => sendOnboarding({ type: "BACK" })}
           onNext={() => sendOnboarding({ type: "NEXT" })}
           onExit={exitOnboarding}
         />

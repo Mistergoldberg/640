@@ -11,7 +11,6 @@ interface PlayerOnboardingProps {
   desktopInstructions: boolean;
   targetRef: RefObject<HTMLElement | null>;
   descriptionId: string;
-  onBack: () => void;
   onNext: () => void;
   onExit: (reason: PlayerOnboardingExitReason) => void;
 }
@@ -60,7 +59,6 @@ export function PlayerOnboardingTour({
   desktopInstructions,
   targetRef,
   descriptionId,
-  onBack,
   onNext,
   onExit
 }: PlayerOnboardingProps) {
@@ -68,6 +66,7 @@ export function PlayerOnboardingTour({
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const copy = COPY[step];
   const instruction = desktopInstructions ? copy.desktop : copy.mobile;
+  const nextLabel = step === 1 ? "Speed" : step === 2 ? "Music" : "Play";
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -164,38 +163,26 @@ export function PlayerOnboardingTour({
 
       <section
         ref={panelRef}
-        className="player-onboarding__card"
+        className="player-onboarding__action-bar"
         role="dialog"
         aria-modal="false"
         aria-labelledby={`${descriptionId}-title`}
         aria-describedby={descriptionId}
       >
-        <h2 id={`${descriptionId}-title`}>{copy.title}</h2>
-        <p className="player-onboarding__summary" id={descriptionId}>{instruction}</p>
-        <div className="player-onboarding__actions">
-          <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
-          <div className="player-onboarding__navigation">
-            {step > 1 ? (
-              <button type="button" onClick={onBack} className="player-onboarding__back">
-                <ArrowLeft aria-hidden="true" size={17} /> Back
-              </button>
-            ) : null}
-            {step < 3 ? (
-              <button type="button" onClick={onNext} className="player-onboarding__primary">
-                {step === 1 ? "Speed" : "Music"} <ArrowRight aria-hidden="true" size={18} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => onExit("complete")}
-                className="player-onboarding__primary"
-                aria-label="Start slideshow"
-              >
-                Start <Play aria-hidden="true" size={17} fill="currentColor" />
-              </button>
-            )}
-          </div>
-        </div>
+        <h2 className="sr-only" id={`${descriptionId}-title`}>{copy.title}</h2>
+        <p className="sr-only" id={descriptionId}>{instruction}</p>
+        <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
+        <button
+          type="button"
+          onClick={step < 3 ? onNext : () => onExit("complete")}
+          className="player-onboarding__primary"
+          aria-label={step === 3 ? "Play slideshow" : nextLabel}
+        >
+          {nextLabel}
+          {step < 3
+            ? <ArrowRight aria-hidden="true" size={18} />
+            : <Play aria-hidden="true" size={17} fill="currentColor" />}
+        </button>
       </section>
       <span className="sr-only" role="status" aria-live="polite">Step {step} of 3, {copy.title}</span>
     </div>
