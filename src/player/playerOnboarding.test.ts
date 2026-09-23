@@ -41,6 +41,14 @@ describe("player onboarding preference", () => {
 });
 
 describe("automatic player onboarding", () => {
+  it("stays inactive when onboarding is Help-only even without a completion preference", () => {
+    expect(createPlayerOnboardingState({
+      automaticEntry: false,
+      preference: "incomplete",
+      reducedMotion: false
+    })).toMatchObject({ phase: "ineligible", source: null });
+  });
+
   it("waits for a painted replacement frame before demonstrating", () => {
     const first = playerOnboardingReducer(eligible(), { type: "FRAME_PRESENTED", photoId: "a", foregroundElapsedMs: 0 });
     expect(first.phase).toBe("waiting-for-player");

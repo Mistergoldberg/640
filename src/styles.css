@@ -1255,6 +1255,18 @@ img {
   25% { opacity: 0.88; transform: translateY(-50%) translateX(0); }
 }
 
+@keyframes onboarding-cue-left-landscape {
+  0%, 32%, 100% { opacity: 0.72; transform: translateX(0); }
+  8%, 20% { opacity: 1; transform: translateX(-5px); }
+  25% { opacity: 0.88; transform: translateX(0); }
+}
+
+@keyframes onboarding-cue-right-landscape {
+  0%, 32%, 100% { opacity: 0.72; transform: translateX(0); }
+  8%, 20% { opacity: 1; transform: translateX(5px); }
+  25% { opacity: 0.88; transform: translateX(0); }
+}
+
 @keyframes onboarding-zone-attention {
   0%, 34%, 100% { opacity: 0; }
   9%, 23% { opacity: 1; }
@@ -1640,15 +1652,19 @@ img {
   }
 
   .player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
+    top: auto;
+    bottom: max(10px, env(safe-area-inset-bottom));
     left: calc(max(2px, env(safe-area-inset-left)) + 56px);
+    transform: none;
+    animation-name: onboarding-cue-left-landscape;
   }
 
   .player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
+    top: auto;
     right: calc(max(2px, env(safe-area-inset-right)) + 56px);
-  }
-
-  .player-onboarding__gesture-cue {
-    top: 70%;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    transform: none;
+    animation-name: onboarding-cue-right-landscape;
   }
 
   .player-onboarding__target-hint {

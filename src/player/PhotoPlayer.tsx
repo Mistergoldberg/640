@@ -211,7 +211,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const initialOnboardingStateRef = useRef<PlayerOnboardingState | null>(null);
   if (!initialOnboardingStateRef.current) {
     initialOnboardingStateRef.current = createPlayerOnboardingState({
-      automaticEntry: launchMode === "homepage-autoplay",
+      // The permanent Help control is the only way to open onboarding.
+      automaticEntry: false,
       preference: readPlayerOnboardingPreference(playerOnboardingStorage()),
       reducedMotion
     });
