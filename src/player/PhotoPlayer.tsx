@@ -274,6 +274,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     setOnboardingState(next);
     return next;
   }, []);
+  const advanceOnboarding = useCallback(() => sendOnboarding({ type: "NEXT" }), [sendOnboarding]);
 
   useEffect(() => {
     stateRef.current = playerState;
@@ -1707,9 +1708,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         <PlayerOnboardingTour
           step={onboardingStep}
           desktopInstructions={desktopInstructions}
+          reducedMotion={reducedMotion}
           targetRef={onboardingTargetRef}
           descriptionId={onboardingDescriptionId}
-          onNext={() => sendOnboarding({ type: "NEXT" })}
+          onDemonstrate={navigateManually}
+          onNext={advanceOnboarding}
           onExit={exitOnboarding}
         />
       ) : null}

@@ -1,5 +1,6 @@
 export const PLAYER_ONBOARDING_STORAGE_KEY = "pixilation-player-onboarding-v1";
 export const PLAYER_ONBOARDING_STORAGE_VALUE = "1";
+export const PLAYER_ONBOARDING_SEQUENCE_FRAME_MS = 700;
 
 export const ONBOARDING_MIN_DEMONSTRATION_MS = 2_400;
 export const ONBOARDING_MIN_TRANSITIONS = 12;

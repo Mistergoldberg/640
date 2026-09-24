@@ -3,6 +3,7 @@ import {
   ONBOARDING_FALLBACK_MS,
   ONBOARDING_MIN_DEMONSTRATION_MS,
   ONBOARDING_MIN_TRANSITIONS,
+  PLAYER_ONBOARDING_SEQUENCE_FRAME_MS,
   PLAYER_ONBOARDING_STORAGE_KEY,
   PLAYER_ONBOARDING_STORAGE_VALUE,
   createPlayerOnboardingState,
@@ -16,6 +17,10 @@ function eligible(reducedMotion = false) {
 }
 
 describe("player onboarding preference", () => {
+  it("uses 0.7 seconds for each Help sequence frame", () => {
+    expect(PLAYER_ONBOARDING_SEQUENCE_FRAME_MS).toBe(700);
+  });
+
   it("uses the exact versioned key and value", () => {
     const values = new Map<string, string>();
     const storage = {

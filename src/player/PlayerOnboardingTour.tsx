@@ -4,13 +4,18 @@ import {
   ArrowRight,
   Play,
 } from "lucide-react";
-import type { PlayerOnboardingExitReason } from "./playerOnboarding";
+import {
+  PLAYER_ONBOARDING_SEQUENCE_FRAME_MS,
+  type PlayerOnboardingExitReason
+} from "./playerOnboarding";
 
 interface PlayerOnboardingProps {
   step: 1 | 2 | 3;
   desktopInstructions: boolean;
+  reducedMotion: boolean;
   targetRef: RefObject<HTMLElement | null>;
   descriptionId: string;
+  onDemonstrate: (direction: -1 | 1) => void;
   onNext: () => void;
   onExit: (reason: PlayerOnboardingExitReason) => void;
 }
@@ -39,6 +44,13 @@ const COPY: Record<1 | 2 | 3, TutorialCopy> = {
   }
 };
 
+const BROWSE_SEQUENCE = [
+  { frame: "next-1", direction: 1 as const, label: "Next" },
+  { frame: "previous-1", direction: -1 as const, label: "Previous" },
+  { frame: "next-2", direction: 1 as const, label: "Next" },
+  { frame: "previous-2", direction: -1 as const, label: "Previous" }
+];
+
 interface TargetRect {
   top: number;
   left: number;
@@ -57,16 +69,55 @@ function focusableElements(panel: HTMLElement, target: HTMLElement | null) {
 export function PlayerOnboardingTour({
   step,
   desktopInstructions,
+  reducedMotion,
   targetRef,
   descriptionId,
+  onDemonstrate,
   onNext,
   onExit
 }: PlayerOnboardingProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
+  const [browseSequenceIndex, setBrowseSequenceIndex] = useState(0);
   const copy = COPY[step];
   const instruction = desktopInstructions ? copy.desktop : copy.mobile;
   const nextLabel = step === 1 ? "Speed" : step === 2 ? "Music" : "Play";
+  const browseSequenceFrame = BROWSE_SEQUENCE[browseSequenceIndex];
+  const sequenceFrame = step === 1
+    ? reducedMotion ? "browse" : browseSequenceFrame.frame
+    : step === 2 ? "speed" : "music";
+  const sequencePosition = step === 1 ? browseSequenceIndex + 1 : step + 3;
+
+  useEffect(() => {
+    if (step !== 1 || reducedMotion) return;
+
+    let sequenceIndex = 0;
+    let frame = 0;
+    let timer = 0;
+    const presentFrame = () => {
+      setBrowseSequenceIndex(sequenceIndex);
+      frame = window.requestAnimationFrame(() => onDemonstrate(BROWSE_SEQUENCE[sequenceIndex].direction));
+      timer = window.setTimeout(() => {
+        sequenceIndex += 1;
+        if (sequenceIndex < BROWSE_SEQUENCE.length) presentFrame();
+        else onNext();
+      }, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
+    };
+    presentFrame();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [onDemonstrate, onNext, reducedMotion, step]);
+
+  useEffect(() => {
+    if (reducedMotion || step === 1) return;
+    const timer = window.setTimeout(() => {
+      if (step === 2) onNext();
+      else onExit("complete");
+    }, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
+    return () => window.clearTimeout(timer);
+  }, [onExit, onNext, reducedMotion, step]);
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -127,21 +178,22 @@ export function PlayerOnboardingTour({
 
   return (
     <div
-      className={`player-onboarding player-onboarding--step-${step} player-onboarding--${desktopInstructions ? "desktop" : "mobile"}`}
+      className={`player-onboarding player-onboarding--step-${step} player-onboarding--${desktopInstructions ? "desktop" : "mobile"}${step === 1 && !reducedMotion ? " is-auto-sequencing" : ""}`}
       data-onboarding-step={step}
+      data-onboarding-frame={sequenceFrame}
     >
       {step === 1 ? (
         <div className="player-onboarding__frame-zones" aria-hidden="true">
-          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--back">
-            <span className="player-onboarding__gesture-cue">
+          <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--back${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+            <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
               <span className="player-onboarding__gesture-icon"><ArrowLeft size={21} strokeWidth={2} /></span>
               {!desktopInstructions ? (
                 <span className="player-onboarding__gesture-copy"><strong>Previous</strong><small>Tap or hold</small></span>
               ) : null}
             </span>
           </span>
-          <span className="player-onboarding__frame-zone player-onboarding__frame-zone--forward">
-            <span className="player-onboarding__gesture-cue">
+          <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--forward${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+            <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
               <span className="player-onboarding__gesture-icon"><ArrowRight size={21} strokeWidth={2} /></span>
               {!desktopInstructions ? (
                 <span className="player-onboarding__gesture-copy"><strong>Next</strong><small>Tap or hold</small></span>
@@ -155,7 +207,7 @@ export function PlayerOnboardingTour({
           {!desktopInstructions ? (
             <div className="player-onboarding__target-hint" style={spotlightStyle} aria-hidden="true">
               <span className="player-onboarding__target-hint-dot" />
-              {step === 2 ? "Tap to choose speed" : "Tap to add music"}
+              {step === 2 ? "Speed" : "Music"}
             </div>
           ) : null}
         </>
@@ -184,7 +236,11 @@ export function PlayerOnboardingTour({
             : <Play aria-hidden="true" size={17} fill="currentColor" />}
         </button>
       </section>
-      <span className="sr-only" role="status" aria-live="polite">Step {step} of 3, {copy.title}</span>
+      <span className="sr-only" role="status" aria-live="polite">
+        {reducedMotion
+          ? `Step ${step} of 3, ${copy.title}`
+          : `Step ${sequencePosition} of 6, ${step === 1 ? browseSequenceFrame.label : step === 2 ? "Speed" : "Music"}`}
+      </span>
     </div>
   );
 }

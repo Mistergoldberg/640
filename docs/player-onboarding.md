@@ -41,23 +41,27 @@ ineligible -- Help --> paused
   -> instruction-1 -> instruction-2 -> instruction-3 -> completed
 ```
 
-Pressing Help pauses the player before the first instruction. The three steps
-use the real interface:
+Pressing Help pauses the player and starts a six-frame sequence. Each frame is
+held for exactly 700ms:
 
-1. The photograph surface teaches left/right navigation, holding, arrow keys,
-   and desktop wheel direction.
-2. The real speed control teaches the existing 0.1s, 0.25s, 0.5s, 1s, and 2s
-   values.
-3. The real music control explains that SoundCloud is optional and is never
-   loaded or played without a user action.
+1. `Next` receives a gloss-and-press animation and advances one photograph.
+2. `Previous` receives the same animation and returns one photograph.
+3. `Next` animates and advances once more.
+4. `Previous` animates and returns once more.
+5. The real speed control is highlighted with the label `Speed`.
+6. The real music control is highlighted with the label `Music`.
+
+After the final frame, the tutorial completes and photograph playback starts.
+SoundCloud remains optional and is never loaded or played by the sequence.
 
 Only the current real target, its open speed choices, and tutorial controls are
 interactive. A single compact action bar contains `Skip` beside the current
 blue next action: `Speed`, `Music`, or `Play`. Escape is also available. Manual
 Help captures whether playback
 was active, including during the initial loading/warm-up state, pauses cleanly,
-and restores that state on ordinary exit. Player controls are interactive again
-as soon as the tutorial closes.
+and restores that state when Skip or Escape exits early. Automatic completion
+defaults to Play. Player controls are interactive again as soon as the tutorial
+closes.
 
 For visitors requesting reduced motion, automatic homepage playback is paused
 from its first usable frame and the demonstration is omitted. Skip and Escape
@@ -81,17 +85,17 @@ the teaching graphic. Screen readers still receive the step title, explanatory
 copy, and exact step number.
 
 Mobile supporting graphics explain the action at the point of use. Step 1
-alternates a soft highlight between labelled `Previous / Tap or hold` and
-`Next / Tap or hold` cues without changing the real tap zones. Steps 2 and 3
-apply a restrained pulse to the live Speed or Music control and connect it to a
-larger `Tap to…` label. The sequence is deliberately staggered so only one cue
-asks for attention at a time. In mobile landscape, the Previous and Next cues
+plays `Next, Previous, Next, Previous` with one real photograph transition per
+700ms frame. The active cue receives a moving gloss, press, and ripple while the
+other cue recedes. Steps 2 and 3 apply a restrained pulse to the live control
+and use the larger labels `Speed` and `Music`. Only one cue asks for attention
+at a time. In mobile landscape, the Previous and Next cues
 are anchored in the lower corners, clear of the top-center action bar.
 
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and
-Shift+Tab cycle through the target and tutorial controls, Escape exits, each step
-is announced with its numeric position, and focus returns to the player surface
+Shift+Tab cycle through the target and tutorial controls, Escape exits, each of
+the six frames is announced with its numeric position, and focus returns to the player surface
 or Help control. Text labels prevent color from carrying meaning alone.
 Reduced-motion CSS removes every tutorial highlight, ripple, pulse, and
 transition while retaining the same labels and static outlines.
