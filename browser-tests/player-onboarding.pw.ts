@@ -39,6 +39,7 @@ async function expectBrowseTeachingOverImage(page: Page) {
     const back = rect(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue");
     const prompt = rect(".player-onboarding__center-prompt");
     const forward = rect(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue");
+    const promptStyle = getComputedStyle(document.querySelector<HTMLElement>(".player-onboarding__center-prompt")!);
     const inside = (inner?: DOMRect, outer?: DOMRect) => Boolean(inner && outer
       && inner.left >= outer.left - 1 && inner.right <= outer.right + 1
       && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1);
@@ -46,6 +47,10 @@ async function expectBrowseTeachingOverImage(page: Page) {
     return {
       allInsideImage: inside(back, image) && inside(prompt, image) && inside(forward, image),
       ordered: Boolean(back && prompt && forward && back.right <= prompt.left + 1 && prompt.right <= forward.left + 1),
+      backGap: back && prompt ? prompt.left - back.right : Infinity,
+      forwardGap: prompt && forward ? forward.left - prompt.right : Infinity,
+      promptWidth: Number.parseFloat(promptStyle.width),
+      promptHeight: Number.parseFloat(promptStyle.height),
       verticalOffset: Math.max(
         Math.abs(centerY(back) - centerY(prompt)),
         Math.abs(centerY(forward) - centerY(prompt))
@@ -54,6 +59,10 @@ async function expectBrowseTeachingOverImage(page: Page) {
   });
   expect(geometry.allInsideImage).toBe(true);
   expect(geometry.ordered).toBe(true);
+  expect(geometry.backGap).toBeLessThanOrEqual(10);
+  expect(geometry.forwardGap).toBeLessThanOrEqual(10);
+  expect(geometry.promptWidth).toBeCloseTo(240, 0);
+  expect(geometry.promptHeight).toBeCloseTo(72, 0);
   expect(geometry.verticalOffset).toBeLessThan(1);
 }
 
@@ -62,6 +71,7 @@ async function expectControlsPrompt(page: Page, copy: string, control: "speed" |
   await expect(prompt).toHaveText(copy);
   const geometry = await page.evaluate((control) => {
     const prompt = document.querySelector<HTMLElement>(".player-onboarding__center-prompt")?.getBoundingClientRect();
+    const promptStyle = getComputedStyle(document.querySelector<HTMLElement>(".player-onboarding__center-prompt")!);
     const controls = document.querySelector<HTMLElement>(".player-controls")?.getBoundingClientRect();
     const target = document.querySelector<HTMLElement>(`[data-player-control='${control}']`)?.getBoundingClientRect();
     const music = document.querySelector<HTMLElement>("[data-player-control='music']")?.getBoundingClientRect();
@@ -77,12 +87,16 @@ async function expectControlsPrompt(page: Page, copy: string, control: "speed" |
         && prompt.bottom <= Math.min(music.top, speed.top) - 8),
       insideViewport: Boolean(prompt && prompt.top >= 0 && prompt.left >= 0
         && prompt.right <= window.innerWidth && prompt.bottom <= window.innerHeight),
-      radius: prompt ? getComputedStyle(document.querySelector<HTMLElement>(".player-onboarding__center-prompt")!).borderRadius : ""
+      radius: prompt ? getComputedStyle(document.querySelector<HTMLElement>(".player-onboarding__center-prompt")!).borderRadius : "",
+      width: Number.parseFloat(promptStyle.width),
+      height: Number.parseFloat(promptStyle.height)
     };
   }, control);
   expect(geometry.insideViewport).toBe(true);
   expect(geometry.landscapeRail ? geometry.landscapePlacement : geometry.standardPlacement).toBe(true);
   expect(geometry.radius).toBe("16px");
+  expect(geometry.width).toBeCloseTo(240, 0);
+  expect(geometry.height).toBeCloseTo(72, 0);
 }
 
 async function expectGestureCuesClearOfActionBar(page: Page) {
@@ -110,8 +124,8 @@ async function expectGestureCuesClearOfActionBar(page: Page) {
       viewportHeight: window.innerHeight
     };
   });
-  expect(geometry.backWidth).toBeGreaterThan(120);
-  expect(geometry.forwardWidth).toBeGreaterThan(120);
+  expect(geometry.backWidth).toBeGreaterThanOrEqual(50);
+  expect(geometry.forwardWidth).toBeGreaterThanOrEqual(50);
   expect(geometry.actionBarHeight).toBeLessThan(60);
   expect(geometry.backTop).toBeGreaterThan(geometry.actionBarBottom + 12);
   expect(geometry.forwardTop).toBeGreaterThan(geometry.actionBarBottom + 12);
@@ -271,9 +285,8 @@ test("compact action bar and enlarged callouts stay clear in mobile landscape", 
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
   await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next, Tap to play");
-  await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(2);
+  await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(0);
   await expect(page.locator(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "onboarding-demo-cue");
-  await expect(page.locator(".player-onboarding__gesture-copy strong").first()).toHaveCSS("font-size", "14.4px");
   await expectActionBarInsideViewport(page);
   await expectGestureCuesClearOfActionBar(page);
   await expectBrowseTeachingOverImage(page);

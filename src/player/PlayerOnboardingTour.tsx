@@ -207,17 +207,11 @@ export function PlayerOnboardingTour({
           <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--back${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
             <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
               <span className="player-onboarding__gesture-icon"><ArrowLeft size={21} strokeWidth={2} /></span>
-              {!desktopInstructions ? (
-                <span className="player-onboarding__gesture-copy"><strong>Previous</strong><small>Tap or hold</small></span>
-              ) : null}
             </span>
           </span>
           <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--forward${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
             <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
               <span className="player-onboarding__gesture-icon"><ArrowRight size={21} strokeWidth={2} /></span>
-              {!desktopInstructions ? (
-                <span className="player-onboarding__gesture-copy"><strong>Next</strong><small>Tap or hold</small></span>
-              ) : null}
             </span>
           </span>
         </div>

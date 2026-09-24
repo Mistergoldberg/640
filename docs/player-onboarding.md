@@ -51,8 +51,9 @@ frames are held for exactly 700ms; the two control frames are held for 1.1 secon
 5. The real speed control is highlighted with an `Adjust Speed` box above the controls.
 6. The real music control is highlighted with an `Add Music` box above the controls.
 
-All four browsing frames place `Tap to play` between the Previous and Next cues.
-The cues and prompt are constrained to the rendered photograph rather than the
+All four browsing frames place a `Tap to play` card between bare Previous and
+Next arrow cues. The card matches the `Adjust Speed` and `Add Music` cards in
+size, and the arrows sit immediately beside its edges. The cues and prompt are constrained to the rendered photograph rather than the
 viewport, matching the production tap targets visually on mobile and desktop.
 
 After the final frame, the tutorial completes and photograph playback starts.
@@ -82,8 +83,9 @@ portrait layouts retain 44-pixel control targets. Portrait places permanent
 Help at the top left and Close at the top right. The photograph number counter
 is not displayed in any player layout.
 
-There is no large instruction card. The compact `Tap to play` box sits between
-the photograph navigation cues, while `Adjust Speed` and `Add Music` sit directly
+There is no large instruction card. The `Tap to play` box matches the two control
+instruction boxes and sits directly between the photograph navigation arrows,
+while `Adjust Speed` and `Add Music` sit directly
 above the player control cluster. A top-center, two-part rounded action bar keeps `Skip` on black
 and the next action on blue without covering the teaching graphic. Screen
 readers still receive the step title, explanatory copy, and exact step number.

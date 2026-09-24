@@ -926,6 +926,7 @@ img {
 }
 
 .player-onboarding {
+  --onboarding-prompt-width: min(240px, calc(100vw - 112px));
   position: fixed;
   inset: 0;
   z-index: 12;
@@ -1001,7 +1002,8 @@ img {
   position: fixed;
   left: 50%;
   display: grid;
-  min-width: min(240px, calc(100vw - 48px));
+  width: var(--onboarding-prompt-width);
+  min-width: 0;
   min-height: 72px;
   box-sizing: border-box;
   place-items: center;
@@ -1026,11 +1028,6 @@ img {
   --onboarding-prompt-transform: translate(-50%, -50%);
   top: calc(var(--onboarding-image-top, 50vh) + var(--onboarding-image-height, 0px) / 2);
   left: calc(var(--onboarding-image-left, 50vw) + var(--onboarding-image-width, 0px) / 2);
-  min-width: min(112px, calc(100vw - 264px));
-  min-height: 48px;
-  padding: 12px 16px;
-  border-radius: 12px;
-  font-size: clamp(0.92rem, 3.8vw, 1.08rem);
 }
 
 .player-onboarding__center-prompt--controls {
@@ -1119,40 +1116,17 @@ img {
   animation: onboarding-gesture-ring 4.8s ease-out infinite;
 }
 
-.player-onboarding__gesture-copy {
-  display: grid;
-  gap: 2px;
-  padding-right: 4px;
-  line-height: 1.05;
-  white-space: nowrap;
-}
-
-.player-onboarding__gesture-copy strong {
-  font-size: 0.9rem;
-  font-weight: 800;
-}
-
-.player-onboarding__gesture-copy small {
-  color: rgba(244, 241, 234, 0.6);
-  font-size: 0.76rem;
-  font-weight: 650;
-}
-
 .player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
-  left: 4px;
+  right: calc(var(--onboarding-prompt-width) / 2 + 4px);
+  left: auto;
   animation: onboarding-cue-left 4.8s ease-in-out infinite;
 }
 
 .player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
-  right: 4px;
+  right: auto;
+  left: calc(var(--onboarding-prompt-width) / 2 + 4px);
   flex-direction: row-reverse;
   animation: onboarding-cue-right 4.8s 2.4s ease-in-out infinite;
-}
-
-.player-onboarding__frame-zone--forward .player-onboarding__gesture-copy {
-  padding-right: 0;
-  padding-left: 4px;
-  text-align: right;
 }
 
 .player-onboarding__frame-zone--forward .player-onboarding__gesture-icon::after {
@@ -1637,15 +1611,17 @@ img {
   .player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
     top: 50%;
     bottom: auto;
-    left: calc(max(2px, env(safe-area-inset-left)) + 56px);
+    right: calc(var(--onboarding-prompt-width) / 2 + 4px);
+    left: auto;
     transform: translateY(-50%);
     animation-name: onboarding-cue-left;
   }
 
   .player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
     top: 50%;
-    right: calc(max(2px, env(safe-area-inset-right)) + 56px);
+    right: auto;
     bottom: auto;
+    left: calc(var(--onboarding-prompt-width) / 2 + 4px);
     transform: translateY(-50%);
     animation-name: onboarding-cue-right;
   }
