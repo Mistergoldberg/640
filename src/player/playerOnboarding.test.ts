@@ -55,6 +55,7 @@ describe("manual replay", () => {
     state = playerOnboardingReducer(state, { type: "PLAYER_PAUSED" });
     expect(playerOnboardingReducer(state, { type: "EXIT", reason: "escape" }).resumeAfterExit).toBe(false);
     expect(playerOnboardingReducer(state, { type: "EXIT", reason: "skip" }).resumeAfterExit).toBe(false);
+    expect(playerOnboardingReducer(state, { type: "EXIT", reason: "auto-complete" }).resumeAfterExit).toBe(false);
     expect(playerOnboardingReducer(state, { type: "EXIT", reason: "complete" }).resumeAfterExit).toBe(true);
   });
 });

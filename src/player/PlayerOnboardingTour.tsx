@@ -92,16 +92,19 @@ export function PlayerOnboardingTour({
     : step === 2 ? "speed" : "music";
   const sequencePosition = step === 1 ? browseSequenceIndex + 1 : step + 3;
   const prompt = step === 1 ? "Tap to play" : step === 2 ? "Adjust Speed" : "Add Music";
+  const mobileInstructions = !desktopInstructions;
 
   useEffect(() => {
-    if (step !== 1 || reducedMotion) return;
+    if (step !== 1 || (reducedMotion && !mobileInstructions)) return;
 
     let sequenceIndex = 0;
     let frame = 0;
     let timer = 0;
     const presentFrame = () => {
       setBrowseSequenceIndex(sequenceIndex);
-      frame = window.requestAnimationFrame(() => onDemonstrate(BROWSE_SEQUENCE[sequenceIndex].direction));
+      if (!reducedMotion) {
+        frame = window.requestAnimationFrame(() => onDemonstrate(BROWSE_SEQUENCE[sequenceIndex].direction));
+      }
       timer = window.setTimeout(() => {
         sequenceIndex += 1;
         if (sequenceIndex < BROWSE_SEQUENCE.length) presentFrame();
@@ -113,16 +116,16 @@ export function PlayerOnboardingTour({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [onDemonstrate, onNext, reducedMotion, step]);
+  }, [mobileInstructions, onDemonstrate, onNext, reducedMotion, step]);
 
   useEffect(() => {
-    if (reducedMotion || step === 1) return;
+    if (step === 1 || (reducedMotion && !mobileInstructions)) return;
     const timer = window.setTimeout(() => {
       if (step === 2) onNext();
-      else onExit("complete");
+      else onExit(reducedMotion ? "auto-complete" : "complete");
     }, PLAYER_ONBOARDING_CONTROL_FRAME_MS);
     return () => window.clearTimeout(timer);
-  }, [onExit, onNext, reducedMotion, step]);
+  }, [mobileInstructions, onExit, onNext, reducedMotion, step]);
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -200,7 +203,14 @@ export function PlayerOnboardingTour({
     <div
       className={`player-onboarding${desktopInstructions ? "" : " player-onboarding--mobile"}${step === 1 && !reducedMotion ? " is-auto-sequencing" : ""}`}
       data-onboarding-frame={sequenceFrame}
+      role={mobileInstructions ? "dialog" : undefined}
+      aria-modal={mobileInstructions ? false : undefined}
+      aria-labelledby={mobileInstructions ? `${descriptionId}-title` : undefined}
+      aria-describedby={mobileInstructions ? descriptionId : undefined}
     >
+      <h2 className="sr-only" id={`${descriptionId}-title`}>{copy.title}</h2>
+      <p className="sr-only" id={descriptionId}>{instruction}</p>
+
       {step === 1 ? (
         <div className="player-onboarding__frame-zones" style={imageStyle} aria-hidden="true">
           <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--back${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
@@ -228,29 +238,29 @@ export function PlayerOnboardingTour({
         {prompt}
       </div>
 
-      <section
-        ref={panelRef}
-        className="player-onboarding__action-bar"
-        role="dialog"
-        aria-modal="false"
-        aria-labelledby={`${descriptionId}-title`}
-        aria-describedby={descriptionId}
-      >
-        <h2 className="sr-only" id={`${descriptionId}-title`}>{copy.title}</h2>
-        <p className="sr-only" id={descriptionId}>{instruction}</p>
-        <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
-        <button
-          type="button"
-          onClick={step < 3 ? onNext : () => onExit("complete")}
-          className="player-onboarding__primary"
-          aria-label={step === 3 ? "Play slideshow" : nextLabel}
+      {desktopInstructions ? (
+        <section
+          ref={panelRef}
+          className="player-onboarding__action-bar"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby={`${descriptionId}-title`}
+          aria-describedby={descriptionId}
         >
-          {nextLabel}
-          {step < 3
-            ? <ArrowRight aria-hidden="true" size={18} />
-            : <Play aria-hidden="true" size={17} fill="currentColor" />}
-        </button>
-      </section>
+          <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
+          <button
+            type="button"
+            onClick={step < 3 ? onNext : () => onExit("complete")}
+            className="player-onboarding__primary"
+            aria-label={step === 3 ? "Play slideshow" : nextLabel}
+          >
+            {nextLabel}
+            {step < 3
+              ? <ArrowRight aria-hidden="true" size={18} />
+              : <Play aria-hidden="true" size={17} fill="currentColor" />}
+          </button>
+        </section>
+      ) : null}
       <span className="sr-only" role="status" aria-live="polite">
         {reducedMotion
           ? `Step ${step} of 3, ${copy.title}`

@@ -11,7 +11,7 @@ type PlayerOnboardingPhase =
   | "instruction-3"
   | "completed";
 
-export type PlayerOnboardingExitReason = "complete" | "skip" | "escape";
+export type PlayerOnboardingExitReason = "complete" | "auto-complete" | "skip" | "escape";
 
 export interface PlayerOnboardingState {
   phase: PlayerOnboardingPhase;
@@ -82,6 +82,8 @@ export function playerOnboardingReducer(
       if (!isPlayerOnboardingInstructionPhase(state.phase)) return state;
       const resumeAfterExit = event.reason === "complete"
         ? true
+        : event.reason === "auto-complete"
+          ? false
         : state.reducedMotion
           ? false
           : state.resumeAfterExit;
