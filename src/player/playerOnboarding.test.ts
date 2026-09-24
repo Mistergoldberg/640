@@ -3,6 +3,7 @@ import {
   ONBOARDING_FALLBACK_MS,
   ONBOARDING_MIN_DEMONSTRATION_MS,
   ONBOARDING_MIN_TRANSITIONS,
+  PLAYER_ONBOARDING_CONTROL_FRAME_MS,
   PLAYER_ONBOARDING_SEQUENCE_FRAME_MS,
   PLAYER_ONBOARDING_STORAGE_KEY,
   PLAYER_ONBOARDING_STORAGE_VALUE,
@@ -17,8 +18,9 @@ function eligible(reducedMotion = false) {
 }
 
 describe("player onboarding preference", () => {
-  it("uses 0.7 seconds for each Help sequence frame", () => {
+  it("uses 0.7 seconds for browse frames and 1.1 seconds for control frames", () => {
     expect(PLAYER_ONBOARDING_SEQUENCE_FRAME_MS).toBe(700);
+    expect(PLAYER_ONBOARDING_CONTROL_FRAME_MS).toBe(1_100);
   });
 
   it("uses the exact versioned key and value", () => {

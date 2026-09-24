@@ -41,8 +41,8 @@ ineligible -- Help --> paused
   -> instruction-1 -> instruction-2 -> instruction-3 -> completed
 ```
 
-Pressing Help pauses the player and starts a six-frame sequence. Each frame is
-held for exactly 700ms:
+Pressing Help pauses the player and starts a six-frame sequence. The four browse
+frames are held for exactly 700ms; the two control frames are held for 1.1 seconds:
 
 1. `Next` receives a gloss-and-press animation and advances one photograph.
 2. `Previous` receives the same animation and returns one photograph.

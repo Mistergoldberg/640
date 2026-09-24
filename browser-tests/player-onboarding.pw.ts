@@ -175,17 +175,21 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect.poll(() => playerIndex(page)).toBe(initialIndex);
 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 1_200 });
+  const speedPresentedAt = Date.now();
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
   await expectControlsPrompt(page, "Adjust Speed", "speed");
   await expect(page.getByRole("status")).toHaveText("Step 5 of 6, Adjust Speed");
 
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
+  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_600 });
+  const musicPresentedAt = Date.now();
+  expect(musicPresentedAt - speedPresentedAt).toBeGreaterThanOrEqual(950);
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
   await expectControlsPrompt(page, "Add Music", "music");
   await expect(page.getByRole("status")).toHaveText("Step 6 of 6, Add Music");
   expect(soundCloudRequests).toEqual([]);
 
-  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0, { timeout: 1_200 });
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0, { timeout: 1_600 });
+  expect(Date.now() - musicPresentedAt).toBeGreaterThanOrEqual(950);
   await expect(playback).toHaveAttribute("aria-label", "Pause");
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
   expect(soundCloudRequests).toEqual([]);
@@ -280,7 +284,7 @@ test("compact action bar and enlarged callouts stay clear in mobile landscape", 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 3_000 });
   await expectControlsPrompt(page, "Adjust Speed", "speed");
   await expectActionBarInsideViewport(page);
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
+  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_600 });
   await expectControlsPrompt(page, "Add Music", "music");
   await expectActionBarInsideViewport(page);
   await context.close();

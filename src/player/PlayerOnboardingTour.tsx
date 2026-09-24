@@ -5,6 +5,7 @@ import {
   Play,
 } from "lucide-react";
 import {
+  PLAYER_ONBOARDING_CONTROL_FRAME_MS,
   PLAYER_ONBOARDING_SEQUENCE_FRAME_MS,
   type PlayerOnboardingExitReason
 } from "./playerOnboarding";
@@ -119,7 +120,7 @@ export function PlayerOnboardingTour({
     const timer = window.setTimeout(() => {
       if (step === 2) onNext();
       else onExit("complete");
-    }, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
+    }, PLAYER_ONBOARDING_CONTROL_FRAME_MS);
     return () => window.clearTimeout(timer);
   }, [onExit, onNext, reducedMotion, step]);
 
