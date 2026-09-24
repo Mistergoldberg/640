@@ -30,6 +30,17 @@ async function expectActionBarInsideViewport(page: Page) {
   })).toBe(true);
 }
 
+async function expectCenteredPrompt(page: Page, copy: string) {
+  const prompt = page.locator(".player-onboarding__center-prompt");
+  await expect(prompt).toHaveText(copy);
+  await expect.poll(() => prompt.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return Math.abs(rect.left + rect.width / 2 - window.innerWidth / 2) < 1
+      && Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2) < 1
+      && getComputedStyle(element).borderRadius === "16px";
+  }), { timeout: 500 }).toBe(true);
+}
+
 async function expectGestureCuesClearOfActionBar(page: Page) {
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toBeVisible();
   await expect(page.locator(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue")).toBeVisible();
@@ -100,7 +111,7 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
-  await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next");
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 7, Next");
   await expect(page.getByRole("button", { name: "Close tutorial" })).toHaveCount(0);
   await expect(page.getByText("Quick tour", { exact: true })).toHaveCount(0);
   await expect(page.locator(".player-onboarding__progress")).toHaveCount(0);
@@ -120,13 +131,20 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 1_200 });
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
-  await expect(page.getByRole("status")).toHaveText("Step 5 of 6, Speed");
+  await expectCenteredPrompt(page, "Adjust Speed");
+  await expect(page.getByRole("status")).toHaveText("Step 5 of 7, Adjust Speed");
 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
-  await expect(page.getByRole("status")).toHaveText("Step 6 of 6, Music");
+  await expectCenteredPrompt(page, "Add Music");
+  await expect(page.getByRole("status")).toHaveText("Step 6 of 7, Add Music");
   expect(soundCloudRequests).toEqual([]);
 
+  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "play", { timeout: 1_200 });
+  await expectCenteredPrompt(page, "Tap to play");
+  await expect(page.getByRole("status")).toHaveText("Step 7 of 7, Tap to play");
+  await expect(page.getByRole("button", { name: "Play slideshow", exact: true })).toBeFocused();
+  await expect(page.locator(".player-onboarding__spotlight")).toHaveCount(0);
   await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0, { timeout: 1_200 });
   await expect(playback).toHaveAttribute("aria-label", "Pause");
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
@@ -181,11 +199,11 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
 
   await page.getByRole("button", { name: "Player help" }).click();
   await page.getByRole("button", { name: "Speed", exact: true }).click();
-  await expect(page.getByText("Speed", { exact: true })).toBeVisible();
+  await expectCenteredPrompt(page, "Adjust Speed");
   await page.waitForTimeout(800);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed");
   await page.getByRole("button", { name: "Music", exact: true }).click();
-  await expect(page.getByText("Music", { exact: true })).toBeVisible();
+  await expectCenteredPrompt(page, "Add Music");
   await page.waitForTimeout(800);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music");
   await page.getByRole("button", { name: "Play slideshow", exact: true }).click();
@@ -207,7 +225,7 @@ test("compact action bar and enlarged callouts stay clear in mobile landscape", 
   await waitForPaintedPlayer(page);
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
-  await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next");
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 7, Next");
   await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(2);
   await expect(page.locator(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "onboarding-demo-cue");
   await expect(page.locator(".player-onboarding__gesture-copy strong").first()).toHaveCSS("font-size", "14.4px");
@@ -218,11 +236,13 @@ test("compact action bar and enlarged callouts stay clear in mobile landscape", 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "previous-1", { timeout: 1_200 });
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "onboarding-demo-cue");
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 3_000 });
-  await expect(page.getByText("Speed", { exact: true })).toBeVisible();
-  await expect(page.locator(".player-onboarding__target-hint")).toHaveCSS("font-size", "15.04px");
+  await expectCenteredPrompt(page, "Adjust Speed");
   await expectActionBarInsideViewport(page);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
-  await expect(page.getByText("Music", { exact: true })).toBeVisible();
+  await expectCenteredPrompt(page, "Add Music");
+  await expectActionBarInsideViewport(page);
+  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "play", { timeout: 1_200 });
+  await expectCenteredPrompt(page, "Tap to play");
   await expectActionBarInsideViewport(page);
   await context.close();
 });

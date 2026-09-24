@@ -77,16 +77,21 @@ export function PlayerOnboardingTour({
   onExit
 }: PlayerOnboardingProps) {
   const panelRef = useRef<HTMLElement | null>(null);
+  const primaryActionRef = useRef<HTMLButtonElement | null>(null);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const [browseSequenceIndex, setBrowseSequenceIndex] = useState(0);
+  const [showPlayPrompt, setShowPlayPrompt] = useState(false);
   const copy = COPY[step];
   const instruction = desktopInstructions ? copy.desktop : copy.mobile;
   const nextLabel = step === 1 ? "Speed" : step === 2 ? "Music" : "Play";
   const browseSequenceFrame = BROWSE_SEQUENCE[browseSequenceIndex];
   const sequenceFrame = step === 1
     ? reducedMotion ? "browse" : browseSequenceFrame.frame
-    : step === 2 ? "speed" : "music";
-  const sequencePosition = step === 1 ? browseSequenceIndex + 1 : step + 3;
+    : step === 2 ? "speed" : showPlayPrompt ? "play" : "music";
+  const sequencePosition = step === 1 ? browseSequenceIndex + 1 : step === 2 ? 5 : showPlayPrompt ? 7 : 6;
+  const centerPrompt = step === 2 ? "Adjust Speed" : step === 3 ? showPlayPrompt ? "Tap to play" : "Add Music" : null;
+  const accessibleTitle = showPlayPrompt ? "Tap to play" : copy.title;
+  const accessibleInstruction = showPlayPrompt ? "Start the slideshow." : instruction;
 
   useEffect(() => {
     if (step !== 1 || reducedMotion) return;
@@ -112,12 +117,25 @@ export function PlayerOnboardingTour({
 
   useEffect(() => {
     if (reducedMotion || step === 1) return;
-    const timer = window.setTimeout(() => {
-      if (step === 2) onNext();
-      else onExit("complete");
-    }, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
-    return () => window.clearTimeout(timer);
+    if (step === 2) {
+      const timer = window.setTimeout(onNext, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
+      return () => window.clearTimeout(timer);
+    }
+
+    setShowPlayPrompt(false);
+    const promptTimer = window.setTimeout(() => setShowPlayPrompt(true), PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
+    const completeTimer = window.setTimeout(() => onExit("complete"), PLAYER_ONBOARDING_SEQUENCE_FRAME_MS * 2);
+    return () => {
+      window.clearTimeout(promptTimer);
+      window.clearTimeout(completeTimer);
+    };
   }, [onExit, onNext, reducedMotion, step]);
+
+  useEffect(() => {
+    if (!showPlayPrompt) return;
+    const frame = window.requestAnimationFrame(() => primaryActionRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [showPlayPrompt]);
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -201,16 +219,14 @@ export function PlayerOnboardingTour({
             </span>
           </span>
         </div>
-      ) : targetRect ? (
+      ) : targetRect && !showPlayPrompt ? (
         <>
           <div className="player-onboarding__spotlight" style={spotlightStyle} aria-hidden="true" />
-          {!desktopInstructions ? (
-            <div className="player-onboarding__target-hint" style={spotlightStyle} aria-hidden="true">
-              <span className="player-onboarding__target-hint-dot" />
-              {step === 2 ? "Speed" : "Music"}
-            </div>
-          ) : null}
         </>
+      ) : null}
+
+      {centerPrompt ? (
+        <div className="player-onboarding__center-prompt" aria-hidden="true">{centerPrompt}</div>
       ) : null}
 
       <section
@@ -221,10 +237,11 @@ export function PlayerOnboardingTour({
         aria-labelledby={`${descriptionId}-title`}
         aria-describedby={descriptionId}
       >
-        <h2 className="sr-only" id={`${descriptionId}-title`}>{copy.title}</h2>
-        <p className="sr-only" id={descriptionId}>{instruction}</p>
+        <h2 className="sr-only" id={`${descriptionId}-title`}>{accessibleTitle}</h2>
+        <p className="sr-only" id={descriptionId}>{accessibleInstruction}</p>
         <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
         <button
+          ref={primaryActionRef}
           type="button"
           onClick={step < 3 ? onNext : () => onExit("complete")}
           className="player-onboarding__primary"
@@ -239,7 +256,7 @@ export function PlayerOnboardingTour({
       <span className="sr-only" role="status" aria-live="polite">
         {reducedMotion
           ? `Step ${step} of 3, ${copy.title}`
-          : `Step ${sequencePosition} of 6, ${step === 1 ? browseSequenceFrame.label : step === 2 ? "Speed" : "Music"}`}
+          : `Step ${sequencePosition} of 7, ${step === 1 ? browseSequenceFrame.label : centerPrompt}`}
       </span>
     </div>
   );

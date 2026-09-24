@@ -41,15 +41,16 @@ ineligible -- Help --> paused
   -> instruction-1 -> instruction-2 -> instruction-3 -> completed
 ```
 
-Pressing Help pauses the player and starts a six-frame sequence. Each frame is
+Pressing Help pauses the player and starts a seven-frame sequence. Each frame is
 held for exactly 700ms:
 
 1. `Next` receives a gloss-and-press animation and advances one photograph.
 2. `Previous` receives the same animation and returns one photograph.
 3. `Next` animates and advances once more.
 4. `Previous` animates and returns once more.
-5. The real speed control is highlighted with the label `Speed`.
-6. The real music control is highlighted with the label `Music`.
+5. The real speed control is highlighted with a centered `Adjust Speed` box.
+6. The real music control is highlighted with a centered `Add Music` box.
+7. A centered `Tap to play` box presents the final Play action.
 
 After the final frame, the tutorial completes and photograph playback starts.
 SoundCloud remains optional and is never loaded or played by the sequence.
@@ -78,24 +79,24 @@ portrait layouts retain 44-pixel control targets. Portrait places permanent
 Help at the top left and Close at the top right. The photograph number counter
 is not displayed in any player layout.
 
-There is no visible instruction card. The highlighted real control and its
-short animated callout carry the instruction. A top-center, two-part rounded
-action bar keeps `Skip` on black and the next action on blue without covering
-the teaching graphic. Screen readers still receive the step title, explanatory
-copy, and exact step number.
+There is no large instruction card. The three control prompts use compact,
+rounded boxes centered in the viewport: `Adjust Speed`, `Add Music`, and
+`Tap to play`. A top-center, two-part rounded action bar keeps `Skip` on black
+and the next action on blue without covering the teaching graphic. Screen
+readers still receive the step title, explanatory copy, and exact step number.
 
 Mobile supporting graphics explain the action at the point of use. Step 1
 plays `Next, Previous, Next, Previous` with one real photograph transition per
 700ms frame. The active cue receives a moving gloss, press, and ripple while the
 other cue recedes. Steps 2 and 3 apply a restrained pulse to the live control
-and use the larger labels `Speed` and `Music`. Only one cue asks for attention
+while the centered rounded box names the action. Only one cue asks for attention
 at a time. In mobile landscape, the Previous and Next cues
 are anchored in the lower corners, clear of the top-center action bar.
 
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and
 Shift+Tab cycle through the target and tutorial controls, Escape exits, each of
-the six frames is announced with its numeric position, and focus returns to the player surface
+the seven frames is announced with its numeric position, and focus returns to the player surface
 or Help control. Text labels prevent color from carrying meaning alone.
 Reduced-motion CSS removes every tutorial highlight, ripple, pulse, and
 transition while retaining the same labels and static outlines.
