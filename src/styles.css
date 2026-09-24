@@ -999,7 +999,6 @@ img {
 
 .player-onboarding__center-prompt {
   position: fixed;
-  top: 50%;
   left: 50%;
   display: grid;
   min-width: min(240px, calc(100vw - 48px));
@@ -1017,23 +1016,43 @@ img {
   line-height: 1.15;
   text-align: center;
   white-space: nowrap;
-  transform: translate(-50%, -50%);
+  transform: var(--onboarding-prompt-transform, translateX(-50%));
   backdrop-filter: blur(18px);
   pointer-events: none;
   animation: onboarding-center-prompt-enter 180ms ease-out both;
 }
 
+.player-onboarding__center-prompt--browse {
+  --onboarding-prompt-transform: translate(-50%, -50%);
+  top: calc(var(--onboarding-image-top, 50vh) + var(--onboarding-image-height, 0px) / 2);
+  left: calc(var(--onboarding-image-left, 50vw) + var(--onboarding-image-width, 0px) / 2);
+  min-width: min(112px, calc(100vw - 264px));
+  min-height: 48px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: clamp(0.92rem, 3.8vw, 1.08rem);
+}
+
+.player-onboarding__center-prompt--controls {
+  --onboarding-prompt-transform: translateX(-50%);
+  top: auto;
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 68px);
+}
+
 @keyframes onboarding-center-prompt-enter {
-  from { opacity: 0; transform: translate(-50%, -46%) scale(0.97); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from { opacity: 0; transform: var(--onboarding-prompt-transform, translateX(-50%)) scale(0.97); }
+  to { opacity: 1; transform: var(--onboarding-prompt-transform, translateX(-50%)) scale(1); }
 }
 
 .player-onboarding__frame-zones {
   position: fixed;
-  inset: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  top: var(--onboarding-image-top, 0);
+  left: var(--onboarding-image-left, 0);
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
+  width: var(--onboarding-image-width, 100vw);
+  height: var(--onboarding-image-height, 100vh);
   pointer-events: none;
 }
 
@@ -1063,13 +1082,13 @@ img {
 
 .player-onboarding__gesture-cue {
   position: absolute;
-  top: 62%;
+  top: 50%;
   display: flex;
-  gap: 10px;
+  gap: 6px;
   align-items: center;
   min-height: 52px;
   overflow: hidden;
-  padding: 6px;
+  padding: 4px;
   border: 1px solid rgba(148, 178, 255, 0.9);
   border-radius: 999px;
   color: #f4f1ea;
@@ -1103,7 +1122,7 @@ img {
 .player-onboarding__gesture-copy {
   display: grid;
   gap: 2px;
-  padding-right: 8px;
+  padding-right: 4px;
   line-height: 1.05;
   white-space: nowrap;
 }
@@ -1120,19 +1139,19 @@ img {
 }
 
 .player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
-  left: 12px;
+  left: 4px;
   animation: onboarding-cue-left 4.8s ease-in-out infinite;
 }
 
 .player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
-  right: 12px;
+  right: 4px;
   flex-direction: row-reverse;
   animation: onboarding-cue-right 4.8s 2.4s ease-in-out infinite;
 }
 
 .player-onboarding__frame-zone--forward .player-onboarding__gesture-copy {
   padding-right: 0;
-  padding-left: 8px;
+  padding-left: 4px;
   text-align: right;
 }
 
@@ -1616,19 +1635,28 @@ img {
   }
 
   .player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
-    top: auto;
-    bottom: max(10px, env(safe-area-inset-bottom));
+    top: 50%;
+    bottom: auto;
     left: calc(max(2px, env(safe-area-inset-left)) + 56px);
-    transform: none;
-    animation-name: onboarding-cue-left-landscape;
+    transform: translateY(-50%);
+    animation-name: onboarding-cue-left;
   }
 
   .player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
-    top: auto;
+    top: 50%;
     right: calc(max(2px, env(safe-area-inset-right)) + 56px);
-    bottom: max(10px, env(safe-area-inset-bottom));
-    transform: none;
-    animation-name: onboarding-cue-right-landscape;
+    bottom: auto;
+    transform: translateY(-50%);
+    animation-name: onboarding-cue-right;
+  }
+
+  .player-onboarding__center-prompt--controls {
+    --onboarding-prompt-transform: none;
+    top: auto;
+    right: max(2px, env(safe-area-inset-right));
+    bottom: calc(max(2px, env(safe-area-inset-bottom)) + 110px);
+    left: auto;
+    min-width: min(210px, calc(100vw - 128px));
   }
 
   .player-counter {

@@ -1709,6 +1709,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           step={onboardingStep}
           desktopInstructions={desktopInstructions}
           reducedMotion={reducedMotion}
+          imageRef={currentImageRef}
           targetRef={onboardingTargetRef}
           descriptionId={onboardingDescriptionId}
           onDemonstrate={navigateManually}

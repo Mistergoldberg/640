@@ -30,15 +30,59 @@ async function expectActionBarInsideViewport(page: Page) {
   })).toBe(true);
 }
 
-async function expectCenteredPrompt(page: Page, copy: string) {
+async function expectBrowseTeachingOverImage(page: Page) {
+  const prompt = page.locator(".player-onboarding__center-prompt");
+  await expect(prompt).toHaveText("Tap to play");
+  const geometry = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    const image = rect(".player-image");
+    const back = rect(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue");
+    const prompt = rect(".player-onboarding__center-prompt");
+    const forward = rect(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue");
+    const inside = (inner?: DOMRect, outer?: DOMRect) => Boolean(inner && outer
+      && inner.left >= outer.left - 1 && inner.right <= outer.right + 1
+      && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1);
+    const centerY = (box?: DOMRect) => box ? box.top + box.height / 2 : 0;
+    return {
+      allInsideImage: inside(back, image) && inside(prompt, image) && inside(forward, image),
+      ordered: Boolean(back && prompt && forward && back.right <= prompt.left + 1 && prompt.right <= forward.left + 1),
+      verticalOffset: Math.max(
+        Math.abs(centerY(back) - centerY(prompt)),
+        Math.abs(centerY(forward) - centerY(prompt))
+      )
+    };
+  });
+  expect(geometry.allInsideImage).toBe(true);
+  expect(geometry.ordered).toBe(true);
+  expect(geometry.verticalOffset).toBeLessThan(1);
+}
+
+async function expectControlsPrompt(page: Page, copy: string, control: "speed" | "music") {
   const prompt = page.locator(".player-onboarding__center-prompt");
   await expect(prompt).toHaveText(copy);
-  await expect.poll(() => prompt.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return Math.abs(rect.left + rect.width / 2 - window.innerWidth / 2) < 1
-      && Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2) < 1
-      && getComputedStyle(element).borderRadius === "16px";
-  }), { timeout: 500 }).toBe(true);
+  const geometry = await page.evaluate((control) => {
+    const prompt = document.querySelector<HTMLElement>(".player-onboarding__center-prompt")?.getBoundingClientRect();
+    const controls = document.querySelector<HTMLElement>(".player-controls")?.getBoundingClientRect();
+    const target = document.querySelector<HTMLElement>(`[data-player-control='${control}']`)?.getBoundingClientRect();
+    const music = document.querySelector<HTMLElement>("[data-player-control='music']")?.getBoundingClientRect();
+    const speed = document.querySelector<HTMLElement>("[data-player-control='speed']")?.getBoundingClientRect();
+    const landscapeRail = document.querySelector("[data-player-layout='mobile-landscape-rail']") !== null;
+    return {
+      landscapeRail,
+      standardPlacement: Boolean(prompt && controls
+        && Math.abs(prompt.left + prompt.width / 2 - (controls.left + controls.width / 2)) < 1
+        && prompt.bottom <= controls.top - 8),
+      landscapePlacement: Boolean(prompt && target && music && speed
+        && Math.abs(prompt.right - target.right) < 1
+        && prompt.bottom <= Math.min(music.top, speed.top) - 8),
+      insideViewport: Boolean(prompt && prompt.top >= 0 && prompt.left >= 0
+        && prompt.right <= window.innerWidth && prompt.bottom <= window.innerHeight),
+      radius: prompt ? getComputedStyle(document.querySelector<HTMLElement>(".player-onboarding__center-prompt")!).borderRadius : ""
+    };
+  }, control);
+  expect(geometry.insideViewport).toBe(true);
+  expect(geometry.landscapeRail ? geometry.landscapePlacement : geometry.standardPlacement).toBe(true);
+  expect(geometry.radius).toBe("16px");
 }
 
 async function expectGestureCuesClearOfActionBar(page: Page) {
@@ -66,8 +110,8 @@ async function expectGestureCuesClearOfActionBar(page: Page) {
       viewportHeight: window.innerHeight
     };
   });
-  expect(geometry.backWidth).toBeGreaterThan(130);
-  expect(geometry.forwardWidth).toBeGreaterThan(130);
+  expect(geometry.backWidth).toBeGreaterThan(120);
+  expect(geometry.forwardWidth).toBeGreaterThan(120);
   expect(geometry.actionBarHeight).toBeLessThan(60);
   expect(geometry.backTop).toBeGreaterThan(geometry.actionBarBottom + 12);
   expect(geometry.forwardTop).toBeGreaterThan(geometry.actionBarBottom + 12);
@@ -111,7 +155,8 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
-  await expect(page.getByRole("status")).toHaveText("Step 1 of 7, Next");
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next, Tap to play");
+  await expectBrowseTeachingOverImage(page);
   await expect(page.getByRole("button", { name: "Close tutorial" })).toHaveCount(0);
   await expect(page.getByText("Quick tour", { exact: true })).toHaveCount(0);
   await expect(page.locator(".player-onboarding__progress")).toHaveCount(0);
@@ -131,20 +176,15 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 1_200 });
   await expect(page.locator("[data-player-control='speed']")).toBeFocused();
-  await expectCenteredPrompt(page, "Adjust Speed");
-  await expect(page.getByRole("status")).toHaveText("Step 5 of 7, Adjust Speed");
+  await expectControlsPrompt(page, "Adjust Speed", "speed");
+  await expect(page.getByRole("status")).toHaveText("Step 5 of 6, Adjust Speed");
 
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
   await expect(page.locator("[data-player-control='music']")).toBeFocused();
-  await expectCenteredPrompt(page, "Add Music");
-  await expect(page.getByRole("status")).toHaveText("Step 6 of 7, Add Music");
+  await expectControlsPrompt(page, "Add Music", "music");
+  await expect(page.getByRole("status")).toHaveText("Step 6 of 6, Add Music");
   expect(soundCloudRequests).toEqual([]);
 
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "play", { timeout: 1_200 });
-  await expectCenteredPrompt(page, "Tap to play");
-  await expect(page.getByRole("status")).toHaveText("Step 7 of 7, Tap to play");
-  await expect(page.getByRole("button", { name: "Play slideshow", exact: true })).toBeFocused();
-  await expect(page.locator(".player-onboarding__spotlight")).toHaveCount(0);
   await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0, { timeout: 1_200 });
   await expect(playback).toHaveAttribute("aria-label", "Pause");
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
@@ -191,6 +231,7 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.locator(".player-onboarding__action-bar")).toBeVisible();
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "browse");
+  await expectBrowseTeachingOverImage(page);
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "none");
   await page.getByRole("button", { name: "Skip" }).click();
   await expect(page.locator("[data-player-control='playback']")).toHaveAttribute("aria-label", "Play");
@@ -199,11 +240,11 @@ test("reduced motion uses a static first frame and only explicit Play starts mot
 
   await page.getByRole("button", { name: "Player help" }).click();
   await page.getByRole("button", { name: "Speed", exact: true }).click();
-  await expectCenteredPrompt(page, "Adjust Speed");
+  await expectControlsPrompt(page, "Adjust Speed", "speed");
   await page.waitForTimeout(800);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed");
   await page.getByRole("button", { name: "Music", exact: true }).click();
-  await expectCenteredPrompt(page, "Add Music");
+  await expectControlsPrompt(page, "Add Music", "music");
   await page.waitForTimeout(800);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music");
   await page.getByRole("button", { name: "Play slideshow", exact: true }).click();
@@ -225,24 +266,22 @@ test("compact action bar and enlarged callouts stay clear in mobile landscape", 
   await waitForPaintedPlayer(page);
   await page.getByRole("button", { name: "Player help" }).click();
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
-  await expect(page.getByRole("status")).toHaveText("Step 1 of 7, Next");
+  await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next, Tap to play");
   await expect(page.locator(".player-onboarding__gesture-copy")).toHaveCount(2);
   await expect(page.locator(".player-onboarding__frame-zone--forward .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "onboarding-demo-cue");
   await expect(page.locator(".player-onboarding__gesture-copy strong").first()).toHaveCSS("font-size", "14.4px");
   await expectActionBarInsideViewport(page);
   await expectGestureCuesClearOfActionBar(page);
+  await expectBrowseTeachingOverImage(page);
   await page.addStyleTag({ content: ".player-onboarding__action-bar { top: 59px !important; }" });
   await expectGestureCuesClearOfActionBar(page);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "previous-1", { timeout: 1_200 });
   await expect(page.locator(".player-onboarding__frame-zone--back .player-onboarding__gesture-cue")).toHaveCSS("animation-name", "onboarding-demo-cue");
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 3_000 });
-  await expectCenteredPrompt(page, "Adjust Speed");
+  await expectControlsPrompt(page, "Adjust Speed", "speed");
   await expectActionBarInsideViewport(page);
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_200 });
-  await expectCenteredPrompt(page, "Add Music");
-  await expectActionBarInsideViewport(page);
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "play", { timeout: 1_200 });
-  await expectCenteredPrompt(page, "Tap to play");
+  await expectControlsPrompt(page, "Add Music", "music");
   await expectActionBarInsideViewport(page);
   await context.close();
 });
@@ -262,6 +301,7 @@ test("portrait chrome and playback controls recover after Help exits across rota
   const playback = page.locator("[data-player-control='playback']");
   await page.getByRole("button", { name: "Player help" }).click();
   await expectGestureCuesClearOfActionBar(page);
+  await expectBrowseTeachingOverImage(page);
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-orientation", "landscape");
   await page.setViewportSize({ width: 390, height: 844 });
