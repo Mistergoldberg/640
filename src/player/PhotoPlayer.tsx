@@ -157,6 +157,13 @@ function hasFinePointer() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
 }
 
+function usesDesktopInstructions() {
+  if (typeof window === "undefined") return false;
+  return navigator.maxTouchPoints === 0
+    && !window.matchMedia("(pointer: coarse)").matches
+    && !window.matchMedia("(any-pointer: coarse)").matches;
+}
+
 function prefersReducedMotion() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
@@ -189,7 +196,7 @@ function visibleRect(element: Element) {
 
 export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard" }: PhotoPlayerProps) {
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
-  const [desktopInstructions, setDesktopInstructions] = useState(hasFinePointer);
+  const [desktopInstructions, setDesktopInstructions] = useState(usesDesktopInstructions);
   const [playerState, dispatch] = useReducer(
     playerReducer,
     { initialIndex, total: photos.length, scope, launchMode, reducedMotion },
@@ -454,6 +461,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   useEffect(() => {
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     const pointerQuery = window.matchMedia("(pointer: fine)");
+    const coarsePointerQuery = window.matchMedia("(pointer: coarse)");
+    const anyCoarsePointerQuery = window.matchMedia("(any-pointer: coarse)");
     const updateMotion = () => {
       setReducedMotion(motionQuery.matches);
       sendOnboarding({ type: "REDUCED_MOTION_CHANGED", reducedMotion: motionQuery.matches });
@@ -463,12 +472,17 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         dispatch({ type: "PAUSE" });
       }
     };
-    const updatePointer = () => setDesktopInstructions(pointerQuery.matches);
+    const updatePointer = () => setDesktopInstructions(usesDesktopInstructions());
     motionQuery.addEventListener("change", updateMotion);
     pointerQuery.addEventListener("change", updatePointer);
+    coarsePointerQuery.addEventListener("change", updatePointer);
+    anyCoarsePointerQuery.addEventListener("change", updatePointer);
+    updatePointer();
     return () => {
       motionQuery.removeEventListener("change", updateMotion);
       pointerQuery.removeEventListener("change", updatePointer);
+      coarsePointerQuery.removeEventListener("change", updatePointer);
+      anyCoarsePointerQuery.removeEventListener("change", updatePointer);
     };
   }, [clearInitialDelayTimer, clearResumeTimer, launchMode, sendOnboarding]);
 
