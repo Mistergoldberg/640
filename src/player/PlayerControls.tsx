@@ -18,7 +18,6 @@ interface PlayerControlsProps {
   musicControlRef: MutableRefObject<HTMLButtonElement | null>;
   speedDescriptionId?: string;
   musicDescriptionId?: string;
-  onTrustedInteraction: () => void;
   onPrevious: () => void;
   onTogglePlayback: () => void;
   onNext: () => void;
@@ -47,7 +46,6 @@ export function PlayerControls({
   musicControlRef,
   speedDescriptionId,
   musicDescriptionId,
-  onTrustedInteraction,
   onPrevious,
   onTogglePlayback,
   onNext,
@@ -147,7 +145,6 @@ export function PlayerControls({
   }, [onCloseSpeedMenu, speedMenuOpen, tutorialStep]);
 
   const runAction = (action: () => void) => {
-    onTrustedInteraction();
     onCloseSpeedMenu();
     onReveal();
     action();
@@ -161,7 +158,6 @@ export function PlayerControls({
       aria-label="Player controls"
       onPointerDown={(event) => {
         event.stopPropagation();
-        onTrustedInteraction();
         onReveal();
       }}
       onPointerUp={(event) => event.stopPropagation()}

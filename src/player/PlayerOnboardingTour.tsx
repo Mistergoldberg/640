@@ -198,8 +198,7 @@ export function PlayerOnboardingTour({
 
   return (
     <div
-      className={`player-onboarding player-onboarding--step-${step} player-onboarding--${desktopInstructions ? "desktop" : "mobile"}${step === 1 && !reducedMotion ? " is-auto-sequencing" : ""}`}
-      data-onboarding-step={step}
+      className={`player-onboarding${desktopInstructions ? "" : " player-onboarding--mobile"}${step === 1 && !reducedMotion ? " is-auto-sequencing" : ""}`}
       data-onboarding-frame={sequenceFrame}
     >
       {step === 1 ? (

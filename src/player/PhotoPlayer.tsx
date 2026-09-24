@@ -19,14 +19,10 @@ import { usePlaybackClock } from "./usePlaybackClock";
 import { settledRange, usableRange } from "./homepageAutoplay";
 import { PlayerOnboardingTour } from "./PlayerOnboardingTour";
 import {
-  ONBOARDING_FALLBACK_MS,
-  ONBOARDING_STALL_MS,
-  ONBOARDING_WAITING_TIMEOUT_MS,
   createPlayerOnboardingState,
   isPlayerOnboardingInstructionPhase,
   playerOnboardingReducer,
   playerOnboardingStep,
-  readPlayerOnboardingPreference,
   writePlayerOnboardingPreference,
   type PlayerOnboardingEvent,
   type PlayerOnboardingExitReason,
@@ -210,12 +206,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const onboardingDescriptionId = useId();
   const initialOnboardingStateRef = useRef<PlayerOnboardingState | null>(null);
   if (!initialOnboardingStateRef.current) {
-    initialOnboardingStateRef.current = createPlayerOnboardingState({
-      // The permanent Help control is the only way to open onboarding.
-      automaticEntry: false,
-      preference: readPlayerOnboardingPreference(playerOnboardingStorage()),
-      reducedMotion
-    });
+    initialOnboardingStateRef.current = createPlayerOnboardingState(reducedMotion);
   }
   const [onboardingState, setOnboardingState] = useState(initialOnboardingStateRef.current);
   const onboardingStateRef = useRef(onboardingState);
@@ -249,9 +240,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const speedControlRef = useRef<HTMLButtonElement | null>(null);
   const musicControlRef = useRef<HTMLButtonElement | null>(null);
   const helpControlRef = useRef<HTMLButtonElement | null>(null);
+  const focusRestoreFrameRef = useRef<number | null>(null);
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
-  const demonstrationClockRef = useRef({ elapsedMs: 0, lastAt: 0 });
-  const presentationFrameRef = useRef<number | null>(null);
   const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
   const resetKeyRef = useRef(resetKey);
 
@@ -308,11 +298,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const close = useCallback(() => {
-    const onboardingPhase = onboardingStateRef.current.phase;
-    if (onboardingPhase === "waiting-for-player" || onboardingPhase === "demonstrating") {
-      writePlayerOnboardingPreference(playerOnboardingStorage());
-      sendOnboarding({ type: "TRUSTED_INTERACTION" });
-    }
     frameInteractionRef.current?.destroy();
     framePointerIdRef.current = null;
     touchInteractionRef.current?.destroy();
@@ -326,7 +311,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     }
     dispatch({ type: "CLOSE" });
     onClose(photos[currentIndexRef.current]?.id || photos[initialIndex]?.id || "");
-  }, [clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos, sendOnboarding]);
+  }, [clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos]);
 
   const markBufferedImageReady = useCallback((index: number) => {
     const state = stateRef.current;
@@ -446,19 +431,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     dispatch({ type: "PLAY" });
   }, [clearInitialDelayTimer, clearResumeTimer, revealControls, warmBuffer]);
 
-  const completeOnTrustedInteraction = useCallback(() => {
-    const phase = onboardingStateRef.current.phase;
-    if (phase !== "waiting-for-player" && phase !== "demonstrating") return false;
-    writePlayerOnboardingPreference(playerOnboardingStorage());
-    sendOnboarding({ type: "TRUSTED_INTERACTION" });
-    return true;
-  }, [sendOnboarding]);
-
   const openOnboardingHelp = useCallback(() => {
-    const phase = onboardingStateRef.current.phase;
-    if (phase === "waiting-for-player" || phase === "demonstrating") {
-      writePlayerOnboardingPreference(playerOnboardingStorage());
-    }
     const resumeAfterExit = shouldResumeAfterHelp(stateRef.current.status);
     sendOnboarding({ type: "OPEN_HELP", resumeAfterExit });
     pauseExplicitly();
@@ -471,30 +444,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     if (next === previous || next.phase !== "completed") return;
     if (next.resumeAfterExit) playExplicitly();
     else pauseExplicitly();
-    const focusTarget = previous.source === "manual" ? helpControlRef.current : surfaceRef.current;
-    window.requestAnimationFrame(() => focusTarget?.focus({ preventScroll: true }));
+    if (focusRestoreFrameRef.current !== null) window.cancelAnimationFrame(focusRestoreFrameRef.current);
+    focusRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      focusRestoreFrameRef.current = null;
+      helpControlRef.current?.focus({ preventScroll: true });
+    });
   }, [pauseExplicitly, playExplicitly, sendOnboarding]);
-
-  const readDemonstrationForegroundElapsed = useCallback(() => {
-    const now = performance.now();
-    const clock = demonstrationClockRef.current;
-    if (clock.lastAt === 0) {
-      clock.lastAt = now;
-      return clock.elapsedMs;
-    }
-    if (!document.hidden) clock.elapsedMs += now - clock.lastAt;
-    clock.lastAt = now;
-    return clock.elapsedMs;
-  }, []);
-
-  const recordPresentedFrame = useCallback((photoId: string) => {
-    const current = onboardingStateRef.current;
-    const elapsed = current.phase === "demonstrating" ? readDemonstrationForegroundElapsed() : 0;
-    const next = sendOnboarding({ type: "FRAME_PRESENTED", photoId, foregroundElapsedMs: elapsed });
-    if (current.phase !== "demonstrating" && next.phase === "demonstrating") {
-      demonstrationClockRef.current = { elapsedMs: 0, lastAt: performance.now() };
-    }
-  }, [readDemonstrationForegroundElapsed, sendOnboarding]);
 
   useEffect(() => {
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -535,30 +490,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     }
   }, [onboardingActive, onboardingStep]);
 
-  useEffect(() => {
-    if (onboardingState.phase !== "waiting-for-player") return;
-    const timer = window.setTimeout(() => sendOnboarding({ type: "WAITING_TIMED_OUT" }), ONBOARDING_WAITING_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [onboardingState.phase, sendOnboarding]);
-
-  useEffect(() => {
-    if (onboardingState.phase !== "demonstrating") return;
-    const interval = window.setInterval(() => {
-      const elapsed = readDemonstrationForegroundElapsed();
-      const current = onboardingStateRef.current;
-      if (current.phase !== "demonstrating") return;
-      if (elapsed >= ONBOARDING_STALL_MS && current.successfulTransitions < 2) {
-        sendOnboarding({ type: "DEMONSTRATION_STALLED" });
-      } else if (elapsed >= ONBOARDING_FALLBACK_MS && current.successfulTransitions >= 2) {
-        sendOnboarding({ type: "DEMONSTRATION_FALLBACK" });
-      }
-    }, 100);
-    return () => window.clearInterval(interval);
-  }, [onboardingState.phase, readDemonstrationForegroundElapsed, sendOnboarding]);
-
   const navigateManually = useCallback(
     (direction: -1 | 1) => {
-      completeOnTrustedInteraction();
       revealControls();
 
       const fromIndex = currentIndexRef.current;
@@ -572,16 +505,15 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       dispatch({ type: direction > 0 ? "MANUAL_NEXT" : "MANUAL_PREVIOUS" });
       warmBuffer(nextIndex);
     },
-    [clearInitialDelayTimer, clearResumeTimer, completeOnTrustedInteraction, photos.length, revealControls, warmBuffer]
+    [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
   );
 
   const pauseForFrameInteraction = useCallback(() => {
-    completeOnTrustedInteraction();
     revealControls();
     clearInitialDelayTimer();
     clearResumeTimer();
     dispatch({ type: "FRAME_GESTURE_START" });
-  }, [clearInitialDelayTimer, clearResumeTimer, completeOnTrustedInteraction, revealControls]);
+  }, [clearInitialDelayTimer, clearResumeTimer, revealControls]);
 
   const finishFrameInteraction = useCallback(() => {
     clearResumeTimer();
@@ -700,22 +632,19 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const toggleSpeedMenu = useCallback(() => {
-    completeOnTrustedInteraction();
     controlDispatch({ type: "TOGGLE_SPEED_MENU" });
-  }, [completeOnTrustedInteraction]);
+  }, []);
 
   const selectSpeed = useCallback(
     (delayMs: number) => {
-      completeOnTrustedInteraction();
       dispatch({ type: "CHANGE_SPEED", delayMs });
       controlDispatch({ type: "SELECT_SPEED" });
       revealControls();
     },
-    [completeOnTrustedInteraction, revealControls]
+    [revealControls]
   );
 
   const toggleScreenMode = useCallback(() => {
-    completeOnTrustedInteraction();
     revealControls();
     closeSpeedMenu();
 
@@ -739,19 +668,17 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         void exitDocumentFullscreen();
       }
     });
-  }, [closeSpeedMenu, completeOnTrustedInteraction, controlState, revealControls]);
+  }, [closeSpeedMenu, controlState, revealControls]);
 
   const toggleFromPrimaryControl = useCallback(() => {
-    completeOnTrustedInteraction();
     if (canPause(stateRef.current.status)) {
       pauseExplicitly();
     } else {
       playExplicitly();
     }
-  }, [completeOnTrustedInteraction, pauseExplicitly, playExplicitly]);
+  }, [pauseExplicitly, playExplicitly]);
 
   const toggleFromPhotoSurface = useCallback(() => {
-    completeOnTrustedInteraction();
     revealControls();
     if (stateRef.current.status === "loading") {
       return;
@@ -768,10 +695,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     }
 
     playExplicitly();
-  }, [completeOnTrustedInteraction, pauseExplicitly, playExplicitly, revealControls]);
+  }, [pauseExplicitly, playExplicitly, revealControls]);
 
   const toggleMusic = useCallback(() => {
-    completeOnTrustedInteraction();
     revealControls();
     const nextValue = !shouldPlayMusic;
     if (nextValue) {
@@ -784,7 +710,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     } else {
       soundCloudWidgetRef.current?.pause();
     }
-  }, [completeOnTrustedInteraction, revealControls, shouldPlayMusic]);
+  }, [revealControls, shouldPlayMusic]);
 
   const showShareStatus = useCallback((nextStatus: ShareStatus) => {
     setShareStatus(nextStatus);
@@ -802,7 +728,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const shareCurrentPhoto = useCallback(async () => {
-    completeOnTrustedInteraction();
     revealControls();
 
     const photo = photos[currentIndexRef.current];
@@ -837,7 +762,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         showShareStatus("failed");
       }
     }
-  }, [completeOnTrustedInteraction, photos, revealControls, scope, showShareStatus]);
+  }, [photos, revealControls, scope, showShareStatus]);
 
   const attemptAdvance = useCallback(() => {
     const state = stateRef.current;
@@ -922,7 +847,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     return true;
   }, [photos.length, preloadPhoto]);
 
-  const markVisibleImageReady = useCallback((photoId: string) => {
+  const markVisibleImageReady = useCallback(() => {
     const image = currentImageRef.current;
     if (!image || !image.complete || image.naturalWidth === 0) {
       return;
@@ -931,15 +856,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     const markDecoded = () => {
       if (image.isConnected && currentImageRef.current === image && image.src === source) {
         dispatch({ type: "READY" });
-        if (presentationFrameRef.current !== null) window.cancelAnimationFrame(presentationFrameRef.current);
-        presentationFrameRef.current = window.requestAnimationFrame(() => {
-          presentationFrameRef.current = window.requestAnimationFrame(() => {
-            presentationFrameRef.current = null;
-            if (image.isConnected && currentImageRef.current === image && image.src === source) {
-              recordPresentedFrame(photoId);
-            }
-          });
-        });
       }
     };
     if (typeof image.decode === "function") {
@@ -947,7 +863,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     } else {
       markDecoded();
     }
-  }, [recordPresentedFrame]);
+  }, []);
 
   useEffect(() => {
     const isInitialMount = resetKeyRef.current === resetKey;
@@ -963,6 +879,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
+      if (focusRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusRestoreFrameRef.current);
+        focusRestoreFrameRef.current = null;
+      }
       controlDispatch({ type: "RESET", openExpanded: openInFullscreen });
       dispatch({
         type: "RESET",
@@ -1045,7 +965,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, [cacheRevision, launchMode, photos.length, preloadPhoto]);
 
   useEffect(() => {
-    if (currentPhoto) markVisibleImageReady(currentPhoto.id);
+    if (currentPhoto) markVisibleImageReady();
   }, [currentPhoto?.id, markVisibleImageReady]);
 
   useEffect(() => {
@@ -1291,7 +1211,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         }
 
         event.preventDefault();
-        completeOnTrustedInteraction();
         if (canPause(stateRef.current.status)) {
           pauseExplicitly();
         } else {
@@ -1314,7 +1233,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [close, completeOnTrustedInteraction, navigateManually, pauseExplicitly, playExplicitly, revealControls]);
+  }, [close, navigateManually, pauseExplicitly, playExplicitly, revealControls]);
 
   useEffect(() => {
     revealControls();
@@ -1327,9 +1246,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
-      if (presentationFrameRef.current !== null) {
-        window.cancelAnimationFrame(presentationFrameRef.current);
-        presentationFrameRef.current = null;
+      if (focusRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusRestoreFrameRef.current);
+        focusRestoreFrameRef.current = null;
       }
       if (rollingWarmupFrameRef.current !== null) {
         window.cancelAnimationFrame(rollingWarmupFrameRef.current);
@@ -1624,7 +1543,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             style={playerImageStyle}
             decoding="async"
             draggable={false}
-            onLoad={() => markVisibleImageReady(currentPhoto.id)}
+            onLoad={markVisibleImageReady}
             onError={() => {
               if (stateRef.current.launchMode === "homepage-autoplay" && stateRef.current.warmupPhase !== "inactive") {
                 return;
@@ -1656,7 +1575,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           musicControlRef={musicControlRef}
           speedDescriptionId={onboardingStep === 2 ? onboardingDescriptionId : undefined}
           musicDescriptionId={onboardingStep === 3 ? onboardingDescriptionId : undefined}
-          onTrustedInteraction={completeOnTrustedInteraction}
           onPrevious={() => navigateManually(-1)}
           onTogglePlayback={toggleFromPrimaryControl}
           onNext={() => navigateManually(1)}
