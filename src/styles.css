@@ -982,6 +982,12 @@ img {
   background: #08090b !important;
 }
 
+@media (max-width: 1200px) {
+  .player-onboarding__action-bar {
+    display: none;
+  }
+}
+
 .player-onboarding__spotlight {
   position: fixed;
   top: calc(var(--onboarding-target-top) - 6px);

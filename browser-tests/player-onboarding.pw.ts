@@ -262,30 +262,12 @@ test("mobile landscape auto-sequences without the desktop action bar", async ({ 
   await context.close();
 });
 
-test("touch-capable fine-pointer landscape still uses mobile onboarding", async ({ browser }) => {
+test("screenshot-sized fine-pointer landscape still uses mobile onboarding", async ({ browser }) => {
   const context = await (browser as Browser).newContext({
     viewport: { width: 1164, height: 871 },
     screen: { width: 1164, height: 871 },
-    isMobile: true,
-    hasTouch: true
-  });
-  await context.addInitScript(() => {
-    const originalMatchMedia = window.matchMedia.bind(window);
-    window.matchMedia = (query: string) => {
-      const result = originalMatchMedia(query);
-      const matches = query === "(pointer: fine)"
-        ? true
-        : query === "(pointer: coarse)" || query === "(any-pointer: coarse)"
-          ? false
-          : result.matches;
-      return new Proxy(result, {
-        get(target, property) {
-          if (property === "matches") return matches;
-          const value = Reflect.get(target, property, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        }
-      });
-    };
+    isMobile: false,
+    hasTouch: false
   });
   const page = await context.newPage();
   await page.goto("/");

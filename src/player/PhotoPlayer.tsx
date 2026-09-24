@@ -157,9 +157,13 @@ function hasFinePointer() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
 }
 
+const MOBILE_INSTRUCTION_MAX_WIDTH = 1200;
+
 function usesDesktopInstructions() {
   if (typeof window === "undefined") return false;
-  return navigator.maxTouchPoints === 0
+  const viewportWidth = window.visualViewport?.width || window.innerWidth;
+  return viewportWidth > MOBILE_INSTRUCTION_MAX_WIDTH
+    && navigator.maxTouchPoints === 0
     && !window.matchMedia("(pointer: coarse)").matches
     && !window.matchMedia("(any-pointer: coarse)").matches;
 }
@@ -477,12 +481,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     pointerQuery.addEventListener("change", updatePointer);
     coarsePointerQuery.addEventListener("change", updatePointer);
     anyCoarsePointerQuery.addEventListener("change", updatePointer);
+    window.addEventListener("resize", updatePointer);
+    window.addEventListener("orientationchange", updatePointer);
+    window.visualViewport?.addEventListener("resize", updatePointer);
     updatePointer();
     return () => {
       motionQuery.removeEventListener("change", updateMotion);
       pointerQuery.removeEventListener("change", updatePointer);
       coarsePointerQuery.removeEventListener("change", updatePointer);
       anyCoarsePointerQuery.removeEventListener("change", updatePointer);
+      window.removeEventListener("resize", updatePointer);
+      window.removeEventListener("orientationchange", updatePointer);
+      window.visualViewport?.removeEventListener("resize", updatePointer);
     };
   }, [clearInitialDelayTimer, clearResumeTimer, launchMode, sendOnboarding]);
 
