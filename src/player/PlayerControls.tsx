@@ -141,7 +141,7 @@ export function PlayerControls({
   }, [onCloseSpeedMenu, speedMenuOpen]);
 
   useEffect(() => {
-    if (tutorialStep !== 2 && speedMenuOpen) onCloseSpeedMenu();
+    if (tutorialStep !== null && tutorialStep !== 2 && speedMenuOpen) onCloseSpeedMenu();
   }, [onCloseSpeedMenu, speedMenuOpen, tutorialStep]);
 
   const runAction = (action: () => void) => {
