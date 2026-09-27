@@ -674,6 +674,7 @@ img {
   max-height: 100%;
   object-fit: contain;
   object-position: center;
+  pointer-events: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   -webkit-touch-callout: none;

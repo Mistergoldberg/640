@@ -277,7 +277,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const resumeTimerRef = useRef<number | null>(null);
   const shareTimerRef = useRef<number | null>(null);
   const ignoreSyntheticClickUntilRef = useRef(0);
-  const activeTouchPointersRef = useRef(new Set<number>());
   const touchPointerIdRef = useRef<number | null>(null);
   const framePointerIdRef = useRef<number | null>(null);
   const frameInteractionRef = useRef<PlayerFrameNavigationController | null>(null);
@@ -352,7 +351,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     framePointerIdRef.current = null;
     touchInteractionRef.current?.destroy();
     touchPointerIdRef.current = null;
-    activeTouchPointersRef.current.clear();
     clearInitialDelayTimer();
     clearResumeTimer();
     fullscreenRequestTokenRef.current += 1;
@@ -641,7 +639,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     if (touchInteractionRef.current?.cancel(finishGesture)) {
       touchPointerIdRef.current = null;
     }
-    activeTouchPointersRef.current.clear();
   }, []);
 
   const cancelActiveFrameInteractions = useCallback(() => {
@@ -1170,17 +1167,94 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     };
     const preventNativeTouch = (event: TouchEvent) => {
       if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const touchByIdentifier = (touches: TouchList, identifier: number) => {
+      for (let index = 0; index < touches.length; index += 1) {
+        const touch = touches.item(index);
+        if (touch?.identifier === identifier) return touch;
+      }
+      return null;
+    };
+
+    const handleTouchStart = (event: TouchEvent) => {
+      preventNativeTouch(event);
+      suppressSyntheticClick();
+      revealControls();
+      closeSpeedMenu();
+
+      if (event.touches.length !== 1) {
+        cancelTouchFrameInteraction();
+        return;
+      }
+
+      const touch = event.touches.item(0);
+      if (!touch || pointHitsMobileLandscapeRail(touch.clientX)) {
+        cancelTouchFrameInteraction();
+        return;
+      }
+
+      touchPointerIdRef.current = touch.identifier;
+      const rect = surface.getBoundingClientRect();
+      touchInteractionRef.current?.start({
+        pointerId: touch.identifier,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        direction: directionFromClientX(touch.clientX, rect),
+        activeTouchCount: event.touches.length,
+        isPrimary: true
+      });
+    };
+
+    const handleTouchMove = (event: TouchEvent) => {
+      preventNativeTouch(event);
+      const identifier = touchPointerIdRef.current;
+      if (identifier === null) return;
+      const touch = touchByIdentifier(event.touches, identifier);
+      if (!touch) {
+        cancelTouchFrameInteraction();
+        return;
+      }
+
+      touchInteractionRef.current?.move({
+        pointerId: identifier,
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      if (!touchInteractionRef.current?.hasActiveGesture()) {
+        touchPointerIdRef.current = null;
+      }
+    };
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      preventNativeTouch(event);
+      const identifier = touchPointerIdRef.current;
+      if (identifier === null) return;
+      suppressSyntheticClick();
+      touchPointerIdRef.current = null;
+      touchInteractionRef.current?.release({ pointerId: identifier });
+    };
+
+    const handleTouchCancel = (event: TouchEvent) => {
+      preventNativeTouch(event);
+      suppressSyntheticClick();
+      cancelTouchFrameInteraction();
     };
 
     surface.addEventListener("selectstart", preventSurfaceSelection);
-    surface.addEventListener("touchstart", preventNativeTouch, { passive: false });
-    surface.addEventListener("touchmove", preventNativeTouch, { passive: false });
+    surface.addEventListener("touchstart", handleTouchStart, { passive: false });
+    surface.addEventListener("touchmove", handleTouchMove, { passive: false });
+    surface.addEventListener("touchend", handleTouchEnd, { passive: false });
+    surface.addEventListener("touchcancel", handleTouchCancel, { passive: false });
     return () => {
       surface.removeEventListener("selectstart", preventSurfaceSelection);
-      surface.removeEventListener("touchstart", preventNativeTouch);
-      surface.removeEventListener("touchmove", preventNativeTouch);
+      surface.removeEventListener("touchstart", handleTouchStart);
+      surface.removeEventListener("touchmove", handleTouchMove);
+      surface.removeEventListener("touchend", handleTouchEnd);
+      surface.removeEventListener("touchcancel", handleTouchCancel);
     };
-  }, []);
+  }, [cancelTouchFrameInteraction, closeSpeedMenu, pointHitsMobileLandscapeRail, revealControls, suppressSyntheticClick]);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -1318,7 +1392,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       framePointerIdRef.current = null;
       touchInteractionRef.current?.destroy();
       touchPointerIdRef.current = null;
-      activeTouchPointersRef.current.clear();
       clearInitialDelayTimer();
       clearResumeTimer();
       clearImageCache();
@@ -1431,59 +1504,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               const rect = event.currentTarget.getBoundingClientRect();
               const direction = directionFromClientX(event.clientX, rect);
               frameInteractionRef.current?.startPointer(direction);
-              return;
-            }
-
-            if (event.pointerType === "touch") {
-              suppressSyntheticClick();
-              activeTouchPointersRef.current.add(event.pointerId);
-
-              if (!event.isPrimary || activeTouchPointersRef.current.size > 1) {
-                event.preventDefault();
-                event.stopPropagation();
-                touchInteractionRef.current?.cancel();
-                touchPointerIdRef.current = null;
-                return;
-              }
-
-              event.preventDefault();
-              event.stopPropagation();
-              closeSpeedMenu();
-              revealControls();
-
-              if (pointHitsMobileLandscapeRail(event.clientX)) {
-                return;
-              }
-
-              touchPointerIdRef.current = event.pointerId;
-              event.currentTarget.setPointerCapture(event.pointerId);
-              const rect = event.currentTarget.getBoundingClientRect();
-              touchInteractionRef.current?.start({
-                pointerId: event.pointerId,
-                clientX: event.clientX,
-                clientY: event.clientY,
-                direction: directionFromClientX(event.clientX, rect),
-                activeTouchCount: activeTouchPointersRef.current.size,
-                isPrimary: event.isPrimary
-              });
-            }
-          }}
-          onPointerMove={(event) => {
-            if (event.pointerType !== "touch" || touchPointerIdRef.current !== event.pointerId) {
-              return;
-            }
-
-            event.preventDefault();
-            event.stopPropagation();
-            touchInteractionRef.current?.move({
-              pointerId: event.pointerId,
-              clientX: event.clientX,
-              clientY: event.clientY
-            });
-
-            if (!touchInteractionRef.current?.hasActiveGesture()) {
-              touchPointerIdRef.current = null;
-              releasePointerCapture(event.currentTarget, event.pointerId);
             }
           }}
           onPointerUp={(event) => {
@@ -1494,42 +1514,13 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               framePointerIdRef.current = null;
               frameInteractionRef.current?.releasePointer();
               releasePointerCapture(event.currentTarget, event.pointerId);
-              return;
             }
-
-            if (event.pointerType !== "touch") {
-              return;
-            }
-
-            activeTouchPointersRef.current.delete(event.pointerId);
-            suppressSyntheticClick();
-
-            if (touchPointerIdRef.current !== event.pointerId) {
-              return;
-            }
-
-            event.preventDefault();
-            event.stopPropagation();
-            touchPointerIdRef.current = null;
-            touchInteractionRef.current?.release({ pointerId: event.pointerId });
-            releasePointerCapture(event.currentTarget, event.pointerId);
           }}
           onPointerCancel={(event) => {
             if (event.pointerType === "mouse" && framePointerIdRef.current === event.pointerId) {
               framePointerIdRef.current = null;
               suppressSyntheticClick();
               frameInteractionRef.current?.cancelPointer();
-              return;
-            }
-
-            if (event.pointerType === "touch") {
-              activeTouchPointersRef.current.delete(event.pointerId);
-              suppressSyntheticClick();
-              if (touchPointerIdRef.current === event.pointerId) {
-                touchPointerIdRef.current = null;
-                touchInteractionRef.current?.cancel();
-                releasePointerCapture(event.currentTarget, event.pointerId);
-              }
             }
           }}
           onLostPointerCapture={(event) => {
@@ -1537,13 +1528,6 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               framePointerIdRef.current = null;
               suppressSyntheticClick();
               frameInteractionRef.current?.cancelPointer();
-            }
-
-            if (event.pointerType === "touch" && touchPointerIdRef.current === event.pointerId) {
-              activeTouchPointersRef.current.delete(event.pointerId);
-              touchPointerIdRef.current = null;
-              suppressSyntheticClick();
-              touchInteractionRef.current?.cancel();
             }
           }}
           onWheel={(event) => {

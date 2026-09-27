@@ -136,7 +136,7 @@ function cdpTouchPoint(point: TouchPoint) {
 async function touchSequence(
   page: Page,
   start: TouchPoint,
-  options: { holdMs?: number; moves?: Array<{ point: TouchPoint; afterMs?: number }> } = {}
+  options: { holdMs?: number; moves?: Array<{ point: TouchPoint; afterMs?: number }>; pointerCancelAfterMs?: number } = {}
 ) {
   const session = await page.context().newCDPSession(page);
   try {
@@ -145,6 +145,15 @@ async function touchSequence(
       touchPoints: [cdpTouchPoint(start)],
       modifiers: 0
     });
+
+    if (options.pointerCancelAfterMs) {
+      await page.waitForTimeout(options.pointerCancelAfterMs);
+      await page.locator(".player-surface").dispatchEvent("pointercancel", {
+        pointerId: start.id ?? 1,
+        pointerType: "touch",
+        isPrimary: true
+      });
+    }
 
     for (const move of options.moves || []) {
       if (move.afterMs) await page.waitForTimeout(move.afterMs);
@@ -224,11 +233,13 @@ test("photo surface and player chrome prevent native selection without disabling
     return {
       nativeTouchPrevented: touch.defaultPrevented,
       touchAction: styles.touchAction,
-      tapHighlight: styles.getPropertyValue("-webkit-tap-highlight-color")
+      tapHighlight: styles.getPropertyValue("-webkit-tap-highlight-color"),
+      imagePointerEvents: getComputedStyle(surface.querySelector(".player-image")!).pointerEvents
     };
   });
   expect(surfaceProtection.nativeTouchPrevented).toBe(true);
   expect(surfaceProtection.touchAction).toBe("none");
+  expect(surfaceProtection.imagePointerEvents).toBe("none");
   expect(["rgba(0, 0, 0, 0)", "transparent"]).toContain(surfaceProtection.tapHighlight);
 
   const controlProtection = await page.locator(
@@ -429,8 +440,18 @@ test("mobile landscape keeps compact controls and excludes the right rail from f
   await touchSequence(page, { x: surface.x + surface.width * 0.18, y: surface.y + surface.height * 0.5 });
   await expectPlayerIndex(page, start.index);
 
+  await touchSequence(
+    page,
+    { x: surface.x + surface.width * 0.68, y: surface.y + surface.height * 0.5 },
+    { pointerCancelAfterMs: 100, holdMs: 425 }
+  );
+  const afterHold = await playerIndex(page);
+  expect(afterHold.index).toBeGreaterThanOrEqual(start.index + 2);
+  await page.waitForTimeout(260);
+  expect(await playerIndex(page)).toEqual(afterHold);
+
   await touchSequence(page, { x: speedBox!.x + speedBox!.width / 2, y: surface.y + surface.height * 0.5 });
-  await expectPlayerIndex(page, start.index);
+  await expectPlayerIndex(page, afterHold.index);
   await expect(page.locator('[data-player-control="playback"]')).toHaveAttribute("aria-label", "Play");
 
   expectHealthy(health);
