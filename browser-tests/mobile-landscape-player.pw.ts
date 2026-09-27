@@ -17,6 +17,12 @@ async function playerIndex(page: Page) {
   return { index: Number(match[1]), total: Number(match[2]) };
 }
 
+async function revealPlayerControls(page: Page) {
+  const overlay = page.getByLabel("Photo player");
+  await overlay.dispatchEvent("touchstart");
+  await expect(overlay).toHaveClass(/has-visible-controls/);
+}
+
 async function mobileContext(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({ viewport, screen: viewport, isMobile: true, hasTouch: true });
   await context.addInitScript(() => {
@@ -172,6 +178,89 @@ test("mobile landscape uses a full-height image and vertical control rail for bo
   }
 });
 
+test("mobile landscape chrome shares portrait auto-hide behavior and keeps Help opposite Close", async ({ browser }) => {
+  const viewport = { width: 844, height: 390 };
+  const context = await browser.newContext({
+    viewport,
+    screen: viewport,
+    isMobile: true,
+    hasTouch: true,
+    reducedMotion: "reduce"
+  });
+  const page = await context.newPage();
+  const health = monitorPage(page);
+  const image = await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
+  const overlay = page.getByLabel("Photo player");
+  const controls = page.getByRole("toolbar", { name: "Player controls" });
+  const close = page.getByRole("button", { name: "Close", exact: true });
+  const help = page.getByRole("button", { name: "Player help" });
+
+  const [closeBox, helpBox] = await Promise.all([close.boundingBox(), help.boundingBox()]);
+  expect(closeBox).not.toBeNull();
+  expect(helpBox).not.toBeNull();
+  expect(closeBox!.x).toBeGreaterThanOrEqual(0);
+  expect(closeBox!.y).toBeGreaterThanOrEqual(0);
+  expect(closeBox!.x + closeBox!.width).toBeLessThan(viewport.width / 2);
+  expect(helpBox!.x).toBeGreaterThan(viewport.width / 2);
+  expect(helpBox!.x + helpBox!.width).toBeLessThanOrEqual(viewport.width);
+  expect(helpBox!.y).toBeGreaterThanOrEqual(0);
+  expect(helpBox!.y + helpBox!.height).toBeLessThanOrEqual(viewport.height);
+  expect(Math.abs(helpBox!.y - closeBox!.y)).toBeLessThan(2);
+  await expect(help).toHaveCSS("pointer-events", "auto");
+
+  await expect(overlay).toHaveClass(/has-visible-controls/);
+  await page.waitForTimeout(2_000);
+  await expect(overlay).not.toHaveClass(/has-visible-controls/);
+  await expect(controls).toHaveCSS("opacity", "0");
+  await expect(close).toHaveCSS("pointer-events", "none");
+  await expect(help).toHaveCSS("pointer-events", "auto");
+
+  const beforeTap = await playerIndex(page);
+  const imageBox = await image.boundingBox();
+  expect(imageBox).not.toBeNull();
+  await page.touchscreen.tap(imageBox!.x + imageBox!.width * 0.75, imageBox!.y + imageBox!.height / 2);
+  await expect.poll(async () => (await playerIndex(page)).index).toBe(beforeTap.index + 1);
+  await expect(overlay).toHaveClass(/has-visible-controls/);
+  await expect(controls).toHaveCSS("opacity", "1");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(overlay).toHaveAttribute("data-player-orientation", "portrait");
+  await expect(controls).toHaveCSS("opacity", "1");
+  await page.setViewportSize(viewport);
+  await expect(overlay).toHaveAttribute("data-player-layout", "mobile-landscape-rail");
+  await page.waitForTimeout(2_000);
+  await expect(controls).toHaveCSS("opacity", "0");
+
+  const beforeHelp = await playerIndex(page);
+  await help.click();
+  await expect(page.locator(".player-onboarding")).toBeVisible();
+  expect(await playerIndex(page)).toEqual(beforeHelp);
+  await page.waitForTimeout(2_000);
+  await expect(controls).toHaveCSS("opacity", "1");
+  await expect(page.locator(".player-onboarding")).toHaveCount(0, { timeout: 4_000 });
+  expect(await playerIndex(page)).toEqual(beforeHelp);
+  await expect(help).toBeEnabled();
+
+  await page.waitForTimeout(2_000);
+  await expect(controls).toHaveCSS("opacity", "0");
+  const beforeReveal = await playerIndex(page);
+  const surfaceBox = await page.locator(".player-surface").boundingBox();
+  expect(surfaceBox).not.toBeNull();
+  await page.touchscreen.tap(surfaceBox!.x + surfaceBox!.width * 0.75, surfaceBox!.y + surfaceBox!.height / 2);
+  await expect.poll(async () => (await playerIndex(page)).index).toBe(beforeReveal.index + 1);
+  await expect(controls).toHaveCSS("opacity", "1");
+  await expect(page.locator(".player-image--incoming")).toHaveCount(0);
+  const currentPhoto = (await page.locator(".player-image").getAttribute("src"))
+    ?.split("/").pop()?.replace(/\.jpg$/, "");
+  expect(currentPhoto).toBeTruthy();
+  await close.click();
+  await expect(overlay).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).toBe(currentPhoto);
+
+  expectHealthy(health);
+  await context.close();
+});
+
 test("speed selection preserves opening, resume, and explicit-pause semantics", async ({ browser }) => {
   const context = await mobileContext(browser, { width: 844, height: 390 });
   const page = await context.newPage();
@@ -245,6 +334,7 @@ test("portrait and landscape rotation preserve player state and history", async 
   await expect.poll(async () => (await playerIndex(page)).index, { timeout: 2_000 }).toBeGreaterThan(openingPhoto.index);
   expect(Date.now() - openingStarted).toBeGreaterThanOrEqual(2_850);
 
+  await revealPlayerControls(page);
   await page.locator('[data-player-control="speed"]').click();
   await page.getByRole("radio", { name: "1 second per photo" }).click();
   const beforeManual = await playerIndex(page);
@@ -259,6 +349,7 @@ test("portrait and landscape rotation preserve player state and history", async 
   await expect.poll(async () => (await playerIndex(page)).index, { timeout: 2_000 }).toBeGreaterThan(manual.index);
 
   await expect(page.locator('[data-player-control="playback"]')).toHaveAttribute("aria-label", "Pause");
+  await revealPlayerControls(page);
   await page.locator('[data-player-control="playback"]').click();
   await page.locator('[data-player-control="speed"]').click();
   await page.getByRole("radio", { name: "1 second per photo" }).click();
@@ -283,6 +374,7 @@ test("portrait and landscape rotation preserve player state and history", async 
   expect(await playerIndex(page)).toEqual(preserved);
 
   await expect(page.locator('[data-player-control="music"]')).toHaveAttribute("aria-pressed", "true");
+  await revealPlayerControls(page);
   await page.locator('[data-player-control="share"]').click();
   const share = await page.evaluate(() => (window as Window & { __share?: ShareData }).__share);
   const currentPhoto = (await page.locator(".player-image").getAttribute("src"))?.split("/").pop()?.replace(/\.jpg$/, "");
@@ -297,6 +389,7 @@ test("portrait and landscape rotation preserve player state and history", async 
   expect(await page.evaluate(() => history.length)).toBe(historyLength);
   expect(await page.evaluate(() => history.state?.restoration || null)).toEqual(restorationState);
 
+  await revealPlayerControls(page);
   await page.getByRole("button", { name: "Close" }).click();
   await expect(page.getByLabel("Photo player")).toHaveCount(0);
   await expect(page.locator(`[data-photo-id="${currentPhoto}"]`)).toBeFocused();

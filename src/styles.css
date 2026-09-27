@@ -1521,7 +1521,6 @@ img {
     border-radius: 0;
     background: transparent;
     box-shadow: none;
-    opacity: 1;
     pointer-events: none;
     transform: none;
     backdrop-filter: none;
@@ -1539,6 +1538,12 @@ img {
     width: 44px;
     height: 44px;
     margin: 0;
+    pointer-events: none;
+  }
+
+  .player-overlay.has-visible-controls .player-controls > .icon-button,
+  .player-controls:focus-within > .icon-button,
+  .player-controls.is-speed-menu-open > .icon-button {
     pointer-events: auto;
   }
 
@@ -1599,7 +1604,6 @@ img {
     padding: 0;
     border: 0;
     background: transparent;
-    opacity: 1;
     pointer-events: none;
   }
 
@@ -1611,12 +1615,17 @@ img {
     grid-column: 1;
     width: 44px;
     height: 44px;
-    pointer-events: auto;
+    pointer-events: none;
     border-color: rgba(244, 241, 234, 0.14);
     background: rgba(244, 241, 234, 0.04);
   }
 
-  .player-help {
+  .player-overlay.has-visible-controls .player-topbar__actions > .icon-button,
+  .player-topbar:focus-within .player-topbar__actions > .icon-button {
+    pointer-events: auto;
+  }
+
+  .icon-button.player-help {
     position: fixed;
     top: max(2px, env(safe-area-inset-top));
     right: max(2px, env(safe-area-inset-right));
