@@ -267,6 +267,29 @@ test("photo surface and player chrome prevent native selection without disabling
   });
   expect(controlTouchPrevented).toBe(false);
 
+  for (const selector of ['[data-player-control="back"]', '[data-player-control="forward"]']) {
+    const navigationProtection = await page.locator(selector).evaluate((control) => {
+      const touch = new TouchEvent("touchstart", { bubbles: true, cancelable: true });
+      const doubleClick = new MouseEvent("dblclick", { bubbles: true, cancelable: true });
+      const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      control.dispatchEvent(touch);
+      control.dispatchEvent(doubleClick);
+      control.dispatchEvent(contextMenu);
+      return {
+        nativeTouchPrevented: touch.defaultPrevented,
+        doubleClickPrevented: doubleClick.defaultPrevented,
+        contextMenuPrevented: contextMenu.defaultPrevented,
+        touchAction: getComputedStyle(control).touchAction
+      };
+    });
+    expect(navigationProtection).toEqual({
+      nativeTouchPrevented: true,
+      doubleClickPrevented: true,
+      contextMenuPrevented: true,
+      touchAction: "none"
+    });
+  }
+
   const speed = page.locator('[data-player-control="speed"]');
   const speedBox = await speed.boundingBox();
   expect(speedBox).not.toBeNull();
@@ -277,6 +300,61 @@ test("photo surface and player chrome prevent native selection without disabling
   await pausePlayer(page);
   await context.close();
 });
+
+for (const testCase of [
+  { name: "portrait", viewport: { width: 390, height: 844 } },
+  { name: "landscape", viewport: { width: 844, height: 390 } }
+] as const) {
+  test(`mobile ${testCase.name} arrow buttons tap once and hold continuously in both directions`, async ({ browser }) => {
+    const context = await mobileContext(browser, testCase.viewport);
+    const page = await context.newPage();
+    const health = monitorPage(page);
+    await useLocalPlayerMedia(page);
+    await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
+    await pausePlayer(page);
+    const start = await playerIndex(page);
+    const previous = page.locator('[data-player-control="back"]');
+    const next = page.locator('[data-player-control="forward"]');
+    const [previousBox, nextBox] = await Promise.all([previous.boundingBox(), next.boundingBox()]);
+    expect(previousBox).not.toBeNull();
+    expect(nextBox).not.toBeNull();
+    const previousPoint = { x: previousBox!.x + previousBox!.width / 2, y: previousBox!.y + previousBox!.height / 2 };
+    const nextPoint = { x: nextBox!.x + nextBox!.width / 2, y: nextBox!.y + nextBox!.height / 2 };
+
+    await touchSequence(page, nextPoint);
+    await expectPlayerIndex(page, start.index + 1);
+    await page.waitForTimeout(180);
+    await expectPlayerIndex(page, start.index + 1);
+
+    await touchSequence(page, previousPoint);
+    await expectPlayerIndex(page, start.index);
+    await page.waitForTimeout(180);
+    await expectPlayerIndex(page, start.index);
+
+    await touchSequence(page, nextPoint);
+    await touchSequence(page, nextPoint);
+    await expectPlayerIndex(page, start.index + 2);
+    await touchSequence(page, previousPoint);
+    await touchSequence(page, previousPoint);
+    await expectPlayerIndex(page, start.index);
+
+    await touchSequence(page, nextPoint, { holdMs: 525 });
+    const afterForwardHold = await playerIndex(page);
+    expect(afterForwardHold.index).toBeGreaterThanOrEqual(start.index + 2);
+    await page.waitForTimeout(260);
+    expect(await playerIndex(page)).toEqual(afterForwardHold);
+
+    await touchSequence(page, previousPoint, { holdMs: 525 });
+    const afterPreviousHold = await playerIndex(page);
+    expect(afterPreviousHold.index).toBeLessThanOrEqual(afterForwardHold.index - 2);
+    await page.waitForTimeout(260);
+    expect(await playerIndex(page)).toEqual(afterPreviousHold);
+    await expect(page.locator('[data-player-control="playback"]')).toHaveAttribute("aria-label", "Play");
+
+    expectHealthy(health);
+    await context.close();
+  });
+}
 
 test("rapid taps keep the last painted frame until the latest image is decoded", async ({ browser }, testInfo) => {
   const context = await mobileContext(browser, { width: 390, height: 844 });

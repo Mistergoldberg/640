@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, type MutableRefObject } from "react";
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, Music, Pause, Play, Share2 } from "lucide-react";
+import type { FrameNavigationDirection } from "./playerFrameNavigation";
 import { PLAYER_SPEED_OPTIONS, speedOption } from "./playerControlState";
+
+const NAVIGATION_CLICK_SUPPRESSION_MS = 800;
 
 interface PlayerControlsProps {
   atStart: boolean;
@@ -19,6 +22,9 @@ interface PlayerControlsProps {
   speedDescriptionId?: string;
   musicDescriptionId?: string;
   onPrevious: () => void;
+  onFrameNavigationStart: (direction: FrameNavigationDirection) => void;
+  onFrameNavigationEnd: (direction: FrameNavigationDirection) => void;
+  onFrameNavigationCancel: () => void;
   onTogglePlayback: () => void;
   onNext: () => void;
   onToggleSpeedMenu: () => void;
@@ -47,6 +53,9 @@ export function PlayerControls({
   speedDescriptionId,
   musicDescriptionId,
   onPrevious,
+  onFrameNavigationStart,
+  onFrameNavigationEnd,
+  onFrameNavigationCancel,
   onTogglePlayback,
   onNext,
   onToggleSpeedMenu,
@@ -58,8 +67,31 @@ export function PlayerControls({
   onReveal
 }: PlayerControlsProps) {
   const controlsRef = useRef<HTMLDivElement | null>(null);
+  const previousControlRef = useRef<HTMLButtonElement | null>(null);
+  const nextControlRef = useRef<HTMLButtonElement | null>(null);
   const speedTriggerRef = useRef<HTMLButtonElement | null>(null);
   const speedMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeTouchRef = useRef<{ button: HTMLButtonElement; direction: FrameNavigationDirection; identifier: number } | null>(null);
+  const activeMousePointerRef = useRef<{ button: HTMLButtonElement; direction: FrameNavigationDirection; pointerId: number } | null>(null);
+  const suppressNavigationClickUntilRef = useRef(0);
+  const frameNavigationActionsRef = useRef({
+    start: onFrameNavigationStart,
+    end: onFrameNavigationEnd,
+    cancel: onFrameNavigationCancel,
+    prepare: () => {
+      onCloseSpeedMenu();
+      onReveal();
+    }
+  });
+  frameNavigationActionsRef.current = {
+    start: onFrameNavigationStart,
+    end: onFrameNavigationEnd,
+    cancel: onFrameNavigationCancel,
+    prepare: () => {
+      onCloseSpeedMenu();
+      onReveal();
+    }
+  };
   const speedMenuId = useId();
   const selectedSpeed = speedOption(delayMs);
   const tutorialActive = tutorialStep !== null;
@@ -144,10 +176,135 @@ export function PlayerControls({
     if (tutorialStep !== null && tutorialStep !== 2 && speedMenuOpen) onCloseSpeedMenu();
   }, [onCloseSpeedMenu, speedMenuOpen, tutorialStep]);
 
+  useEffect(() => {
+    const controls: Array<[HTMLButtonElement | null, FrameNavigationDirection, boolean]> = [
+      [previousControlRef.current, -1, atStart || tutorialActive],
+      [nextControlRef.current, 1, atEnd || tutorialActive]
+    ];
+    const cleanups: Array<() => void> = [];
+
+    for (const [button, direction, disabled] of controls) {
+      if (!button) continue;
+
+      const suppressClick = () => {
+        suppressNavigationClickUntilRef.current = Date.now() + NAVIGATION_CLICK_SUPPRESSION_MS;
+      };
+      const cancelActiveTouch = () => {
+        if (activeTouchRef.current?.button !== button) return;
+        activeTouchRef.current = null;
+        suppressClick();
+        frameNavigationActionsRef.current.cancel();
+      };
+      const handleTouchStart = (event: TouchEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        suppressClick();
+
+        if (disabled || event.touches.length !== 1) {
+          cancelActiveTouch();
+          return;
+        }
+
+        const touch = event.touches.item(0);
+        if (!touch) return;
+        if (activeTouchRef.current) {
+          activeTouchRef.current = null;
+          frameNavigationActionsRef.current.cancel();
+        }
+        activeTouchRef.current = { button, direction, identifier: touch.identifier };
+        frameNavigationActionsRef.current.prepare();
+        frameNavigationActionsRef.current.start(direction);
+      };
+      const handleTouchMove = (event: TouchEvent) => {
+        if (activeTouchRef.current?.button !== button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        suppressClick();
+        if (event.touches.length !== 1) cancelActiveTouch();
+      };
+      const handleTouchEnd = (event: TouchEvent) => {
+        const activeTouch = activeTouchRef.current;
+        if (activeTouch?.button !== button) return;
+        const ended = Array.from(event.changedTouches).some((touch) => touch.identifier === activeTouch.identifier);
+        if (!ended && event.touches.length > 0) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        activeTouchRef.current = null;
+        suppressClick();
+        frameNavigationActionsRef.current.end(activeTouch.direction);
+      };
+      const handleTouchCancel = (event: TouchEvent) => {
+        if (activeTouchRef.current?.button !== button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        cancelActiveTouch();
+      };
+      const preventSelection = (event: Event) => event.preventDefault();
+
+      button.addEventListener("touchstart", handleTouchStart, { passive: false });
+      button.addEventListener("touchmove", handleTouchMove, { passive: false });
+      button.addEventListener("touchend", handleTouchEnd, { passive: false });
+      button.addEventListener("touchcancel", handleTouchCancel, { passive: false });
+      button.addEventListener("selectstart", preventSelection);
+      cleanups.push(() => {
+        cancelActiveTouch();
+        button.removeEventListener("touchstart", handleTouchStart);
+        button.removeEventListener("touchmove", handleTouchMove);
+        button.removeEventListener("touchend", handleTouchEnd);
+        button.removeEventListener("touchcancel", handleTouchCancel);
+        button.removeEventListener("selectstart", preventSelection);
+      });
+    }
+
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [atEnd, atStart, tutorialActive]);
+
   const runAction = (action: () => void) => {
     onCloseSpeedMenu();
     onReveal();
     action();
+  };
+
+  const startMouseFrameNavigation = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    direction: FrameNavigationDirection
+  ) => {
+    if (event.pointerType !== "mouse" || event.button !== 0 || !event.isPrimary || event.currentTarget.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activeMousePointerRef.current = { button: event.currentTarget, direction, pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    frameNavigationActionsRef.current.prepare();
+    frameNavigationActionsRef.current.start(direction);
+  };
+
+  const finishMouseFrameNavigation = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const activePointer = activeMousePointerRef.current;
+    if (event.pointerType !== "mouse" || activePointer?.button !== event.currentTarget || activePointer.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activeMousePointerRef.current = null;
+    suppressNavigationClickUntilRef.current = Date.now() + NAVIGATION_CLICK_SUPPRESSION_MS;
+    frameNavigationActionsRef.current.end(activePointer.direction);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const cancelMouseFrameNavigation = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const activePointer = activeMousePointerRef.current;
+    if (event.pointerType !== "mouse" || activePointer?.button !== event.currentTarget || activePointer.pointerId !== event.pointerId) return;
+    activeMousePointerRef.current = null;
+    suppressNavigationClickUntilRef.current = Date.now() + NAVIGATION_CLICK_SUPPRESSION_MS;
+    frameNavigationActionsRef.current.cancel();
+  };
+
+  const runNavigationClick = (event: React.MouseEvent<HTMLButtonElement>, action: () => void) => {
+    if (Date.now() <= suppressNavigationClickUntilRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    runAction(action);
   };
 
   return (
@@ -164,10 +321,18 @@ export function PlayerControls({
       onClick={(event) => event.stopPropagation()}
     >
       <button
+        ref={previousControlRef}
         className="icon-button"
         data-player-control="back"
         type="button"
-        onClick={() => runAction(onPrevious)}
+        onPointerDown={(event) => startMouseFrameNavigation(event, -1)}
+        onPointerUp={finishMouseFrameNavigation}
+        onPointerCancel={cancelMouseFrameNavigation}
+        onLostPointerCapture={cancelMouseFrameNavigation}
+        onClick={(event) => runNavigationClick(event, onPrevious)}
+        onDoubleClick={(event) => event.preventDefault()}
+        onContextMenu={(event) => event.preventDefault()}
+        onDragStart={(event) => event.preventDefault()}
         disabled={atStart || tutorialActive}
         aria-label="Previous photo"
         title="Previous photo"
@@ -190,10 +355,18 @@ export function PlayerControls({
         )}
       </button>
       <button
+        ref={nextControlRef}
         className="icon-button"
         data-player-control="forward"
         type="button"
-        onClick={() => runAction(onNext)}
+        onPointerDown={(event) => startMouseFrameNavigation(event, 1)}
+        onPointerUp={finishMouseFrameNavigation}
+        onPointerCancel={cancelMouseFrameNavigation}
+        onLostPointerCapture={cancelMouseFrameNavigation}
+        onClick={(event) => runNavigationClick(event, onNext)}
+        onDoubleClick={(event) => event.preventDefault()}
+        onContextMenu={(event) => event.preventDefault()}
+        onDragStart={(event) => event.preventDefault()}
         disabled={atEnd || tutorialActive}
         aria-label="Next photo"
         title="Next photo"

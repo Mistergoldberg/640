@@ -815,6 +815,11 @@ img {
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 80ms ease;
 }
 
+.player-controls > [data-player-control="back"],
+.player-controls > [data-player-control="forward"] {
+  touch-action: none;
+}
+
 .icon-button--primary {
   color: #030303;
   background: #f4f1ea;

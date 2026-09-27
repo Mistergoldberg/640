@@ -1627,6 +1627,15 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           speedDescriptionId={onboardingStep === 2 ? onboardingDescriptionId : undefined}
           musicDescriptionId={onboardingStep === 3 ? onboardingDescriptionId : undefined}
           onPrevious={() => navigateManually(-1)}
+          onFrameNavigationStart={(direction) => frameInteractionRef.current?.startPointer(direction)}
+          onFrameNavigationEnd={(direction) => {
+            if (frameInteractionRef.current?.isPointerHolding()) {
+              frameInteractionRef.current.releasePointer();
+              return;
+            }
+            if (frameInteractionRef.current?.cancelPointer(false)) navigateManually(direction);
+          }}
+          onFrameNavigationCancel={() => frameInteractionRef.current?.cancelPointer()}
           onTogglePlayback={toggleFromPrimaryControl}
           onNext={() => navigateManually(1)}
           onToggleSpeedMenu={toggleSpeedMenu}
