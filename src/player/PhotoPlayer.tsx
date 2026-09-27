@@ -3,7 +3,7 @@ import { CircleHelp, X } from "lucide-react";
 import { mediaUrl } from "../lib/assets";
 import type { Photo } from "../types";
 import { exitDocumentFullscreen, fullscreenElement, requestDocumentFullscreen, subscribeToFullscreenChanges } from "./fullscreen";
-import { calculateImageGeometry, playerFitClearance } from "./imageGeometry";
+import { calculateImageGeometry, playerFitClearance, type ImageGeometry, type ImageMode } from "./imageGeometry";
 import { PlayerControls } from "./PlayerControls";
 import { createPlayerControlState, playerControlReducer, screenModeActive } from "./playerControlState";
 import { PlayerFrameNavigationController, type FrameNavigationDirection } from "./playerFrameNavigation";
@@ -198,7 +198,37 @@ function visibleRect(element: Element) {
   return rect;
 }
 
+function photoImageGeometry(
+  photo: Photo,
+  mode: ImageMode,
+  viewport: { width: number; height: number; landscapeRail: boolean }
+) {
+  const clearance = mode === "fit" && !viewport.landscapeRail
+    ? playerFitClearance(viewport.width, viewport.height)
+    : { vertical: 0, horizontal: 0 };
+  return calculateImageGeometry({
+    sourceWidth: photo.width,
+    sourceHeight: photo.height,
+    viewportWidth: Math.max(1, viewport.width - clearance.horizontal),
+    viewportHeight: viewport.height,
+    controlClearance: clearance.vertical,
+    mode,
+    rotation: 0
+  });
+}
+
+function expandedImageStyle(mode: ImageMode, geometry: ImageGeometry | null) {
+  return mode === "expanded" && geometry
+    ? {
+        width: `${Math.round(geometry.layoutWidth)}px`,
+        height: `${Math.round(geometry.layoutHeight)}px`,
+        transform: `translate(-50%, -50%) rotate(${geometry.rotation}deg)`
+      }
+    : undefined;
+}
+
 export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard" }: PhotoPlayerProps) {
+  const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
   const [desktopInstructions, setDesktopInstructions] = useState(usesDesktopInstructions);
   const [playerState, dispatch] = useReducer(
@@ -206,6 +236,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     { initialIndex, total: photos.length, scope, launchMode, reducedMotion },
     createPlayerState
   );
+  const [paintedFrame, setPaintedFrame] = useState(() => ({
+    resetKey,
+    photo: photos[clampIndex(initialIndex, photos.length)] ?? null
+  }));
   const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hasMusicLoaded, setHasMusicLoaded] = useState(false);
@@ -235,6 +269,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const stateRef = useRef<PlayerState>(playerState);
   const currentIndexRef = useRef(playerState.currentIndex);
   const currentImageRef = useRef<HTMLImageElement | null>(null);
+  const desiredPhotoIdRef = useRef<string | null>(null);
   const nativeFullscreenRef = useRef(nativeFullscreenActive);
   const fullscreenRequestTokenRef = useRef(0);
   const controlsTimerRef = useRef<number | null>(null);
@@ -253,11 +288,15 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const helpControlRef = useRef<HTMLButtonElement | null>(null);
   const focusRestoreFrameRef = useRef<number | null>(null);
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
-  const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
   const resetKeyRef = useRef(resetKey);
 
   const currentIndex = playerState.currentIndex;
   const currentPhoto = photos[currentIndex];
+  const paintedPhoto = paintedFrame.resetKey === resetKey
+    ? paintedFrame.photo
+    : photos[clampIndex(initialIndex, photos.length)] ?? null;
+  const isImagePending = Boolean(paintedPhoto && currentPhoto && paintedPhoto.id !== currentPhoto.id);
+  desiredPhotoIdRef.current = currentPhoto?.id ?? null;
   const atStart = currentIndex <= 0;
   const atEnd = currentIndex >= photos.length - 1;
   const status = playerState.status;
@@ -871,28 +910,32 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     return true;
   }, [photos.length, preloadPhoto]);
 
-  const markVisibleImageReady = useCallback(() => {
-    const image = currentImageRef.current;
+  const markVisibleImageReady = useCallback((image: HTMLImageElement, photo: Photo) => {
     if (!image || !image.complete || image.naturalWidth === 0) {
       return;
     }
     const source = image.src;
     const markDecoded = () => {
-      if (image.isConnected && currentImageRef.current === image && image.src === source) {
+      window.requestAnimationFrame(() => {
+        if (!image.isConnected || currentImageRef.current !== image || image.src !== source || desiredPhotoIdRef.current !== photo.id) return;
+        setPaintedFrame((previous) => previous.resetKey === resetKey && previous.photo?.id === photo.id
+          ? previous
+          : { resetKey, photo });
         dispatch({ type: "READY" });
-      }
+      });
     };
     if (typeof image.decode === "function") {
-      void image.decode().then(markDecoded, () => {});
+      void image.decode().then(markDecoded, markDecoded);
     } else {
       markDecoded();
     }
-  }, []);
+  }, [resetKey]);
 
   useEffect(() => {
     const isInitialMount = resetKeyRef.current === resetKey;
     if (!isInitialMount) {
       resetKeyRef.current = resetKey;
+      setPaintedFrame({ resetKey, photo: photos[clampIndex(initialIndex, photos.length)] ?? null });
       rollingWarmupLaunchKeyRef.current = null;
       if (rollingWarmupFrameRef.current !== null) {
         window.cancelAnimationFrame(rollingWarmupFrameRef.current);
@@ -989,7 +1032,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, [cacheRevision, launchMode, photos.length, preloadPhoto]);
 
   useEffect(() => {
-    if (currentPhoto) markVisibleImageReady();
+    if (currentPhoto && currentImageRef.current) markVisibleImageReady(currentImageRef.current, currentPhoto);
   }, [currentPhoto?.id, markVisibleImageReady]);
 
   useEffect(() => {
@@ -1125,9 +1168,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       event.preventDefault();
       event.stopPropagation();
     };
+    const preventNativeTouch = (event: TouchEvent) => {
+      if (event.cancelable) event.preventDefault();
+    };
 
     surface.addEventListener("selectstart", preventSurfaceSelection);
-    return () => surface.removeEventListener("selectstart", preventSurfaceSelection);
+    surface.addEventListener("touchstart", preventNativeTouch, { passive: false });
+    surface.addEventListener("touchmove", preventNativeTouch, { passive: false });
+    return () => {
+      surface.removeEventListener("selectstart", preventSurfaceSelection);
+      surface.removeEventListener("touchstart", preventNativeTouch);
+      surface.removeEventListener("touchmove", preventNativeTouch);
+    };
   }, []);
 
   useEffect(() => {
@@ -1288,24 +1340,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     };
   }, [clearImageCache, clearInitialDelayTimer, clearResumeTimer, revealControls]);
 
-  const imageGeometry = useMemo(() => {
-    if (!currentPhoto) {
-      return null;
-    }
-
-    const clearance = imageMode === "fit" && !playerViewport.landscapeRail
-      ? playerFitClearance(playerViewport.width, playerViewport.height)
-      : { vertical: 0, horizontal: 0 };
-    return calculateImageGeometry({
-      sourceWidth: currentPhoto.width,
-      sourceHeight: currentPhoto.height,
-      viewportWidth: Math.max(1, playerViewport.width - clearance.horizontal),
-      viewportHeight: playerViewport.height,
-      controlClearance: clearance.vertical,
-      mode: imageMode,
-      rotation: 0
-    });
-  }, [currentPhoto, imageMode, playerViewport.height, playerViewport.landscapeRail, playerViewport.width]);
+  const imageGeometry = useMemo(() => currentPhoto ? photoImageGeometry(currentPhoto, imageMode, playerViewport) : null,
+    [currentPhoto, imageMode, playerViewport]);
+  const paintedImageGeometry = useMemo(() => paintedPhoto && paintedPhoto.id !== currentPhoto?.id
+    ? photoImageGeometry(paintedPhoto, imageMode, playerViewport)
+    : imageGeometry, [currentPhoto?.id, imageGeometry, imageMode, paintedPhoto, playerViewport]);
 
   if (!currentPhoto) {
     if (launchMode !== "homepage-autoplay") return null;
@@ -1341,14 +1380,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     );
   }
 
-  const playerImageStyle =
-    imageMode === "expanded" && imageGeometry
-      ? {
-          width: `${Math.round(imageGeometry.layoutWidth)}px`,
-          height: `${Math.round(imageGeometry.layoutHeight)}px`,
-          transform: `translate(-50%, -50%) rotate(${imageGeometry.rotation}deg)`
-        }
-      : undefined;
+  const playerImageStyle = expandedImageStyle(imageMode, imageGeometry);
+  const paintedImageStyle = expandedImageStyle(imageMode, paintedImageGeometry);
   const primaryActionLabel = canPause(status) ? "Pause" : "Play";
   const surfaceActionLabel = temporaryResumePending ? "Play" : primaryActionLabel;
   const musicIsActive = shouldPlayMusic || isMusicPlaying;
@@ -1558,16 +1591,26 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           aria-label={surfaceActionLabel}
           aria-describedby={onboardingStep === 1 ? onboardingDescriptionId : undefined}
         >
+          {isImagePending && paintedPhoto ? (
+            <img
+              key={paintedPhoto.id}
+              src={mediaUrl(paintedPhoto.displayKey)}
+              alt=""
+              className={`player-image player-image--${paintedPhoto.orientation} player-image--${imageMode}`}
+              style={paintedImageStyle}
+              draggable={false}
+            />
+          ) : null}
           <img
             ref={currentImageRef}
             key={currentPhoto.id}
             src={mediaUrl(currentPhoto.displayKey)}
             alt=""
-            className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}`}
+            className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}${isImagePending ? " player-image--incoming" : ""}`}
             style={playerImageStyle}
             decoding="async"
             draggable={false}
-            onLoad={markVisibleImageReady}
+            onLoad={(event) => markVisibleImageReady(event.currentTarget, currentPhoto)}
             onError={() => {
               if (stateRef.current.launchMode === "homepage-autoplay" && stateRef.current.warmupPhase !== "inactive") {
                 return;

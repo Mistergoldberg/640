@@ -1,7 +1,30 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import sharp from "sharp";
 
 const LANDSCAPE_PHOTO = "2002-5d0aaeea05b95f";
 const PORTRAIT_PHOTO = "2002-fd741068e43907";
+const LOCAL_TEST_IMAGE = await sharp({
+  create: { width: 640, height: 480, channels: 3, background: "#773344" }
+}).jpeg().toBuffer();
+
+async function useLocalPlayerMedia(page: Page) {
+  await page.route("https://media.pixilation.org/**", (route) => route.fulfill({
+    status: 200,
+    contentType: "image/jpeg",
+    body: LOCAL_TEST_IMAGE
+  }));
+}
+
+async function capturePaintedFrame(page: Page, path: string) {
+  const screenshot = await page.screenshot({ path });
+  const centerPixel = await sharp(screenshot)
+    .extract({ left: 195, top: 410, width: 1, height: 1 })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  expect(centerPixel[0]).toBeGreaterThan(80);
+  expect(centerPixel[2]).toBeGreaterThan(30);
+}
 
 interface TouchPoint {
   x: number;
@@ -63,7 +86,7 @@ function expectHealthy(health: ReturnType<typeof monitorPage>) {
 async function openDirectPhoto(page: Page, photoId: string, orientation: "portrait" | "landscape") {
   await page.goto(`/?year=2002&photo=${photoId}`);
   await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 20_000 });
-  const image = page.locator(`.player-image--${orientation}`);
+  const image = page.locator(`.player-image--${orientation}:not(.player-image--incoming)`).first();
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0), { timeout: 20_000 }).toBe(true);
   return image;
 }
@@ -184,6 +207,105 @@ test("mobile portrait frame taps include letterbox, navigate once, suppress synt
   await expectPlayerIndex(page, start.index);
   await expect(page.locator('[data-player-control="playback"]')).toHaveAttribute("aria-label", "Pause");
 
+  expectHealthy(health);
+  await context.close();
+});
+
+test("photo surface prevents native touch selection without disabling controls", async ({ browser }) => {
+  const context = await mobileContext(browser, { width: 390, height: 844 });
+  const page = await context.newPage();
+  await useLocalPlayerMedia(page);
+  await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
+
+  const surfaceProtection = await page.locator(".player-surface").evaluate((surface) => {
+    const touch = new TouchEvent("touchstart", { bubbles: true, cancelable: true });
+    surface.dispatchEvent(touch);
+    const styles = getComputedStyle(surface);
+    return {
+      nativeTouchPrevented: touch.defaultPrevented,
+      touchAction: styles.touchAction,
+      tapHighlight: styles.getPropertyValue("-webkit-tap-highlight-color")
+    };
+  });
+  expect(surfaceProtection.nativeTouchPrevented).toBe(true);
+  expect(surfaceProtection.touchAction).toBe("none");
+  expect(["rgba(0, 0, 0, 0)", "transparent"]).toContain(surfaceProtection.tapHighlight);
+
+  const controlTouchPrevented = await page.locator('[data-player-control="playback"]').evaluate((control) => {
+    const touch = new TouchEvent("touchstart", { bubbles: true, cancelable: true });
+    control.dispatchEvent(touch);
+    return touch.defaultPrevented;
+  });
+  expect(controlTouchPrevented).toBe(false);
+  await pausePlayer(page);
+  await context.close();
+});
+
+test("rapid taps keep the last painted frame until the latest image is decoded", async ({ browser }, testInfo) => {
+  const context = await mobileContext(browser, { width: 390, height: 844 });
+  const page = await context.newPage();
+  const health = monitorPage(page);
+  await useLocalPlayerMedia(page);
+  let releaseSlowImage: () => void = () => {};
+  const slowImage = new Promise<void>((resolve) => { releaseSlowImage = resolve; });
+  await page.route("**/2002/display/2002-51119fe34ac289.jpg", async (route) => {
+    await slowImage;
+    await route.fallback();
+  });
+
+  try {
+    await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
+    await pausePlayer(page);
+    const initialSource = await page.locator(".player-image:not(.player-image--incoming)").getAttribute("src");
+    const surface = await surfaceBox(page);
+    const start = await playerIndex(page);
+    const tapForward = () => touchSequence(page, { x: surface.x + surface.width * 0.78, y: surface.y + surface.height * 0.5 });
+
+    await tapForward();
+    await expectPlayerIndex(page, start.index + 1);
+    await expect(page.locator(".player-image--incoming")).toHaveAttribute("src", /2002-51119fe34ac289\.jpg$/);
+    await expect(page.locator(".player-image:not(.player-image--incoming)")).toHaveAttribute("src", initialSource!);
+    await capturePaintedFrame(page, testInfo.outputPath("mobile-delayed-frame.png"));
+
+    await tapForward();
+    await expectPlayerIndex(page, start.index + 2);
+    await expect.poll(async () => page.locator(".player-image:not(.player-image--incoming)").getAttribute("src"))
+      .toMatch(/2002-ef962904c0098d\.jpg$/);
+    releaseSlowImage();
+    await page.waitForTimeout(300);
+    await expect(page.locator(".player-image:not(.player-image--incoming)")).toHaveAttribute("src", /2002-ef962904c0098d\.jpg$/);
+    await expect(page.locator(".player-image--incoming")).toHaveCount(0);
+    await expect.poll(async () => page.locator(".player-image:not(.player-image--incoming)")
+      .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    await capturePaintedFrame(page, testInfo.outputPath("mobile-latest-frame.png"));
+    expectHealthy(health);
+  } finally {
+    releaseSlowImage();
+    await context.close();
+  }
+});
+
+test("mobile taps and holds navigate the painted photo without changing the playback control", async ({ browser }) => {
+  const context = await mobileContext(browser, { width: 390, height: 844 });
+  const page = await context.newPage();
+  const health = monitorPage(page);
+  await useLocalPlayerMedia(page);
+  await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
+  await pausePlayer(page);
+  const surface = await surfaceBox(page);
+  const start = await playerIndex(page);
+
+  await touchSequence(page, { x: surface.x + surface.width * 0.78, y: surface.y + surface.height * 0.5 });
+  await expectPlayerIndex(page, start.index + 1);
+  await touchSequence(page, { x: surface.x + surface.width * 0.2, y: surface.y + surface.height * 0.5 });
+  await expectPlayerIndex(page, start.index);
+
+  await touchSequence(page, { x: surface.x + surface.width * 0.78, y: surface.y + surface.height * 0.5 }, { holdMs: 525 });
+  const afterHold = await playerIndex(page);
+  expect(afterHold.index).toBeGreaterThanOrEqual(start.index + 2);
+  await page.waitForTimeout(260);
+  expect(await playerIndex(page)).toEqual(afterHold);
+  await expect(page.locator('[data-player-control="playback"]')).toHaveAttribute("aria-label", "Play");
   expectHealthy(health);
   await context.close();
 });
