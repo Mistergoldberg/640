@@ -146,7 +146,9 @@ test("desktop frame navigation preserves deep-link controls, sharing, fullscreen
   await expect(page.locator(".player-surface")).toHaveClass(/player-surface--fit/);
 
   await clickSurface(page, 0.78);
-  const currentPhoto = (await page.locator(".player-image").getAttribute("src"))?.split("/").pop()?.replace(/\.jpg$/, "");
+  await expect(page.locator(".player-image--incoming")).toHaveCount(0, { timeout: 20_000 });
+  const currentPhoto = (await page.locator(".player-image:not(.player-image--incoming)").getAttribute("src"))
+    ?.split("/").pop()?.replace(/\.jpg$/, "");
   expect(currentPhoto).toBeTruthy();
   await page.locator('[data-player-control="share"]').click();
   const share = await page.evaluate(() => (window as Window & { __share?: ShareData }).__share);
