@@ -211,7 +211,7 @@ test("mobile portrait frame taps include letterbox, navigate once, suppress synt
   await context.close();
 });
 
-test("photo surface prevents native touch selection without disabling controls", async ({ browser }) => {
+test("photo surface and player chrome prevent native selection without disabling controls", async ({ browser }) => {
   const context = await mobileContext(browser, { width: 390, height: 844 });
   const page = await context.newPage();
   await useLocalPlayerMedia(page);
@@ -231,12 +231,38 @@ test("photo surface prevents native touch selection without disabling controls",
   expect(surfaceProtection.touchAction).toBe("none");
   expect(["rgba(0, 0, 0, 0)", "transparent"]).toContain(surfaceProtection.tapHighlight);
 
-  const controlTouchPrevented = await page.locator('[data-player-control="playback"]').evaluate((control) => {
+  const controlProtection = await page.locator(
+    '.player-topbar button, .player-help, .player-controls, .player-controls [data-player-control], .speed-trigger__value'
+  ).evaluateAll((controls) => controls.map((control) => {
+    const styles = getComputedStyle(control);
+    return {
+      userSelect: styles.userSelect,
+      webkitUserSelect: styles.getPropertyValue("-webkit-user-select"),
+      tapHighlight: styles.getPropertyValue("-webkit-tap-highlight-color")
+    };
+  }));
+  expect(controlProtection.length).toBeGreaterThan(0);
+  for (const protection of controlProtection) {
+    expect(protection.userSelect).toBe("none");
+    expect(protection.webkitUserSelect).toBe("none");
+    expect(["rgba(0, 0, 0, 0)", "transparent"]).toContain(protection.tapHighlight);
+  }
+
+  const playback = page.locator('[data-player-control="playback"]');
+  const controlTouchPrevented = await playback.evaluate((control) => {
     const touch = new TouchEvent("touchstart", { bubbles: true, cancelable: true });
     control.dispatchEvent(touch);
     return touch.defaultPrevented;
   });
   expect(controlTouchPrevented).toBe(false);
+
+  const speed = page.locator('[data-player-control="speed"]');
+  const speedBox = await speed.boundingBox();
+  expect(speedBox).not.toBeNull();
+  await page.touchscreen.tap(speedBox!.x + speedBox!.width / 2, speedBox!.y + speedBox!.height / 2);
+  await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toBeVisible();
+  await page.getByRole("radio", { name: "0.5 seconds per photo" }).click();
+
   await pausePlayer(page);
   await context.close();
 });

@@ -629,6 +629,14 @@ img {
   display: contents;
 }
 
+.player-control-frame,
+.player-control-frame * {
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+}
+
 .player-surface {
   position: absolute;
   inset: 0;
