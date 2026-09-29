@@ -346,7 +346,15 @@ function nearestPhotoAnchor(photoTops: Array<[string, number]>, targetTop: numbe
   }
   const after = photoTops[low];
   const before = photoTops[Math.max(0, low - 1)];
-  return Math.abs(before[1] - targetTop) <= Math.abs(after[1] - targetTop) ? before : after;
+  const selectedIndex = Math.abs(before[1] - targetTop) <= Math.abs(after[1] - targetTop)
+    ? Math.max(0, low - 1)
+    : low;
+  // Every photo in a justified row shares its top; persist the first DOM-order photo for stable reloads.
+  let firstAtSelectedTop = selectedIndex;
+  while (firstAtSelectedTop > 0 && photoTops[firstAtSelectedTop - 1][1] === photoTops[selectedIndex][1]) {
+    firstAtSelectedTop -= 1;
+  }
+  return photoTops[firstAtSelectedTop];
 }
 
 function leadInPlanForLayout(layout: GridLayout, maxRows = SEGMENT_LEAD_IN_ROW_COUNT) {
@@ -816,7 +824,7 @@ function YearWindowGrid({
   const visibleEntries = layout.entries.filter((entry) => entry.top + entry.height >= visibleTop && entry.top <= visibleBottom);
   const currentAlbum = findAlbumAtTop(layout, localViewportTop + ARCHIVE_JUMP_OFFSET_PX);
   const albumHeadingScreenTop = currentAlbum ? containerTop + currentAlbum.top - viewport.scrollY : -1;
-  const albumHeadingIsVisible = albumHeadingScreenTop >= 88 && albumHeadingScreenTop <= 240;
+  const albumHeadingIsVisible = albumHeadingScreenTop >= 32 && albumHeadingScreenTop <= 240;
   const failedCount = collection?.failedAlbumIds.length || 0;
   const statusMessage = state?.status === "index-loading" ? `Loading ${activeYear} index`
     : state?.status === "unloaded" || state?.status === "loading" ? `Loading ${activeYear}`
@@ -1900,11 +1908,6 @@ function YearWindowGrid({
       data-render-mode={segmentedMode ? "segmented-year-window" : "year-windowed"}
     >
       <header className="collection-chrome" ref={chromeRef}>
-        <div className="app-bar">
-          <div className="app-bar__identity">
-            <span className="app-bar__brand">640×480</span>
-          </div>
-        </div>
         {statusMessage ? (
           <div className={`collection-status collection-status--${state?.status === "error" || failedCount ? "error" : "loading"}`} role={state?.status === "error" || failedCount ? "alert" : "status"}>
             <span>{statusMessage}{targetAlbum ? ` · ${formatPublicArchiveAlbumLabel(targetAlbum.name, activeYear)}` : ""}</span>

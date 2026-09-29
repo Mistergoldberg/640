@@ -194,9 +194,12 @@ test("clean root visit mounts only 2013 and fetches no inactive album manifests"
   expect((await mountedMetrics(page)).years).toEqual(["2013"]);
 });
 
-test("archive header relies on scrubber navigation and hides public aggregate totals", async ({ page }) => {
+test("archive removes the branded header while retaining year and scrubber navigation", async ({ page }) => {
   await page.goto("/");
   await waitForYear(page, "2013");
+  await expect(page.locator(".app-bar")).toHaveCount(0);
+  await expect(page.getByText("640×480", { exact: true })).toHaveCount(0);
+  expect((await page.locator(".collection-chrome").boundingBox())?.height).toBe(0);
   await expect(page.getByRole("navigation", { name: "Archive years" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Jump to \d{4}/ })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "2013", exact: true })).toBeVisible();
@@ -208,6 +211,35 @@ test("archive header relies on scrubber navigation and hides public aggregate to
   await jumpArchiveToYear(page, "2002");
   await expect(page.getByRole("heading", { name: "2002", exact: true })).toBeVisible();
   await expect(page.locator('[data-entry-type="heading"][data-album-id="2002-thialand-0a8e8616"] h2')).toHaveText("2002-Thailand");
+});
+
+test("archive uses the released header space without overlap or focus-order changes", async ({ page }) => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/?year=2013");
+    await waitForYear(page, "2013");
+
+    const [chromeBox, yearBox, albumBox, firstPhotoBox, timelineBox] = await Promise.all([
+      page.locator(".collection-chrome").boundingBox(),
+      page.getByRole("heading", { name: "2013", exact: true }).boundingBox(),
+      page.getByRole("heading", { name: "2013-09-03", exact: true }).boundingBox(),
+      page.getByRole("button", { name: "Open photo 1", exact: true }).boundingBox(),
+      page.getByRole("slider", { name: "Complete archive timeline" }).boundingBox()
+    ]);
+
+    expect(chromeBox?.height).toBe(0);
+    expect(yearBox!.y).toBeLessThanOrEqual(18);
+    expect(yearBox!.y + yearBox!.height).toBeLessThanOrEqual(albumBox!.y);
+    expect(albumBox!.y + albumBox!.height).toBeLessThanOrEqual(firstPhotoBox!.y);
+    expect(timelineBox!.y).toBeLessThanOrEqual(8);
+
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Open photo 1", exact: true })).toBeFocused();
+
+    await page.evaluate(() => window.scrollTo(0, 1600));
+    await expect(page.locator(".album-context")).toHaveAttribute("aria-hidden", "false");
+    expect(await page.evaluate(() => window.scrollY)).toBe(1600);
+  }
 });
 
 test("scrubber movement is preview-only and commits 2013 to 2001 once on release", async ({ page }) => {
