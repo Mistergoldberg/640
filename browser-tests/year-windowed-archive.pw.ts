@@ -170,10 +170,13 @@ async function waitForVisibleImagesReady(page: Page) {
 
 async function scrollUntilAlbumHeading(page: Page, albumId: string, expectedText: string, maxScroll = 140_000) {
   const heading = page.locator(`[data-entry-type="heading"][data-album-id="${albumId}"] h2`);
-  for (let top = 0; top <= maxScroll; top += 2400) {
+  for (let top = 0; top <= maxScroll; top += 1200) {
     await page.evaluate((scrollTop) => window.scrollTo(0, scrollTop), top);
+    await waitForAnimationFrames(page);
     if (await heading.evaluateAll((nodes, text) => nodes.some((node) => node.textContent?.trim() === text), expectedText)) {
-      await expect(heading.filter({ hasText: expectedText })).toBeVisible();
+      const matchingHeading = heading.filter({ hasText: expectedText });
+      await matchingHeading.scrollIntoViewIfNeeded();
+      await expect(matchingHeading).toBeInViewport();
       return;
     }
   }

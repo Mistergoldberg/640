@@ -108,7 +108,10 @@ async function surfaceBox(page: Page) {
 }
 
 async function playPlayer(page: Page) {
+  const player = page.getByLabel("Photo player");
   const button = page.locator('[data-player-control="playback"]');
+  await player.dispatchEvent("touchstart");
+  await expect(player).toHaveClass(/has-visible-controls/);
   if (await button.getAttribute("aria-label") === "Play") {
     await button.click();
   }
