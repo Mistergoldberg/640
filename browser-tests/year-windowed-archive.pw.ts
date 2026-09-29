@@ -242,6 +242,79 @@ test("archive uses the released header space without overlap or focus-order chan
   }
 });
 
+test("mobile archive keeps vertical touch navigation while suppressing grid pinch zoom", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 393, height: 852 },
+    screen: { width: 393, height: 852 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true
+  });
+  const page = await context.newPage();
+  await page.goto("/?year=2013");
+  await waitForYear(page, "2013");
+
+  const viewport = await page.locator('meta[name="viewport"]').getAttribute("content");
+  expect(viewport).toContain("width=device-width");
+  expect(viewport).not.toContain("user-scalable");
+  expect(viewport).not.toContain("maximum-scale");
+  await expect(page.locator(".collection-shell")).toHaveCSS("touch-action", "pan-y");
+  await expect(page.locator(".archive-timeline__scrubber")).toHaveCSS("touch-action", "none");
+
+  const session = await context.newCDPSession(page);
+  const initialScale = await page.evaluate(() => window.visualViewport?.scale || 1);
+  await session.send("Input.synthesizePinchGesture", {
+    x: 160,
+    y: 220,
+    scaleFactor: 1.8,
+    relativeSpeed: 800,
+    gestureSourceType: "touch"
+  });
+  expect(await page.evaluate(() => window.visualViewport?.scale || 1)).toBe(initialScale);
+
+  const initialScrollY = await page.evaluate(() => window.scrollY);
+  await session.send("Input.synthesizeScrollGesture", {
+    x: 160,
+    y: 280,
+    yDistance: -220,
+    speed: 800,
+    gestureSourceType: "touch"
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(initialScrollY);
+
+  const firstPhoto = page.getByRole("button", { name: "Open photo 1", exact: true });
+  await firstPhoto.scrollIntoViewIfNeeded();
+  const photoBox = await firstPhoto.boundingBox();
+  expect(photoBox).not.toBeNull();
+  await page.touchscreen.tap(photoBox!.x + photoBox!.width / 2, photoBox!.y + photoBox!.height / 2);
+  await expect(page.locator(".player-overlay")).toBeVisible();
+  await expect(page.locator(".player-surface")).toHaveCSS("touch-action", "none");
+  await page.goBack();
+  await expect(page.locator(".player-overlay")).toHaveCount(0);
+  await expect(page).toHaveURL(/year=2013/);
+
+  const edgeMetrics = await page.evaluate(() => {
+    const context = document.querySelector<HTMLElement>(".album-context")!;
+    const shell = document.querySelector<HTMLElement>(".collection-shell")!;
+    const contextBox = context.getBoundingClientRect();
+    const shellBox = shell.getBoundingClientRect();
+    return {
+      bodyOverflow: document.body.scrollWidth - window.innerWidth,
+      documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      contextRight: contextBox.right,
+      shellRight: shellBox.right,
+      shellPaddingRight: Number.parseFloat(getComputedStyle(shell).paddingRight),
+      contextShadow: getComputedStyle(context).boxShadow
+    };
+  });
+  expect(edgeMetrics.bodyOverflow).toBe(0);
+  expect(edgeMetrics.documentOverflow).toBe(0);
+  expect(edgeMetrics.contextRight).toBeLessThanOrEqual(edgeMetrics.shellRight - edgeMetrics.shellPaddingRight + 0.01);
+  expect(edgeMetrics.contextShadow).toContain("1px");
+
+  await context.close();
+});
+
 test("scrubber movement is preview-only and commits 2013 to 2001 once on release", async ({ page }) => {
   const manifests: string[] = [];
   page.on("request", (request) => {

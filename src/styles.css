@@ -78,9 +78,16 @@ img {
   border-top: 1px solid rgba(244, 241, 234, 0.08);
   color: rgba(244, 241, 234, 0.66);
   background: #090909;
+  box-shadow: 0 0 0 1px #090909;
   font-size: 0.78rem;
   font-weight: 720;
   line-height: 1.2;
+}
+
+@media (pointer: coarse) {
+  .collection-shell {
+    touch-action: pan-y;
+  }
 }
 
 .album-context--hidden {
