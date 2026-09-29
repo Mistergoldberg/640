@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import {
   ArrowLeft,
   ArrowRight,
-  Play,
 } from "lucide-react";
 import {
   PLAYER_ONBOARDING_CONTROL_FRAME_MS,
@@ -60,14 +59,6 @@ interface TargetRect {
   height: number;
 }
 
-function focusableElements(panel: HTMLElement, target: HTMLElement | null) {
-  const menuButtons = Array.from(document.querySelectorAll<HTMLElement>(".speed-menu button:not(:disabled)"));
-  const panelElements = Array.from(panel.querySelectorAll<HTMLElement>("button:not(:disabled), [tabindex]:not([tabindex='-1'])"));
-  return [target, ...menuButtons, ...panelElements].filter((element, index, values): element is HTMLElement =>
-    Boolean(element) && !element!.hasAttribute("disabled") && values.indexOf(element) === index
-  );
-}
-
 export function PlayerOnboardingTour({
   step,
   desktopInstructions,
@@ -79,13 +70,12 @@ export function PlayerOnboardingTour({
   onNext,
   onExit
 }: PlayerOnboardingProps) {
-  const panelRef = useRef<HTMLElement | null>(null);
+  const desktopPromptRef = useRef<HTMLButtonElement | null>(null);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const [imageRect, setImageRect] = useState<TargetRect | null>(null);
   const [browseSequenceIndex, setBrowseSequenceIndex] = useState(0);
   const copy = COPY[step];
   const instruction = desktopInstructions ? copy.desktop : copy.mobile;
-  const nextLabel = step === 1 ? "Speed" : step === 2 ? "Music" : "Play";
   const browseSequenceFrame = BROWSE_SEQUENCE[browseSequenceIndex];
   const sequenceFrame = step === 1
     ? reducedMotion ? "browse" : browseSequenceFrame.frame
@@ -108,7 +98,7 @@ export function PlayerOnboardingTour({
       timer = window.setTimeout(() => {
         sequenceIndex += 1;
         if (sequenceIndex < BROWSE_SEQUENCE.length) presentFrame();
-        else onNext();
+        else if (mobileInstructions) onNext();
       }, PLAYER_ONBOARDING_SEQUENCE_FRAME_MS);
     };
     presentFrame();
@@ -119,7 +109,7 @@ export function PlayerOnboardingTour({
   }, [mobileInstructions, onDemonstrate, onNext, reducedMotion, step]);
 
   useEffect(() => {
-    if (step === 1 || (reducedMotion && !mobileInstructions)) return;
+    if (!mobileInstructions || step === 1) return;
     const timer = window.setTimeout(() => {
       if (step === 2) onNext();
       else onExit(reducedMotion ? "auto-complete" : "complete");
@@ -161,7 +151,8 @@ export function PlayerOnboardingTour({
   }, [imageRef, step, targetRef]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => targetRef.current?.focus({ preventScroll: true }));
+    const focusTarget = () => desktopInstructions ? desktopPromptRef.current : targetRef.current;
+    const frame = window.requestAnimationFrame(() => focusTarget()?.focus({ preventScroll: true }));
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -169,22 +160,16 @@ export function PlayerOnboardingTour({
         onExit("escape");
         return;
       }
-      if (event.key !== "Tab" || !panelRef.current) return;
-      const focusable = focusableElements(panelRef.current, targetRef.current);
-      if (!focusable.length) return;
-      const current = focusable.indexOf(document.activeElement as HTMLElement);
-      const next = event.shiftKey
-        ? (current <= 0 ? focusable.length - 1 : current - 1)
-        : (current < 0 || current >= focusable.length - 1 ? 0 : current + 1);
+      if (event.key !== "Tab" || !desktopInstructions || !desktopPromptRef.current) return;
       event.preventDefault();
-      focusable[next]?.focus({ preventScroll: true });
+      desktopPromptRef.current.focus({ preventScroll: true });
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [onExit, step, targetRef]);
+  }, [desktopInstructions, onExit, step, targetRef]);
 
   const spotlightStyle = useMemo(() => targetRect ? {
     "--onboarding-target-top": `${targetRect.top}px`,
@@ -203,10 +188,10 @@ export function PlayerOnboardingTour({
     <div
       className={`player-onboarding${desktopInstructions ? "" : " player-onboarding--mobile"}${step === 1 && !reducedMotion ? " is-auto-sequencing" : ""}`}
       data-onboarding-frame={sequenceFrame}
-      role={mobileInstructions ? "dialog" : undefined}
-      aria-modal={mobileInstructions ? false : undefined}
-      aria-labelledby={mobileInstructions ? `${descriptionId}-title` : undefined}
-      aria-describedby={mobileInstructions ? descriptionId : undefined}
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={`${descriptionId}-title`}
+      aria-describedby={descriptionId}
     >
       <h2 className="sr-only" id={`${descriptionId}-title`}>{copy.title}</h2>
       <p className="sr-only" id={descriptionId}>{instruction}</p>
@@ -230,39 +215,30 @@ export function PlayerOnboardingTour({
         </>
       ) : null}
 
-      <div
-        className={`player-onboarding__center-prompt player-onboarding__center-prompt--${step === 1 ? "browse" : "controls"}`}
-        style={step === 1 ? imageStyle : undefined}
-        aria-hidden="true"
-      >
-        {prompt}
-      </div>
-
-      {desktopInstructions ? (
-        <section
-          ref={panelRef}
-          className="player-onboarding__action-bar"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby={`${descriptionId}-title`}
+      {desktopInstructions && step === 1 ? (
+        <button
+          ref={desktopPromptRef}
+          className="player-onboarding__center-prompt player-onboarding__center-prompt--browse player-onboarding__center-prompt--interactive"
+          style={imageStyle}
+          type="button"
+          onClick={() => onExit("complete")}
           aria-describedby={descriptionId}
         >
-          <button type="button" onClick={() => onExit("skip")} className="player-onboarding__skip">Skip</button>
-          <button
-            type="button"
-            onClick={step < 3 ? onNext : () => onExit("complete")}
-            className="player-onboarding__primary"
-            aria-label={step === 3 ? "Play slideshow" : nextLabel}
-          >
-            {nextLabel}
-            {step < 3
-              ? <ArrowRight aria-hidden="true" size={18} />
-              : <Play aria-hidden="true" size={17} fill="currentColor" />}
-          </button>
-        </section>
-      ) : null}
+          Tap to play
+        </button>
+      ) : (
+        <div
+          className={`player-onboarding__center-prompt player-onboarding__center-prompt--${step === 1 ? "browse" : "controls"}`}
+          style={step === 1 ? imageStyle : undefined}
+          aria-hidden="true"
+        >
+          {prompt}
+        </div>
+      )}
       <span className="sr-only" role="status" aria-live="polite">
-        {reducedMotion
+        {desktopInstructions
+          ? "Tap to play"
+          : reducedMotion
           ? `Step ${step} of 3, ${copy.title}`
           : `Step ${sequencePosition} of 6, ${step === 1 ? `${browseSequenceFrame.label}, Tap to play` : prompt}`}
       </span>

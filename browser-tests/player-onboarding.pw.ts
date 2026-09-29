@@ -20,16 +20,6 @@ async function playerIndex(page: Page) {
   return Number(match[1]);
 }
 
-async function expectActionBarInsideViewport(page: Page) {
-  expect(await page.locator(".player-onboarding__action-bar").evaluate((bar) => {
-    const rect = bar.getBoundingClientRect();
-    return rect.top >= 0
-      && rect.left >= 0
-      && rect.right <= window.innerWidth
-      && rect.bottom <= window.innerHeight;
-  })).toBe(true);
-}
-
 async function expectBrowseTeachingOverImage(page: Page) {
   const prompt = page.locator(".player-onboarding__center-prompt");
   await expect(prompt).toHaveText("Tap to play");
@@ -117,7 +107,7 @@ test("homepage autoplay never opens instructions without a Help request", async 
   expect(soundCloudRequests).toEqual([]);
 });
 
-test("Help opens the tutorial and teaches the real controls", async ({ page }) => {
+test("desktop Help exposes only the central play action before restoring normal controls", async ({ page }) => {
   const soundCloudRequests: string[] = [];
   page.on("request", (request) => {
     if (/soundcloud/i.test(request.url())) soundCloudRequests.push(request.url());
@@ -131,48 +121,53 @@ test("Help opens the tutorial and teaches the real controls", async ({ page }) =
   await expect(playback).toHaveAttribute("aria-label", "Play");
   const initialIndex = await playerIndex(page);
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.locator(".player-onboarding__action-bar")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".player-onboarding")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
   await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-1");
   await expect(page.locator(".player-onboarding__card")).toHaveCount(0);
-  await expect(page.getByRole("status")).toHaveText("Step 1 of 6, Next, Tap to play");
+  await expect(page.getByRole("status")).toHaveText("Tap to play");
   await expectBrowseTeachingOverImage(page);
-  await expect(page.getByRole("button", { name: "Close tutorial" })).toHaveCount(0);
-  await expect(page.getByText("Quick tour", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".player-onboarding__progress")).toHaveCount(0);
-  await expectActionBarInsideViewport(page);
-  await expect(playback).toBeDisabled();
-  await expect(page.locator(".player-surface")).toBeFocused();
+  const centralPlay = page.getByRole("button", { name: "Tap to play" });
+  await expect(centralPlay).toBeFocused();
+  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
+  await expect(page.locator(".player-controls")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Skip" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Next photo" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Playback speed/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Play music" })).toHaveCount(0);
+  await expect(page.locator(".player-surface")).toBeDisabled();
+  await expect(page.locator(".player-surface")).toHaveAttribute("aria-hidden", "true");
+  expect(await page.getByLabel("Photo player").evaluate((player) => Array.from(player.querySelectorAll<HTMLElement>("button, [href], [tabindex]"))
+    .filter((element) => element.tabIndex >= 0 && !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true")
+    .map((element) => element.getAttribute("aria-label") || element.textContent?.trim()))).toEqual(["Tap to play"]);
+  await page.keyboard.press("Tab");
+  await expect(centralPlay).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(centralPlay).toBeFocused();
+  await page.waitForTimeout(3_000);
+  await expect(page.getByLabel("Photo player")).toHaveAttribute("data-player-onboarding-phase", "instruction-1");
+  await expect(page.locator(".player-controls")).toHaveCount(0);
+  await expect(centralPlay).toBeFocused();
   expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
   expect(soundCloudRequests).toEqual([]);
 
-  await expect.poll(() => playerIndex(page)).toBe(initialIndex + 1);
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "previous-1", { timeout: 1_200 });
-  await expect.poll(() => playerIndex(page)).toBe(initialIndex);
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "next-2", { timeout: 1_200 });
-  await expect.poll(() => playerIndex(page)).toBe(initialIndex + 1);
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "previous-2", { timeout: 1_200 });
-  await expect.poll(() => playerIndex(page)).toBe(initialIndex);
-
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "speed", { timeout: 1_200 });
-  const speedPresentedAt = Date.now();
-  await expect(page.locator("[data-player-control='speed']")).toBeFocused();
-  await expectControlsPrompt(page, "Adjust Speed", "speed");
-  await expect(page.getByRole("status")).toHaveText("Step 5 of 6, Adjust Speed");
-
-  await expect(page.locator(".player-onboarding")).toHaveAttribute("data-onboarding-frame", "music", { timeout: 1_600 });
-  const musicPresentedAt = Date.now();
-  expect(musicPresentedAt - speedPresentedAt).toBeGreaterThanOrEqual(950);
-  await expect(page.locator("[data-player-control='music']")).toBeFocused();
-  await expectControlsPrompt(page, "Add Music", "music");
-  await expect(page.getByRole("status")).toHaveText("Step 6 of 6, Add Music");
-  expect(soundCloudRequests).toEqual([]);
-
-  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0, { timeout: 1_600 });
-  expect(Date.now() - musicPresentedAt).toBeGreaterThanOrEqual(950);
+  await centralPlay.press("Enter");
+  await expect(page.locator(".player-onboarding")).toHaveCount(0);
+  await expect(page.locator(".player-controls")).toBeVisible();
   await expect(playback).toHaveAttribute("aria-label", "Pause");
-  expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
+  await expect(page.getByRole("button", { name: "Player help" })).toBeFocused();
   expect(soundCloudRequests).toEqual([]);
+
+  const speed = page.locator("[data-player-control='speed']");
+  await speed.click();
+  await page.getByRole("radio", { name: "2 seconds per photo" }).click();
+  await expect(speed).toHaveAttribute("aria-label", "Playback speed: 2 seconds per photo");
+  const music = page.locator("[data-player-control='music']");
+  await music.click();
+  await expect(music).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".player-music-frame")).toHaveCount(1);
+  expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("1");
+  expect(await playerIndex(page)).toBeGreaterThanOrEqual(initialIndex);
 });
 
 test("returning and direct-photo visitors use permanent Help without automatic interruption", async ({ page }) => {
@@ -182,9 +177,9 @@ test("returning and direct-photo visitors use permanent Help without automatic i
   await page.waitForTimeout(3_000);
   await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
   await page.getByRole("button", { name: "Player help" }).click();
-  await expect(page.locator(".player-onboarding__action-bar")).toBeVisible();
-  await page.getByRole("button", { name: "Skip" }).click();
-  await expect(page.locator(".player-onboarding__action-bar")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Tap to play" })).toBeVisible();
+  await page.getByRole("button", { name: "Tap to play" }).click();
+  await expect(page.locator(".player-onboarding")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Player help" })).toBeFocused();
 
   await page.goto(`/?year=2002&photo=${DIRECT_PHOTO}`);

@@ -306,6 +306,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const isScreenModeActive = screenModeActive(controlState, nativeFullscreenActive);
   const onboardingStep = playerOnboardingStep(onboardingState.phase);
   const onboardingActive = onboardingStep !== null;
+  const desktopOnboardingActive = desktopInstructions && onboardingActive;
 
   const sendOnboarding = useCallback((event: PlayerOnboardingEvent) => {
     const next = playerOnboardingReducer(onboardingStateRef.current, event);
@@ -1332,6 +1333,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
       const activeOnboardingStep = playerOnboardingStep(onboardingStateRef.current.phase);
       if (activeOnboardingStep !== null) {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest(".player-onboarding__center-prompt--interactive")) return;
         if (activeOnboardingStep === 1 && event.key === "ArrowLeft") {
           event.preventDefault();
           navigateManually(-1);
@@ -1488,7 +1491,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           ref={surfaceRef}
           className={`player-surface player-surface--${imageMode}`}
           type="button"
-          disabled={onboardingStep !== null && onboardingStep !== 1}
+          disabled={desktopOnboardingActive || (onboardingStep !== null && onboardingStep !== 1)}
+          aria-hidden={desktopOnboardingActive ? true : undefined}
           onPointerDown={(event) => {
             if (event.pointerType === "mouse" && hasFinePointer()) {
               if (event.button !== 0 || !event.isPrimary) {
@@ -1610,7 +1614,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       </div>
 
       <div className={`player-control-frame ${controlState.speedMenuOpen ? "is-speed-menu-open" : ""}`}>
-        <PlayerControls
+        {!desktopOnboardingActive ? <PlayerControls
           atStart={atStart}
           atEnd={atEnd}
           primaryActionLabel={primaryActionLabel}
@@ -1645,7 +1649,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           onShare={() => void shareCurrentPhoto()}
           onToggleScreenMode={toggleScreenMode}
           onReveal={revealControls}
-        />
+        /> : null}
 
         <div className="player-topbar">
           <div className="player-topbar__actions">
