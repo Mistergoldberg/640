@@ -13,36 +13,47 @@ const DISPLAY_MAX_WIDTH = 640;
 const DISPLAY_MAX_HEIGHT = 480;
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
-const PHOTO_SOURCE_ROOT = APP_ROOT;
-const ORIGINAL_PHOTOS_ROOT = path.join(PHOTO_SOURCE_ROOT, "original-photos");
-const GENERATED_MEDIA_ROOT = path.join(PHOTO_SOURCE_ROOT, "generated", "library");
-const GENERATED_REPORTS_ROOT = path.join(PHOTO_SOURCE_ROOT, "generated", "reports");
 const STANDALONE_SOURCE_YEARS = new Set(["2001", "2013"]);
 const NOISE_FILENAMES = new Set([".DS_Store", "Thumbs.db", "desktop.ini"]);
-const BLOCKED_SOURCE_ROOTS = [
-  ".git",
-  "dist",
-  "generated",
-  "node_modules",
-  "public",
-  "scripts",
-  "src"
-].map((name) => path.join(APP_ROOT, name));
+
+function workspacePaths(appRoot = APP_ROOT) {
+  const root = path.resolve(appRoot);
+  return {
+    appRoot: root,
+    photoSourceRoot: root,
+    originalPhotosRoot: path.join(root, "original-photos"),
+    canonicalOutputs: {
+      data: path.join(root, "public"),
+      media: path.join(root, "generated", "library"),
+      reports: path.join(root, "generated", "reports"),
+      cache: path.join(root, "generated", "inventory-cache"),
+      journal: path.join(root, "generated", "journal")
+    },
+    blockedSourceRoots: [".git", "dist", "generated", "node_modules", "public", "scripts", "src"].map((name) => path.join(root, name))
+  };
+}
 
 function parseArgs(argv) {
   const args = {
     source: null,
     year: null,
     limit: null,
-    output: "public",
+    output: null,
+    dataRoot: null,
+    mediaRoot: null,
+    reportsRoot: null,
+    cacheRoot: null,
+    journalRoot: null,
+    stagingRoot: null,
     concurrency: DEFAULT_CONCURRENCY,
-    force: false
+    force: false,
+    plan: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === "--force") {
-      args.force = true;
+    if (token === "--force" || token === "--plan") {
+      args[token.slice(2)] = true;
       continue;
     }
 
@@ -65,6 +76,18 @@ function parseArgs(argv) {
       args.limit = Number(value);
     } else if (key === "output") {
       args.output = value;
+    } else if (key === "data-root") {
+      args.dataRoot = value;
+    } else if (key === "media-root") {
+      args.mediaRoot = value;
+    } else if (key === "reports-root") {
+      args.reportsRoot = value;
+    } else if (key === "cache-root") {
+      args.cacheRoot = value;
+    } else if (key === "journal-root") {
+      args.journalRoot = value;
+    } else if (key === "staging-root") {
+      args.stagingRoot = value;
     } else if (key === "concurrency") {
       args.concurrency = Number(value);
     } else {
@@ -82,6 +105,10 @@ function parseArgs(argv) {
 
   if (!Number.isInteger(args.concurrency) || args.concurrency < 1) {
     throw new Error("--concurrency must be a positive integer");
+  }
+
+  if (args.output && args.dataRoot) {
+    throw new Error("Use either legacy --output or --data-root, not both");
   }
 
   return args;
@@ -135,11 +162,135 @@ function leadingYear(value) {
   return match ? match[0] : null;
 }
 
-function resolveMaybeRelative(value) {
-  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(APP_ROOT, value);
+function resolveMaybeRelative(value, appRoot = APP_ROOT) {
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(appRoot, value);
 }
 
-async function scanFiles(sourceScope) {
+async function physicalPathWithoutCreating(targetPath) {
+  const unresolved = [];
+  let current = path.resolve(targetPath);
+
+  while (true) {
+    try {
+      const real = await fs.realpath(current);
+      return path.resolve(real, ...unresolved);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+        throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        throw error;
+      }
+      unresolved.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function outputRootValues(roots) {
+  return ["data", "media", "reports", "cache", "journal"].map((name) => [name, roots[name]]);
+}
+
+async function resolveOutputConfiguration(args, workspace) {
+  const canonical = {};
+  for (const [name, root] of outputRootValues(workspace.canonicalOutputs)) {
+    canonical[name] = await physicalPathWithoutCreating(root);
+  }
+
+  const stagingRoot = args.stagingRoot ? resolveMaybeRelative(args.stagingRoot, workspace.appRoot) : null;
+  const selected = stagingRoot
+    ? {
+        data: path.join(stagingRoot, "public"),
+        media: path.join(stagingRoot, "generated", "library"),
+        reports: path.join(stagingRoot, "generated", "reports"),
+        cache: path.join(stagingRoot, "generated", "inventory-cache"),
+        journal: path.join(stagingRoot, "generated", "journal")
+      }
+    : { ...workspace.canonicalOutputs };
+
+  const overrides = {
+    data: args.dataRoot || args.output,
+    media: args.mediaRoot,
+    reports: args.reportsRoot,
+    cache: args.cacheRoot,
+    journal: args.journalRoot
+  };
+  for (const [name, value] of Object.entries(overrides)) {
+    if (value) {
+      selected[name] = resolveMaybeRelative(value, workspace.appRoot);
+    }
+  }
+
+  const physical = {};
+  for (const [name, root] of outputRootValues(selected)) {
+    physical[name] = await physicalPathWithoutCreating(root);
+  }
+
+  return {
+    roots: Object.fromEntries(outputRootValues(selected).map(([name, root]) => [name, path.resolve(root)])),
+    physical,
+    canonical,
+    stagingRoot: stagingRoot ? path.resolve(stagingRoot) : null,
+    physicalStagingRoot: stagingRoot ? await physicalPathWithoutCreating(stagingRoot) : null,
+    explicit: Boolean(stagingRoot || Object.values(overrides).some(Boolean)),
+    individuallyConfigured: outputRootValues(overrides).filter(([, value]) => Boolean(value)).map(([name]) => name)
+  };
+}
+
+function rootsOverlap(left, right) {
+  return isInsideOrEqual(left, right) || isInsideOrEqual(right, left);
+}
+
+async function validateOutputConfiguration(args, outputConfig, sourceScope) {
+  const selected = outputRootValues(outputConfig.physical);
+
+  for (let leftIndex = 0; leftIndex < selected.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < selected.length; rightIndex += 1) {
+      const [leftName, leftRoot] = selected[leftIndex];
+      const [rightName, rightRoot] = selected[rightIndex];
+      if (rootsOverlap(leftRoot, rightRoot)) {
+        throw new Error(`Output roots must be independent: ${leftName} overlaps ${rightName}`);
+      }
+    }
+  }
+
+  const physicalSourceRoot = await physicalPathWithoutCreating(sourceScope.sourceRoot);
+  for (const [name, root] of selected) {
+    if (rootsOverlap(root, physicalSourceRoot)) {
+      throw new Error(`${name} output root must not overlap the read-only source root`);
+    }
+  }
+
+  if (!args.plan && outputConfig.explicit && !outputConfig.stagingRoot && outputConfig.individuallyConfigured.length !== 5) {
+    throw new Error("A non-plan isolated import must use --staging-root or configure all five output roots");
+  }
+
+  if (!args.plan && outputConfig.explicit) {
+    for (const [name, root] of selected) {
+      for (const [canonicalName, canonicalRoot] of outputRootValues(outputConfig.canonical)) {
+        if (rootsOverlap(root, canonicalRoot)) {
+          throw new Error(`${name} staging root aliases or overlaps canonical ${canonicalName} output`);
+        }
+      }
+    }
+  }
+
+  if (outputConfig.stagingRoot) {
+    for (const [name, root] of selected) {
+      if (!isInside(root, outputConfig.physicalStagingRoot)) {
+        throw new Error(`${name} output root must stay inside --staging-root`);
+      }
+    }
+    for (const [canonicalName, canonicalRoot] of outputRootValues(outputConfig.canonical)) {
+      if (rootsOverlap(outputConfig.physicalStagingRoot, canonicalRoot)) {
+        throw new Error(`Staging root aliases or overlaps canonical ${canonicalName} output`);
+      }
+    }
+  }
+}
+
+async function scanFiles(sourceScope, workspace) {
   const results = [];
   const skippedNoiseFiles = [];
   const skippedSymlinks = [];
@@ -167,7 +318,7 @@ async function scanFiles(sourceScope) {
         }
         skippedSymlinks.push({
           relativePath,
-          target: target ? toPosixPath(path.relative(PHOTO_SOURCE_ROOT, target)) : null,
+          target: target ? toPosixPath(path.relative(workspace.photoSourceRoot, target)) : null,
           escapesRoot
         });
         continue;
@@ -500,7 +651,7 @@ function comparePhotos(left, right) {
   return leftPath.localeCompare(rightPath, undefined, { numeric: true });
 }
 
-async function inspectPhoto(filePath, sourceScope, year) {
+async function inspectPhoto(filePath, sourceScope, year, includeContentHash = false) {
   const relativePath = toPosixPath(path.relative(sourceScope.sourceRoot, filePath));
   const stat = await fs.stat(filePath);
   const metadata = await sharp(filePath, { failOn: "none", limitInputPixels: false }).metadata();
@@ -523,6 +674,7 @@ async function inspectPhoto(filePath, sourceScope, year) {
   const rawHeight = metadata.height || 0;
   const rawOrientation = orientationFor(rawWidth, rawHeight);
   const visualOrientation = orientationFor(visualWidth, visualHeight);
+  const sha256 = includeContentHash ? crypto.createHash("sha256").update(await fs.readFile(filePath)).digest("hex") : null;
 
   return {
     absolutePath: filePath,
@@ -542,6 +694,7 @@ async function inspectPhoto(filePath, sourceScope, year) {
     rejectedDates: chosenDate.rejectedDates || [],
     sourceMtimeMs: stat.mtimeMs,
     sourceSize: stat.size,
+    sha256,
     rawWidth,
     rawHeight,
     rawOrientation,
@@ -881,16 +1034,16 @@ function publicUrlForYear(year) {
   return `data/${year}/index.json`;
 }
 
-async function resolveSourceScope(args) {
+async function resolveSourceScope(args, workspace) {
   if (args.source) {
-    const sourceRoot = resolveMaybeRelative(args.source);
-    if (!isInsideOrEqual(sourceRoot, PHOTO_SOURCE_ROOT)) {
+    const sourceRoot = resolveMaybeRelative(args.source, workspace.appRoot);
+    if (!isInsideOrEqual(sourceRoot, workspace.photoSourceRoot)) {
       throw new Error("Source folder must be inside the pixilation.org archive workspace");
     }
-    if (BLOCKED_SOURCE_ROOTS.some((blockedRoot) => isInsideOrEqual(sourceRoot, blockedRoot))) {
+    if (workspace.blockedSourceRoots.some((blockedRoot) => isInsideOrEqual(sourceRoot, blockedRoot))) {
       throw new Error("Source folder must not be inside app code, generated output, or dependency directories");
     }
-    if (sourceRoot === PHOTO_SOURCE_ROOT || sourceRoot === ORIGINAL_PHOTOS_ROOT) {
+    if (sourceRoot === workspace.photoSourceRoot || sourceRoot === workspace.originalPhotosRoot) {
       throw new Error("Use the default year resolver instead of scanning the entire archive root");
     }
     if (path.basename(sourceRoot) !== args.year && leadingYear(path.basename(sourceRoot)) !== args.year) {
@@ -898,14 +1051,14 @@ async function resolveSourceScope(args) {
     }
 
     return {
-      mode: isInsideOrEqual(sourceRoot, ORIGINAL_PHOTOS_ROOT) ? "original-archive-year" : "standalone-year",
-      sourceRoot: isInsideOrEqual(sourceRoot, ORIGINAL_PHOTOS_ROOT) ? ORIGINAL_PHOTOS_ROOT : sourceRoot,
+      mode: isInsideOrEqual(sourceRoot, workspace.originalPhotosRoot) ? "original-archive-year" : "standalone-year",
+      sourceRoot: isInsideOrEqual(sourceRoot, workspace.originalPhotosRoot) ? workspace.originalPhotosRoot : sourceRoot,
       scanRoots: [sourceRoot],
-      sourceFolders: [isInsideOrEqual(sourceRoot, ORIGINAL_PHOTOS_ROOT) ? toPosixPath(path.relative(ORIGINAL_PHOTOS_ROOT, sourceRoot)) : "."]
+      sourceFolders: [isInsideOrEqual(sourceRoot, workspace.originalPhotosRoot) ? toPosixPath(path.relative(workspace.originalPhotosRoot, sourceRoot)) : "."]
     };
   }
 
-  const standaloneRoot = path.join(PHOTO_SOURCE_ROOT, args.year);
+  const standaloneRoot = path.join(workspace.photoSourceRoot, args.year);
   if (STANDALONE_SOURCE_YEARS.has(args.year) && (await exists(standaloneRoot))) {
     return {
       mode: "standalone-year",
@@ -915,14 +1068,14 @@ async function resolveSourceScope(args) {
     };
   }
 
-  if (!(await exists(ORIGINAL_PHOTOS_ROOT))) {
-    throw new Error(`Original archive folder does not exist: ${toPosixPath(path.relative(PHOTO_SOURCE_ROOT, ORIGINAL_PHOTOS_ROOT))}`);
+  if (!(await exists(workspace.originalPhotosRoot))) {
+    throw new Error(`Original archive folder does not exist: ${toPosixPath(path.relative(workspace.photoSourceRoot, workspace.originalPhotosRoot))}`);
   }
 
-  const archiveEntries = await fs.readdir(ORIGINAL_PHOTOS_ROOT, { withFileTypes: true });
+  const archiveEntries = await fs.readdir(workspace.originalPhotosRoot, { withFileTypes: true });
   const scanRoots = [];
   for (const entry of archiveEntries) {
-    const absolutePath = path.join(ORIGINAL_PHOTOS_ROOT, entry.name);
+    const absolutePath = path.join(workspace.originalPhotosRoot, entry.name);
     const stat = await fs.lstat(absolutePath);
     if (stat.isSymbolicLink()) {
       continue;
@@ -932,7 +1085,7 @@ async function resolveSourceScope(args) {
     }
   }
   scanRoots.sort((left, right) =>
-    toPosixPath(path.relative(ORIGINAL_PHOTOS_ROOT, left)).localeCompare(toPosixPath(path.relative(ORIGINAL_PHOTOS_ROOT, right)), undefined, { numeric: true })
+    toPosixPath(path.relative(workspace.originalPhotosRoot, left)).localeCompare(toPosixPath(path.relative(workspace.originalPhotosRoot, right)), undefined, { numeric: true })
   );
 
   if (!scanRoots.length) {
@@ -941,9 +1094,9 @@ async function resolveSourceScope(args) {
 
   return {
     mode: "original-archive-year",
-    sourceRoot: ORIGINAL_PHOTOS_ROOT,
+    sourceRoot: workspace.originalPhotosRoot,
     scanRoots,
-    sourceFolders: scanRoots.map((folder) => toPosixPath(path.relative(ORIGINAL_PHOTOS_ROOT, folder)))
+    sourceFolders: scanRoots.map((folder) => toPosixPath(path.relative(workspace.originalPhotosRoot, folder)))
   };
 }
 
@@ -976,9 +1129,9 @@ function sourceScopeContains(sourceScope, relativePath) {
   return sourceScope.sourceFolders.some((folder) => folder === "." || relativePath === folder || relativePath.startsWith(`${folder}/`));
 }
 
-async function readArchiveInventory() {
+async function readArchiveInventory(reportsRoot) {
   try {
-    const reportPath = path.join(GENERATED_REPORTS_ROOT, "archive-inventory.json");
+    const reportPath = path.join(reportsRoot, "archive-inventory.json");
     return JSON.parse(await fs.readFile(reportPath, "utf8"));
   } catch {
     return null;
@@ -1032,7 +1185,7 @@ function duplicateSummaryFromPhotos(photos) {
   };
 }
 
-function summarizeSourceSelection({ args, sourceScope, scanned, inspectedPhotos, albumSummaries, inventorySelection }) {
+function summarizeSourceSelection({ args, sourceScope, scanned, inspectedPhotos, albumSummaries, inventorySelection, workspace }) {
   const offYearExif = inspectedPhotos.filter((photo) => photo.offYearExif);
   const rejectedDates = inspectedPhotos.flatMap((photo) => photo.rejectedDates.map((date) => ({ relativePath: photo.relativePath, ...date })));
   const selectedAlbumLabels = albumSummaries.map((album) => ({
@@ -1049,7 +1202,7 @@ function summarizeSourceSelection({ args, sourceScope, scanned, inspectedPhotos,
   return {
     year: args.year,
     sourceMode: sourceScope.mode,
-    sourceRoot: toPosixPath(path.relative(PHOTO_SOURCE_ROOT, sourceScope.sourceRoot)),
+    sourceRoot: toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot)),
     sourceFolders: sourceScope.sourceFolders,
     selectionPolicy:
       sourceScope.mode === "original-archive-year"
@@ -1094,40 +1247,284 @@ function summarizeSourceSelection({ args, sourceScope, scanned, inspectedPhotos,
   };
 }
 
-async function writeSourceSelectionReport(year, sourceSelection) {
-  await writeJson(path.join(GENERATED_REPORTS_ROOT, `${year}-source-selection-report.json`), sourceSelection);
+async function writeSourceSelectionReport(reportsRoot, year, sourceSelection) {
+  await writeJson(path.join(reportsRoot, `${year}-source-selection-report.json`), sourceSelection);
 }
 
-async function main() {
+function projectedAssets(photo, mediaRoot, year) {
+  const thumbnailKey = `${year}/thumbs/${photo.id}.jpg`;
+  const displayKey = `${year}/display/${photo.id}.jpg`;
+  return {
+    thumbnail: {
+      key: thumbnailKey,
+      path: path.join(mediaRoot, thumbnailKey),
+      dimensions: resizedToWidth(photo.sourceWidth, photo.sourceHeight, THUMB_WIDTH)
+    },
+    display: {
+      key: displayKey,
+      path: path.join(mediaRoot, displayKey),
+      dimensions: resizedInside(photo.sourceWidth, photo.sourceHeight, DISPLAY_MAX_WIDTH, DISPLAY_MAX_HEIGHT)
+    }
+  };
+}
+
+async function inspectExistingAsset(asset, photo, force) {
+  let stat = null;
+  try {
+    stat = await fs.stat(asset.path);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const reusable = Boolean(stat) && !force && (await shouldReuseAsset(asset.path, photo.sourceMtimeMs, asset.dimensions));
+  return {
+    key: asset.key,
+    path: asset.path,
+    exists: Boolean(stat),
+    existingBytes: stat?.size ?? null,
+    reusable,
+    proposedAction: reusable ? "reuse" : "generate",
+    existingKeyConflict: Boolean(stat) && !reusable
+  };
+}
+
+async function findStaleAlbumManifests(dataRoot, year, expectedManifestNames) {
+  const albumsRoot = path.join(dataRoot, "data", year, "albums");
+  if (!(await exists(albumsRoot))) {
+    return [];
+  }
+  const entries = await fs.readdir(albumsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !expectedManifestNames.has(entry.name))
+    .map((entry) => path.join(albumsRoot, entry.name))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+async function readPublishedYearIndex(dataRoot, year) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(dataRoot, "data", year, "index.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function exactDuplicateGroups(photos, physicalSourceRoot) {
+  const groups = new Map();
+  for (const photo of photos) {
+    if (!groups.has(photo.sha256)) {
+      groups.set(photo.sha256, []);
+    }
+    groups.get(photo.sha256).push(photo);
+  }
+  return Array.from(groups.entries())
+    .filter(([, group]) => group.length > 1)
+    .map(([sha256, group]) => ({
+      sha256,
+      bytesEach: group[0].sourceSize,
+      paths: group
+        .map((photo) => path.join(physicalSourceRoot, photo.relativePath))
+        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+      selectedPaths: group.map((photo) => photo.absolutePath).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+    }))
+    .sort((left, right) => right.paths.length - left.paths.length || left.paths[0].localeCompare(right.paths[0], undefined, { numeric: true }));
+}
+
+async function buildPlanReport({ args, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, startedAt }) {
+  const physicalSourceRoot = await fs.realpath(sourceScope.sourceRoot);
+  const yearDataRoot = path.join(outputConfig.roots.data, "data", args.year);
+  const expectedAssetKeys = new Set();
+  const assetInspection = await mapWithConcurrency(selectedPhotos, args.concurrency, async (photo) => {
+    const assets = projectedAssets(photo, outputConfig.roots.media, args.year);
+    expectedAssetKeys.add(assets.thumbnail.key);
+    expectedAssetKeys.add(assets.display.key);
+    return {
+      photo,
+      thumbnail: await inspectExistingAsset(assets.thumbnail, photo, args.force),
+      display: await inspectExistingAsset(assets.display, photo, args.force)
+    };
+  });
+  const albumSummaries = albums.map((album) => ({
+    id: album.id,
+    name: album.name,
+    count: album.items.length,
+    manifestPath: path.join(yearDataRoot, "albums", `${album.id}.json`),
+    manifestUrl: `data/${args.year}/albums/${album.id}.json`
+  }));
+  const expectedManifestNames = new Set(albumSummaries.map((album) => `${album.id}.json`));
+  const staleMediaKeys = await findStaleGeneratedAssets(outputConfig.roots.media, args.year, expectedAssetKeys);
+  const staleManifestPaths = await findStaleAlbumManifests(outputConfig.roots.data, args.year, expectedManifestNames);
+  const publishedIndex = await readPublishedYearIndex(outputConfig.roots.data, args.year);
+  const publishedAlbumIds = new Set((publishedIndex?.albums || []).map((album) => album.id));
+  const duplicateGroups = exactDuplicateGroups(selectedPhotos, physicalSourceRoot);
+  const offYearDates = selectedPhotos
+    .filter((photo) => photo.offYearExif)
+    .map((photo) => ({
+      sourcePath: path.join(physicalSourceRoot, photo.relativePath),
+      selectedPath: photo.absolutePath,
+      relativePath: photo.relativePath,
+      exifTime: photo.offYearExif.value,
+      exifYear: photo.offYearExif.year ?? yearForDate(new Date(photo.offYearExif.value)),
+      field: photo.offYearExif.field,
+      reason: photo.offYearExif.reason || `EXIF year differs from selected year ${args.year}`
+    }));
+  const sourceFolders = sourceScope.sourceFolders.map((folder) => {
+    const prefix = folder === "." ? "" : `${folder}/`;
+    const photos = selectedPhotos.filter((photo) => folder === "." || photo.relativePath === folder || photo.relativePath.startsWith(prefix));
+    return {
+      path: path.join(physicalSourceRoot, folder === "." ? "" : folder),
+      selectedPath: path.join(sourceScope.sourceRoot, folder === "." ? "" : folder),
+      relativePath: folder,
+      inferredYear: leadingYear(folder === "." ? path.basename(sourceScope.sourceRoot) : folder) || args.year,
+      importablePhotos: photos.length,
+      proposedAlbums: Array.from(new Set(photos.map((photo) => photo.album))).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+      representedByPublishedAlbumId: photos.some((photo) => publishedAlbumIds.has(photo.albumId))
+    };
+  });
+  const unsupportedFiles = report.unsupportedFiles.map((file) => ({
+    ...file,
+    sourcePath: path.join(physicalSourceRoot, file.relativePath),
+    selectedPath: path.join(sourceScope.sourceRoot, file.relativePath)
+  }));
+  const unreadableFiles = report.unreadableFiles.map((file) => ({
+    ...file,
+    sourcePath: path.join(physicalSourceRoot, file.relativePath),
+    selectedPath: path.join(sourceScope.sourceRoot, file.relativePath)
+  }));
+  const photos = assetInspection.map(({ photo, thumbnail, display }) => ({
+    sourcePath: path.join(physicalSourceRoot, photo.relativePath),
+    selectedPath: photo.absolutePath,
+    relativePath: photo.relativePath,
+    sourceBytes: photo.sourceSize,
+    sourceSha256: photo.sha256,
+    inferredYear: leadingYear(photo.relativePath) || args.year,
+    album: { id: photo.albumId, name: photo.album },
+    proposedPhotoId: photo.id,
+    proposedOutputs: {
+      albumManifestPath: path.join(yearDataRoot, "albums", `${photo.albumId}.json`),
+      thumbnail,
+      display
+    },
+    captureTime: photo.captureTime,
+    dateSource: photo.dateSource,
+    offYearExif: photo.offYearExif
+  }));
+  const existingKeyConflicts = photos.flatMap((photo) =>
+    [photo.proposedOutputs.thumbnail, photo.proposedOutputs.display]
+      .filter((asset) => asset.existingKeyConflict)
+      .map((asset) => ({ sourcePath: photo.sourcePath, photoId: photo.proposedPhotoId, ...asset }))
+  );
+  const existingKeys = photos.flatMap((photo) =>
+    [photo.proposedOutputs.thumbnail, photo.proposedOutputs.display]
+      .filter((asset) => asset.exists)
+      .map((asset) => ({ sourcePath: photo.sourcePath, photoId: photo.proposedPhotoId, ...asset }))
+  );
+  const unresolvedCuratorialDecisions = [];
+  const unpublishedFolders = sourceFolders.filter((folder) => !folder.representedByPublishedAlbumId);
+  if (unpublishedFolders.length) {
+    unresolvedCuratorialDecisions.push({
+      decision: "Approve source folders and album labels before publication",
+      paths: unpublishedFolders.map((folder) => folder.path),
+      note: "Selection by year prefix is an observed importer behavior, not publication approval. In particular, 2002 New remains unapproved."
+    });
+  }
+  if (offYearDates.length) {
+    unresolvedCuratorialDecisions.push({ decision: "Confirm treatment of off-year EXIF dates", count: offYearDates.length });
+  }
+  if (duplicateGroups.length) {
+    unresolvedCuratorialDecisions.push({ decision: "Confirm whether byte-identical source files should remain separate photos", count: duplicateGroups.length });
+  }
+  if (unsupportedFiles.length || unreadableFiles.length) {
+    unresolvedCuratorialDecisions.push({
+      decision: "Classify or remove unsupported and unreadable source files",
+      unsupported: unsupportedFiles.length,
+      unreadable: unreadableFiles.length
+    });
+  }
+
+  return {
+    schemaVersion: 1,
+    mode: "plan",
+    zeroWrite: true,
+    generatedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    configuration: {
+      workspaceRoot: workspace.appRoot,
+      sourceRoot: sourceScope.sourceRoot,
+      physicalSourceRoot,
+      scanRoots: sourceScope.scanRoots,
+      outputRoots: outputConfig.roots,
+      canonicalOutputRoots: workspace.canonicalOutputs,
+      stagingRoot: outputConfig.stagingRoot,
+      year: args.year,
+      limit: args.limit,
+      force: args.force,
+      concurrency: args.concurrency
+    },
+    observedFacts: {
+      selectionPolicy:
+        sourceScope.mode === "original-archive-year"
+          ? "All top-level original-photos entries whose names begin with the requested year."
+          : "The explicitly selected or standalone year folder.",
+      sourceMode: sourceScope.mode,
+      sourceFolders,
+      filesScanned: scanned.files.length,
+      skippedNoiseFiles: scanned.skippedNoiseFiles,
+      skippedSymlinks: scanned.skippedSymlinks,
+      importablePhotos: selectedPhotos.length,
+      proposedAlbums: albumSummaries,
+      unsupportedFiles,
+      unreadableFiles,
+      duplicateContentGroups: duplicateGroups,
+      offYearDates,
+      existingKeys,
+      existingKeyConflicts,
+      outputsThatWouldBecomeStale: {
+        mediaKeys: staleMediaKeys,
+        albumManifestPaths: staleManifestPaths
+      },
+      proposedSharedOutputs: {
+        catalogPath: path.join(outputConfig.roots.data, "data", "catalog.json"),
+        yearIndexPath: path.join(yearDataRoot, "index.json"),
+        sourceSelectionReportPath: path.join(outputConfig.roots.reports, `${args.year}-source-selection-report.json`),
+        importReportPath: path.join(outputConfig.roots.reports, `${args.year}-import-report.json`),
+        cacheRoot: outputConfig.roots.cache,
+        journalRoot: outputConfig.roots.journal,
+        note: "Cache and journal roots are isolated and reserved; this importer version does not write cache or journal entries."
+      },
+      photos
+    },
+    unresolvedCuratorialDecisions
+  };
+}
+
+async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   const startedAt = Date.now();
-  const args = parseArgs(process.argv.slice(2));
-  const sourceScope = await resolveSourceScope(args);
-  const dataOutputRoot = path.resolve(APP_ROOT, args.output);
-  const mediaOutputRoot = GENERATED_MEDIA_ROOT;
+  const writeStdout = runtime.writeStdout || ((value) => process.stdout.write(value));
+  const workspace = workspacePaths(runtime.appRoot || APP_ROOT);
+  const args = parseArgs(argv);
+  const outputConfig = await resolveOutputConfiguration(args, workspace);
+  const sourceScope = await resolveSourceScope(args, workspace);
+  await validateOutputConfiguration(args, outputConfig, sourceScope);
+  const dataOutputRoot = outputConfig.roots.data;
+  const mediaOutputRoot = outputConfig.roots.media;
+  const reportsOutputRoot = outputConfig.roots.reports;
   const yearDataRoot = path.join(dataOutputRoot, "data", args.year);
   const albumsDataRoot = path.join(yearDataRoot, "albums");
   const importMode = args.limit === null ? "complete" : "sample";
 
   if (!(await exists(sourceScope.sourceRoot))) {
-    throw new Error(`Source folder does not exist: ${toPosixPath(path.relative(PHOTO_SOURCE_ROOT, sourceScope.sourceRoot))}`);
+    throw new Error(`Source folder does not exist: ${toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot))}`);
   }
 
-  if (isInsideOrEqual(dataOutputRoot, sourceScope.sourceRoot)) {
-    throw new Error("Data output folder must not be inside the read-only source folder");
-  }
-
-  if (isInsideOrEqual(mediaOutputRoot, sourceScope.sourceRoot)) {
-    throw new Error("Generated media folder must not be inside the read-only source folder");
-  }
-
-  const scanned = await scanFiles(sourceScope);
+  const scanned = await scanFiles(sourceScope, workspace);
   const scannedFiles = scanned.files;
   const report = {
     generatedAt: new Date().toISOString(),
     year: args.year,
     sourceRootName: path.basename(sourceScope.sourceRoot),
     sourceMode: sourceScope.mode,
-    sourceRoot: toPosixPath(path.relative(PHOTO_SOURCE_ROOT, sourceScope.sourceRoot)),
+    sourceRoot: toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot)),
     sourceFolders: sourceScope.sourceFolders,
     mode: importMode,
     limit: args.limit,
@@ -1170,10 +1567,10 @@ async function main() {
     }
 
     try {
-      const photo = await inspectPhoto(filePath, sourceScope, args.year);
+      const photo = await inspectPhoto(filePath, sourceScope, args.year, args.plan);
       inspectedCount += 1;
-      if (inspectedCount % 500 === 0 || inspectedCount === scannedFiles.length - report.unsupported) {
-        process.stdout.write(`Inspected ${inspectedCount}/${scannedFiles.length - report.unsupported}\n`);
+      if (!args.plan && (inspectedCount % 500 === 0 || inspectedCount === scannedFiles.length - report.unsupported)) {
+        writeStdout(`Inspected ${inspectedCount}/${scannedFiles.length - report.unsupported}\n`);
       }
       return { photo };
     } catch (error) {
@@ -1226,7 +1623,7 @@ async function main() {
     count: album.items.length,
     manifestUrl: `data/${args.year}/albums/${album.id}.json`
   }));
-  const archiveInventory = await readArchiveInventory();
+  const archiveInventory = await readArchiveInventory(outputConfig.canonical.reports);
   const inventorySelection = selectedInventoryFiles(archiveInventory, sourceScope);
   report.sourceSelection = summarizeSourceSelection({
     args,
@@ -1234,7 +1631,8 @@ async function main() {
     scanned,
     inspectedPhotos: selectedPhotos,
     albumSummaries: preliminaryAlbumSummaries,
-    inventorySelection
+    inventorySelection,
+    workspace
   });
   report.sourceSelection.importerUnsupportedFiles = report.unsupportedFiles;
   report.sourceSelection.importerUnreadableFiles = report.unreadableFiles;
@@ -1243,14 +1641,30 @@ async function main() {
     ...report.sourceSelection.zeroByteFiles,
     ...report.unreadableFiles.filter((file) => file.bytes === 0)
   ];
-  await writeSourceSelectionReport(args.year, report.sourceSelection);
+  if (args.plan) {
+    const planReport = await buildPlanReport({
+      args,
+      workspace,
+      outputConfig,
+      sourceScope,
+      scanned,
+      report,
+      selectedPhotos,
+      albums: preliminaryAlbums,
+      startedAt
+    });
+    writeStdout(`${JSON.stringify(planReport, null, 2)}\n`);
+    return planReport;
+  }
+
+  await writeSourceSelectionReport(reportsOutputRoot, args.year, report.sourceSelection);
 
   let processedAssets = 0;
   const assetResults = await mapWithConcurrency(selectedPhotos, args.concurrency, async (photo, index) => {
     const assets = await writePhotoAsset(photo, mediaOutputRoot, args.year, args.force);
     processedAssets += 1;
     if (processedAssets % 250 === 0 || processedAssets === selectedPhotos.length) {
-      process.stdout.write(`Assets ${processedAssets}/${selectedPhotos.length}\n`);
+      writeStdout(`Assets ${processedAssets}/${selectedPhotos.length}\n`);
     }
 
     return { photo, assets, index };
@@ -1365,10 +1779,10 @@ async function main() {
 
   await writeJson(catalogPath, catalog);
   await writeJson(path.join(yearDataRoot, "index.json"), index);
-  await writeJson(path.join(GENERATED_REPORTS_ROOT, `${args.year}-import-report.json`), report);
+  await writeJson(path.join(reportsOutputRoot, `${args.year}-import-report.json`), report);
   await fs.rm(path.join(yearDataRoot, "import-report.json"), { force: true });
 
-  process.stdout.write(
+  writeStdout(
     [
       `Done in ${(report.totalProcessingTimeMs / 1000).toFixed(1)}s.`,
       `Scanned ${report.filesScanned}.`,
@@ -1382,9 +1796,14 @@ async function main() {
       `Stale generated assets ${report.staleGeneratedAssets.count}.`
     ].join(" ") + "\n"
   );
+  return report;
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+export { parseArgs, resolveOutputConfiguration, runImporter, validateOutputConfiguration, workspacePaths };
+
+if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+  runImporter().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

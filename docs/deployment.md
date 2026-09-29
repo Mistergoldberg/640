@@ -288,9 +288,20 @@ the long playback test was not repeated during the symlink-only promotion.
 ## Adding future years and curator corrections
 
 Keep each new source-year folder local and ignored. Review the importer options
-in `scripts/import-photos.mjs`, import the intended year with `npm run import:year
--- --year YYYY`, and inspect the private import report. The catalogue drives year
-navigation; do not hard-code a year list in components.
+in `scripts/import-photos.mjs`. First run the zero-write plan with `npm run
+import:plan -- --year YYYY`; it prints source selection, proposed IDs and paths,
+input problems, conflicts, and stale-output candidates as JSON on stdout. Planning
+does not create directories, reports, caches, temporary files, derivatives, or
+manifests.
+
+Never use a partial output override for a rehearsal. Use `--staging-root PATH` to
+place public data, media, reports, cache, and journal roots under one isolated
+directory, or provide all five independent options: `--data-root`, `--media-root`,
+`--reports-root`, `--cache-root`, and `--journal-root`. Staging roots that alias or
+overlap canonical outputs are rejected before source inspection. The legacy
+published command remains `npm run import:year -- --year YYYY`. Inspect the
+private import report after any approved staged or published import. The catalogue
+drives year navigation; do not hard-code a year list in components.
 
 Audit all public manifests and derivatives again, review labels, verify counts,
 publish only generated library keys, and make a new committed static release.
