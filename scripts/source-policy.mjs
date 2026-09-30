@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import exifr from "exifr";
 import sharp from "sharp";
 
-export const SOURCE_POLICY_SCHEMA_VERSION = 1;
+export const SOURCE_POLICY_SCHEMA_VERSION = 2;
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
@@ -22,6 +22,7 @@ const DECISION_ACTIONS = {
   "off-year-date": new Set(["use-folder-year", "map-photo-to-year", "exclude-exact"]),
   "source-move": new Set(["preserve-source-path"])
 };
+const GROUPABLE_DECISION_CATEGORIES = new Set(["unsupported-file", "unreadable-file", "off-year-date", "source-move"]);
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
@@ -232,6 +233,45 @@ function unresolvedDecision(category, key, subject, files) {
     allowedActions: Array.from(DECISION_ACTIONS[category] || []).sort(),
     note: null
   };
+}
+
+function decisionGroupKey(decision) {
+  if (!GROUPABLE_DECISION_CATEGORIES.has(decision.category)) return null;
+  if (decision.category === "unsupported-file") return `${decision.category}:${decision.subject.classification}`;
+  return `${decision.category}:all`;
+}
+
+function decisionGroupScope(decisionIds, files) {
+  return sha256(stableJson({ decisionIds, files }));
+}
+
+function createDecisionGroups(decisions) {
+  const buckets = groupBy(
+    decisions.filter((decision) => decisionGroupKey(decision)),
+    decisionGroupKey
+  );
+  const groups = [];
+  for (const [key, members] of buckets) {
+    const category = members[0].category;
+    const decisionIds = members.map((decision) => decision.id).sort();
+    const files = members
+      .flatMap((decision) => decision.files)
+      .sort((left, right) => left.path.localeCompare(right.path, undefined, { numeric: true }));
+    groups.push({
+      id: `decision-group:${sha256(key).slice(0, 16)}`,
+      category,
+      key,
+      status: "unresolved",
+      action: null,
+      decisionIds,
+      files,
+      scopeSha256: decisionGroupScope(decisionIds, files),
+      allowedActions: Array.from(DECISION_ACTIONS[category] || []).sort(),
+      exceptions: [],
+      note: "This group is an exact enumerated set, not a folder or pattern. Exceptions must repeat one member's exact path, bytes, and SHA-256."
+    });
+  }
+  return groups.sort((left, right) => left.key.localeCompare(right.key));
 }
 
 function groupBy(items, selector) {
@@ -469,6 +509,7 @@ export function createSourcePolicyTemplate(inspection) {
     policyId: sha256(`${inspection.inventory.sourceRoot}\0${inspection.inventory.inventorySha256}`).slice(0, 24),
     inventory: inspection.inventory,
     decisions: inspection.decisions,
+    decisionGroups: createDecisionGroups(inspection.decisions),
     note: "Every decision is unresolved by default. A policy file records human decisions; it does not infer approval from names, decoding, staging, or old reports."
   };
 }
@@ -531,13 +572,55 @@ function exactDecisionIdentity(recorded, current) {
   );
 }
 
+function exactDecisionGroupIdentity(recorded, current) {
+  return (
+    recorded.id === current.id &&
+    recorded.category === current.category &&
+    recorded.key === current.key &&
+    stableJson(recorded.decisionIds || []) === stableJson(current.decisionIds) &&
+    stableJson(recorded.files || []) === stableJson(current.files) &&
+    recorded.scopeSha256 === current.scopeSha256
+  );
+}
+
+function decisionFromGroup(current, group) {
+  const currentFiles = new Map(current.files.map((file) => [file.path, file]));
+  const exceptions = group.exceptions || [];
+  const matchingExceptions = exceptions.filter((exception) => currentFiles.has(exception.path));
+  const chosen = matchingExceptions.length ? matchingExceptions[0] : group;
+  return {
+    ...current,
+    status: chosen.status,
+    action: chosen.action,
+    year: chosen.year,
+    publicLabel: chosen.publicLabel,
+    excludedPaths: chosen.excludedPaths
+  };
+}
+
+function validateRecordedGroup(recorded, current) {
+  const errors = [];
+  if (!exactDecisionGroupIdentity(recorded, current)) errors.push("group-scope-or-identity-changed");
+  if (!Array.isArray(recorded.exceptions)) errors.push("group-exceptions-must-be-an-array");
+  const available = new Map(current.files.map((file) => [file.path, file]));
+  const seen = new Set();
+  for (const exception of recorded.exceptions || []) {
+    const expected = available.get(exception.path);
+    if (!expected || expected.bytes !== exception.bytes || expected.sha256 !== exception.sha256) errors.push(`invalid-exact-exception:${exception.path || "missing-path"}`);
+    if (seen.has(exception.path)) errors.push(`duplicate-exact-exception:${exception.path}`);
+    seen.add(exception.path);
+  }
+  return errors;
+}
+
 export function evaluateSourcePolicy(inspection, policy = null) {
   const effectivePolicy = policy || createSourcePolicyTemplate(inspection);
   const schemaErrors = [];
   if (effectivePolicy.schemaVersion !== SOURCE_POLICY_SCHEMA_VERSION) schemaErrors.push("Unsupported source-policy schemaVersion");
   if (!effectivePolicy.inventory || !Array.isArray(effectivePolicy.inventory.files)) schemaErrors.push("Policy inventory must contain an exact files array");
   if (!Array.isArray(effectivePolicy.decisions)) schemaErrors.push("Policy decisions must be an array");
-  if (containsBroadPattern(effectivePolicy.decisions)) schemaErrors.push("Broad pattern, glob, or regex decisions are forbidden");
+  if (!Array.isArray(effectivePolicy.decisionGroups)) schemaErrors.push("Policy decisionGroups must be an array");
+  if (containsBroadPattern(effectivePolicy.decisions) || containsBroadPattern(effectivePolicy.decisionGroups)) schemaErrors.push("Broad pattern, glob, or regex decisions are forbidden");
   const changes = inventoryChanges(effectivePolicy.inventory, inspection.inventory);
   const inventoryMatches =
     schemaErrors.length === 0 &&
@@ -553,20 +636,82 @@ export function evaluateSourcePolicy(inspection, policy = null) {
     changes.changed.length === 0;
   const policyDecisions = new Map((effectivePolicy.decisions || []).map((decision) => [decision.id, decision]));
   const currentDecisions = new Map(inspection.decisions.map((decision) => [decision.id, decision]));
+  if (policyDecisions.size !== (effectivePolicy.decisions || []).length) schemaErrors.push("Policy contains duplicate decision IDs");
+  for (const current of inspection.decisions) {
+    const recorded = policyDecisions.get(current.id);
+    if (!recorded) schemaErrors.push(`Policy is missing exact decision ${current.id}`);
+    else if (!exactDecisionIdentity(recorded, current)) schemaErrors.push(`Policy decision identity changed ${current.id}`);
+  }
+  for (const recorded of effectivePolicy.decisions || []) {
+    if (!currentDecisions.has(recorded.id)) schemaErrors.push(`Recorded decision no longer exists ${recorded.id}`);
+  }
+  const currentGroups = createDecisionGroups(inspection.decisions);
+  const policyGroups = new Map((effectivePolicy.decisionGroups || []).map((group) => [group.id, group]));
+  if (policyGroups.size !== (effectivePolicy.decisionGroups || []).length) schemaErrors.push("Policy contains duplicate decision-group IDs");
+  const groupByDecisionId = new Map();
+  const groupResults = [];
+  for (const currentGroup of currentGroups) {
+    const recordedGroup = policyGroups.get(currentGroup.id);
+    const errors = recordedGroup ? validateRecordedGroup(recordedGroup, currentGroup) : ["group-not-recorded"];
+    groupResults.push({
+      id: currentGroup.id,
+      category: currentGroup.category,
+      key: currentGroup.key,
+      status: errors.length ? "invalid" : recordedGroup.status,
+      errors,
+      affectedFileCount: currentGroup.files.length,
+      affectedPaths: currentGroup.files.map((file) => file.path),
+      exceptionPaths: (recordedGroup?.exceptions || []).map((exception) => exception.path)
+    });
+    if (recordedGroup && errors.length === 0) {
+      for (const decisionId of currentGroup.decisionIds) groupByDecisionId.set(decisionId, recordedGroup);
+    }
+  }
+  for (const recordedGroup of effectivePolicy.decisionGroups || []) {
+    if (!currentGroups.some((group) => group.id === recordedGroup.id)) {
+      groupResults.push({
+        id: recordedGroup.id,
+        category: recordedGroup.category,
+        key: recordedGroup.key,
+        status: "invalid",
+        errors: ["recorded-group-no-longer-matches-current-sources"],
+        affectedFileCount: (recordedGroup.files || []).length,
+        affectedPaths: (recordedGroup.files || []).map((file) => file.path),
+        exceptionPaths: (recordedGroup.exceptions || []).map((exception) => exception.path)
+      });
+    }
+  }
+  const invalidGroups = groupResults.filter((group) => group.errors.length);
+  if (invalidGroups.length) schemaErrors.push(...invalidGroups.map((group) => `Invalid decision group ${group.id}: ${group.errors.join(",")}`));
   const decisionResults = [];
   for (const current of inspection.decisions) {
     const recorded = policyDecisions.get(current.id);
+    const recordedGroup = groupByDecisionId.get(current.id);
     let status = "unresolved";
     let reason = "decision-not-recorded";
-    if (recorded) {
+    let action = recorded?.action ?? null;
+    if (recorded?.status === "resolved") {
       if (!exactDecisionIdentity(recorded, current)) reason = "decision-scope-or-identity-changed";
-      else if (recorded.status !== "resolved") reason = "decision-unresolved";
       else if (!validResolvedAction(recorded)) reason = "invalid-or-incomplete-action";
       else if (!matchesCurrentImporterBehavior(recorded)) reason = "action-not-implemented-by-current-importer";
       else {
         status = "resolved";
         reason = "exact-decision-recorded";
       }
+    } else if (recordedGroup) {
+      const groupedDecision = decisionFromGroup(current, recordedGroup);
+      action = groupedDecision.action ?? null;
+      const exception = (recordedGroup.exceptions || []).find((item) => current.files.some((file) => file.path === item.path));
+      if (groupedDecision.status !== "resolved") reason = exception ? "exact-group-exception-unresolved" : "decision-group-unresolved";
+      else if (!validResolvedAction(groupedDecision)) reason = "invalid-or-incomplete-group-action";
+      else if (!matchesCurrentImporterBehavior(groupedDecision)) reason = "group-action-not-implemented-by-current-importer";
+      else {
+        status = "resolved";
+        reason = exception ? "exact-group-exception-recorded" : "exact-group-decision-recorded";
+      }
+    } else if (recorded) {
+      if (!exactDecisionIdentity(recorded, current)) reason = "decision-scope-or-identity-changed";
+      else reason = "decision-unresolved";
     }
     decisionResults.push({
       id: current.id,
@@ -576,7 +721,7 @@ export function evaluateSourcePolicy(inspection, policy = null) {
       reason,
       affectedFileCount: current.files.length,
       affectedPaths: current.files.map((file) => file.path),
-      action: recorded?.action ?? null
+      action
     });
   }
   for (const recorded of effectivePolicy.decisions || []) {
@@ -615,6 +760,7 @@ export function evaluateSourcePolicy(inspection, policy = null) {
       changed: changes.changed.length
     },
     decisionResults,
+    groupResults,
     unresolvedDecisionIds: unresolved.map((decision) => decision.id),
     policySha256: sha256(stableJson(effectivePolicy)),
     decisionSetSha256: inspection.decisionSetSha256
@@ -685,6 +831,17 @@ export function renderDecisionReport(inspection, eligibility) {
     `- Published IDs missing from this selected source: ${findings.missingPublishedPhotoIds.length}`,
     markdownPathList(findings.missingPublishedPhotoIds, (id) => `\`${id}\``),
     "",
+    "## Exact grouped decisions",
+    "",
+    ...eligibility.groupResults.flatMap((group) => [
+      `### ${group.key}`,
+      "",
+      `- Status: ${group.status}`,
+      `- Exact members: ${group.affectedFileCount}`,
+      `- Exceptions: ${group.exceptionPaths.length}`,
+      markdownPathList(group.affectedPaths, (item) => `\`${item}\``),
+      ""
+    ]),
     "## Inventory drift",
     "",
     `- Added: ${eligibility.inventoryChanges.added.length}`,

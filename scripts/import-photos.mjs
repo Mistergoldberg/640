@@ -1578,6 +1578,23 @@ async function inspectSourceGate(args, sourceScope, workspace) {
   };
 }
 
+function assertCanonicalSourceEligibility(sourceGate) {
+  const eligibility = sourceGate.eligibility;
+  if (eligibility.publicationEligible) return;
+  const changes = eligibility.inventoryChanges;
+  throw new Error(
+    [
+      "Canonical import blocked by source-policy eligibility gate.",
+      `Inventory match: ${eligibility.inventoryMatches}.`,
+      `Unresolved decisions: ${eligibility.counts.unresolved}.`,
+      `Added: ${changes.added.length}; removed: ${changes.removed.length}; changed: ${changes.changed.length}.`,
+      eligibility.schemaErrors.length ? `Policy errors: ${eligibility.schemaErrors.join(" | ")}.` : null
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
 async function invokeFault(runtime, point, details = {}) {
   if (runtime.injectFault) {
     await runtime.injectFault(point, details);
@@ -2416,6 +2433,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   const mediaOutputRoot = outputConfig.roots.media;
   const reportsOutputRoot = outputConfig.roots.reports;
   const isStagedRun = Boolean(outputConfig.stagingRoot);
+  const isCanonicalRun = !args.plan && !isStagedRun;
   const yearDataRoot = path.join(dataOutputRoot, "data", args.year);
   const albumsDataRoot = path.join(yearDataRoot, "albums");
   const importMode = args.limit === null ? "complete" : "sample";
@@ -2424,7 +2442,11 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     throw new Error(`Source folder does not exist: ${toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot))}`);
   }
 
-  const sourceGate = args.plan || isStagedRun ? await inspectSourceGate(args, sourceScope, workspace) : null;
+  if (isCanonicalRun && !args.sourcePolicy) {
+    throw new Error("Canonical import requires --source-policy with a fresh, exact, fully resolved policy; no environment variable or --force bypass is supported");
+  }
+  const sourceGate = await inspectSourceGate(args, sourceScope, workspace);
+  if (isCanonicalRun) assertCanonicalSourceEligibility(sourceGate);
   const scanned = await scanFiles(sourceScope, workspace);
   const scannedFiles = scanned.files;
   const report = {

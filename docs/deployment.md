@@ -314,7 +314,12 @@ source root, exact physical scan roots, selected year, every selected relative
 path, byte length and SHA-256, symlinks, totals, and the complete inventory
 digest. Every `decisions` entry has a stable ID, category, subject, exact file
 signatures, scope digest, allowed actions, and starts with
-`status: "unresolved"` and `action: null`. Categories cover folder/year mapping, public
+`status: "unresolved"` and `action: null`. Schema v2 also supplies
+`decisionGroups` for categories that share one action. A group contains every
+member decision ID and every exact path, byte length, and source SHA-256; its
+scope digest binds the complete enumerated set. It is never a folder or glob.
+An exception must repeat one member's exact path, bytes, and SHA-256 before it
+can carry its own status and action. Categories cover folder/year mapping, public
 album labels, unsupported or unreadable files, duplicate-content groups,
 off-year EXIF dates, and published source paths whose rename would change an
 existing photo ID. Exclusion and repair choices are per exact file; pattern,
@@ -350,6 +355,24 @@ isolated staging root for inspection, but its receipt remains
 Pass the same policy to staging with `--source-policy`; the run identity binds
 its policy digest, inventory, decision set, and eligibility result.
 
+The canonical writer is stricter than staging. Every non-plan run without an
+isolated `--staging-root` must provide `--source-policy`; immediately before the
+first canonical write the importer regenerates the physical inventory and
+requires `publicationEligible: true`. Missing, unresolved, stale, mismatched,
+or incompatible policies exit nonzero. `--force`, `--limit`, direct Node
+invocation, npm aliases, and environment variables do not bypass this gate.
+Planning and isolated staging remain available with unresolved policy state.
+
+Generate the focused, zero-write 2002 review packet on stdout with:
+
+```sh
+npm run source:packet:2002
+```
+
+Its readable label ideas are suggestions, not policy decisions. It contrasts
+the exact include/exclude effects of `2002 New` and lists every off-year,
+unsupported, and ignored path Jared must review.
+
 Never use a partial output override for a rehearsal. Use `--staging-root PATH` to
 place public data, media, reports, cache, and journal roots under one isolated
 directory, or provide all five independent options: `--data-root`, `--media-root`,
@@ -367,10 +390,24 @@ atomic renames, manifests are sealed in dependency order, and
 `generated/journal/complete.json` exists only after the closed-world output audit
 passes. A staging receipt is never publication approval.
 
-The legacy published command remains `npm run import:year -- --year YYYY` and
-retains its existing behavior when no staging root is selected. Inspect the private
-import report and staged receipt after any approved rehearsal. The catalogue drives
-year navigation; do not hard-code a year list in components.
+The canonical command is now:
+
+```sh
+npm run import:year -- --year YYYY \
+  --source-policy /path/to/reviewed-policy.json
+```
+
+It retains existing IDs,
+ordering, duplicate handling, encoders, manifests, and media keys after the
+eligibility gate passes. Inspect the private import report and staged receipt
+after any approved rehearsal. The catalogue drives year navigation; do not
+hard-code a year list in components.
+
+For before/after preservation checks, use `npm run canonical:inventory`. Its
+ledger hash is SHA-256 over JSON for a path-sorted array of each relative path,
+byte length, and file SHA-256. Do not compare this digest directly with an
+earlier cycle that hashed the same files using a different serialization; first
+compare file counts and bytes, then recompute both sides with this command.
 
 Audit all public manifests and derivatives again, review labels, verify counts,
 publish only generated library keys, and make a new committed static release.

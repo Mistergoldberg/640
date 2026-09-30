@@ -60,6 +60,25 @@ function resolvePolicy(template) {
   return policy;
 }
 
+function resolveGroupedPolicy(template) {
+  const policy = structuredClone(template);
+  const groupedDecisionIds = new Set(policy.decisionGroups.flatMap((group) => group.decisionIds));
+  for (const group of policy.decisionGroups) {
+    group.status = "resolved";
+    if (group.category === "unsupported-file" || group.category === "unreadable-file") group.action = "exclude-exact";
+    else if (group.category === "off-year-date") group.action = "use-folder-year";
+    else if (group.category === "source-move") group.action = "preserve-source-path";
+  }
+  const individuallyResolved = resolvePolicy(policy);
+  for (const decision of individuallyResolved.decisions) {
+    if (groupedDecisionIds.has(decision.id)) {
+      decision.status = "unresolved";
+      decision.action = null;
+    }
+  }
+  return individuallyResolved;
+}
+
 async function inspect(f) {
   return inspectSourcePolicy({ sourceRoot: f.sourceRoot, publicDataRoot: f.publicRoot, concurrency: 2 });
 }
@@ -80,6 +99,7 @@ test("fresh inspection reports special cases and defaults every decision to unre
   assert.equal(inspection.findings.corrupt2010Jpegs.length, 1);
   assert.equal(inspection.findings.unsupported2012Jpegs.length, 2);
   assert(policy.decisions.every((decision) => decision.status === "unresolved" && decision.action === null));
+  assert(policy.decisionGroups.every((group) => group.status === "unresolved" && group.action === null && group.files.length > 0));
   assert.equal(eligibility.publicationEligible, false);
   assert.equal(eligibility.inventoryMatches, true);
   assert.equal(eligibility.counts.resolved, 0);
@@ -87,6 +107,69 @@ test("fresh inspection reports special cases and defaults every decision to unre
   assert.match(report, /Publication eligible: \*\*NO\*\*/);
   assert.match(report, /2002 New\/Album One\/a\.jpg/);
   assert.match(report, /2004-2006\/ambiguous\.jpg/);
+});
+
+test("exact grouped decisions and exact-file exceptions resolve members and fail closed on scope changes", async (t) => {
+  const f = await fixture();
+  t.after(() => fs.rm(f.appRoot, { recursive: true, force: true }));
+  const inspection = await inspect(f);
+  const policy = resolveGroupedPolicy(createSourcePolicyTemplate(inspection));
+  const unreadableGroup = policy.decisionGroups.find((group) => group.category === "unreadable-file");
+  assert(unreadableGroup.files.length >= 3);
+  const exceptionFile = unreadableGroup.files[0];
+  unreadableGroup.exceptions.push({ ...exceptionFile, status: "resolved", action: "exclude-exact", note: "Reviewed exact fixture file" });
+
+  const eligible = evaluateSourcePolicy(inspection, policy);
+  assert.equal(eligible.publicationEligible, true);
+  assert(eligible.decisionResults.some((decision) => decision.reason === "exact-group-exception-recorded"));
+  assert(eligible.decisionResults.some((decision) => decision.reason === "exact-group-decision-recorded"));
+  assert.match(renderDecisionReport(inspection, eligible), new RegExp(exceptionFile.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const changedException = structuredClone(policy);
+  changedException.decisionGroups.find((group) => group.id === unreadableGroup.id).exceptions[0].sha256 = "0".repeat(64);
+  const changedExceptionResult = evaluateSourcePolicy(inspection, changedException);
+  assert.equal(changedExceptionResult.publicationEligible, false);
+  assert(changedExceptionResult.schemaErrors.some((error) => error.includes("invalid-exact-exception")));
+
+  const partialGroup = structuredClone(policy);
+  partialGroup.decisionGroups.find((group) => group.id === unreadableGroup.id).files.pop();
+  assert.equal(evaluateSourcePolicy(inspection, partialGroup).publicationEligible, false);
+
+  const tamperedCoveredDecision = structuredClone(policy);
+  const coveredDecision = tamperedCoveredDecision.decisions.find((decision) => unreadableGroup.decisionIds.includes(decision.id));
+  coveredDecision.subject.decodeError = "silently changed while group remained exact";
+  const tamperedResult = evaluateSourcePolicy(inspection, tamperedCoveredDecision);
+  assert.equal(tamperedResult.publicationEligible, false);
+  assert(tamperedResult.schemaErrors.some((error) => error.includes("Policy decision identity changed")));
+
+  await jpeg(path.join(f.sourceRoot, "2010-4", "new-corrupt-scope.jpg"), { r: 1, g: 2, b: 3 });
+  const changedInspection = await inspect(f);
+  const changedScope = evaluateSourcePolicy(changedInspection, policy);
+  assert.equal(changedScope.publicationEligible, false);
+  assert.equal(changedScope.inventoryChanges.added.length, 1);
+});
+
+test("grouped decisions invalidate on added, removed, renamed, or byte-changed members", async (t) => {
+  for (const operation of ["added", "removed", "renamed", "changed"]) {
+    const f = await fixture();
+    t.after(() => fs.rm(f.appRoot, { recursive: true, force: true }));
+    const inspection = await inspect(f);
+    const policy = resolveGroupedPolicy(createSourcePolicyTemplate(inspection));
+    const notesPath = path.join(f.sourceRoot, "2002 New", "notes.txt");
+    if (operation === "added") await fs.writeFile(path.join(f.sourceRoot, "2002 New", "added.txt"), "new exact member\n");
+    else if (operation === "removed") await fs.unlink(notesPath);
+    else if (operation === "renamed") await fs.rename(notesPath, path.join(f.sourceRoot, "2002 New", "renamed-notes.txt"));
+    else await fs.writeFile(notesPath, "changed bytes at the same path\n");
+
+    const fresh = await inspect(f);
+    const result = evaluateSourcePolicy(fresh, policy);
+    assert.equal(result.publicationEligible, false, operation);
+    assert(
+      result.inventoryChanges.added.length + result.inventoryChanges.removed.length + result.inventoryChanges.changed.length > 0,
+      `${operation} did not invalidate the exact inventory`
+    );
+    assert(result.groupResults.some((group) => group.status === "invalid"), `${operation} did not invalidate an exact group`);
+  }
 });
 
 test("an exact fully resolved policy is eligible while partial and broad policies fail closed", async (t) => {

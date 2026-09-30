@@ -14,10 +14,12 @@
     "test:importer": "node --test scripts/*node-test.mjs",
     "source:policy": "node scripts/source-policy.mjs",
     "source:eligibility": "node scripts/source-policy.mjs --require-eligible",
+    "source:packet:2002": "node scripts/decision-packet-2002.mjs",
     "import:2013:sample": "npm run import:year -- --year 2013 --limit 300",
     "import:2013": "npm run import:year -- --year 2013",
     "import": "npm run import:year --",
     "archive:inventory": "node scripts/archive-inventory.mjs",
+    "canonical:inventory": "node scripts/canonical-inventory.mjs",
     "release:audit": "node scripts/release-audit.mjs",
     "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
     "media:upload": "node scripts/media-upload-r2.mjs --execute"
