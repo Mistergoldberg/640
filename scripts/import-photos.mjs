@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import exifr from "exifr";
@@ -11,6 +13,23 @@ const DEFAULT_CONCURRENCY = 6;
 const THUMB_WIDTH = 300;
 const DISPLAY_MAX_WIDTH = 640;
 const DISPLAY_MAX_HEIGHT = 480;
+const execFileAsync = promisify(execFile);
+const STAGED_RUN_SCHEMA_VERSION = 1;
+const STAGED_RECIPE = Object.freeze({
+  version: 1,
+  thumbnail: { width: THUMB_WIDTH, withoutEnlargement: true, format: "jpeg", quality: 76, mozjpeg: true, autoOrient: true },
+  display: {
+    width: DISPLAY_MAX_WIDTH,
+    height: DISPLAY_MAX_HEIGHT,
+    fit: "inside",
+    withoutEnlargement: true,
+    format: "jpeg",
+    quality: 84,
+    mozjpeg: true,
+    autoOrient: true
+  },
+  json: { indentation: 2, trailingNewline: true }
+});
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
 const STANDALONE_SOURCE_YEARS = new Set(["2001", "2013"]);
@@ -173,6 +192,12 @@ async function physicalPathWithoutCreating(targetPath) {
   while (true) {
     try {
       const real = await fs.realpath(current);
+      if (unresolved.length) {
+        const stat = await fs.stat(real);
+        if (!stat.isDirectory()) {
+          throw new Error(`Path has a non-directory ancestor: ${targetPath}`);
+        }
+      }
       return path.resolve(real, ...unresolved);
     } catch (error) {
       if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
@@ -262,8 +287,8 @@ async function validateOutputConfiguration(args, outputConfig, sourceScope) {
     }
   }
 
-  if (!args.plan && outputConfig.explicit && !outputConfig.stagingRoot && outputConfig.individuallyConfigured.length !== 5) {
-    throw new Error("A non-plan isolated import must use --staging-root or configure all five output roots");
+  if (!args.plan && outputConfig.explicit && !outputConfig.stagingRoot) {
+    throw new Error("A non-plan isolated import must use --staging-root; individual root overrides are allowed only inside it");
   }
 
   if (!args.plan && outputConfig.explicit) {
@@ -1330,6 +1355,821 @@ function exactDuplicateGroups(photos, physicalSourceRoot) {
     .sort((left, right) => right.paths.length - left.paths.length || left.paths[0].localeCompare(right.paths[0], undefined, { numeric: true }));
 }
 
+function stableJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableJsonValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableJsonValue(value[key])]));
+  }
+  return value;
+}
+
+function stableJson(value) {
+  return JSON.stringify(stableJsonValue(value));
+}
+
+function sha256Bytes(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+async function fileDigest(filePath) {
+  const bytes = await fs.readFile(filePath);
+  return { bytes: bytes.length, sha256: sha256Bytes(bytes) };
+}
+
+function jsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function syncPath(filePath) {
+  const handle = await fs.open(filePath, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncDirectory(directory) {
+  let handle = null;
+  try {
+    handle = await fs.open(directory, "r");
+    await handle.sync();
+  } catch (error) {
+    if (!new Set(["EINVAL", "ENOTSUP", "EISDIR", "EBADF"]).has(error?.code)) {
+      throw error;
+    }
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function assertTargetInsideRoot(targetPath, rootPath) {
+  const physicalRoot = await physicalPathWithoutCreating(rootPath);
+  const physicalTarget = await physicalPathWithoutCreating(targetPath);
+  if (!isInside(physicalTarget, physicalRoot)) {
+    throw new Error(`Staged output escapes its selected root: ${targetPath}`);
+  }
+}
+
+async function assertNoSymlinks(rootPath) {
+  if (!(await exists(rootPath))) {
+    return;
+  }
+  async function walk(directory) {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolutePath = path.join(directory, entry.name);
+      const stat = await fs.lstat(absolutePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Staging tree contains a symlink: ${absolutePath}`);
+      }
+      if (stat.isDirectory()) {
+        await walk(absolutePath);
+      }
+    }
+  }
+  await walk(rootPath);
+}
+
+async function walkRegularFiles(rootPath) {
+  const files = [];
+  if (!(await exists(rootPath))) {
+    return files;
+  }
+  async function walk(directory) {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const absolutePath = path.join(directory, entry.name);
+      const stat = await fs.lstat(absolutePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Staging tree contains a symlink: ${absolutePath}`);
+      }
+      if (stat.isDirectory()) {
+        await walk(absolutePath);
+      } else if (stat.isFile()) {
+        files.push(absolutePath);
+      } else {
+        throw new Error(`Staging tree contains a non-regular entry: ${absolutePath}`);
+      }
+    }
+  }
+  await walk(rootPath);
+  return files;
+}
+
+function temporaryName(targetPath, runId) {
+  return path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.pixilation-tmp-${runId}-${crypto.randomBytes(6).toString("hex")}`);
+}
+
+async function removeLeftoverTemporaryFiles(stagingRoot) {
+  let removed = 0;
+  if (!(await exists(stagingRoot))) {
+    return removed;
+  }
+  async function walk(directory) {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolutePath = path.join(directory, entry.name);
+      const stat = await fs.lstat(absolutePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Staging tree contains a symlink: ${absolutePath}`);
+      }
+      if (stat.isDirectory()) {
+        await walk(absolutePath);
+      } else if (stat.isFile() && entry.name.includes(".pixilation-tmp-")) {
+        await fs.unlink(absolutePath);
+        removed += 1;
+      }
+    }
+  }
+  await walk(stagingRoot);
+  return removed;
+}
+
+async function atomicWriteArtifact({ targetPath, selectedRoot, runId, writeTemporary, verifyTemporary }) {
+  await assertTargetInsideRoot(targetPath, selectedRoot);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await assertTargetInsideRoot(targetPath, selectedRoot);
+  const temporaryPath = temporaryName(targetPath, runId);
+  await assertTargetInsideRoot(temporaryPath, selectedRoot);
+  try {
+    await writeTemporary(temporaryPath);
+    await syncPath(temporaryPath);
+    const verification = await verifyTemporary(temporaryPath);
+    if (!verification) {
+      throw new Error(`Temporary staged output failed verification: ${temporaryPath}`);
+    }
+    await fs.rename(temporaryPath, targetPath);
+    await syncDirectory(path.dirname(targetPath));
+    const installedVerification = await verifyTemporary(targetPath);
+    if (!installedVerification) {
+      throw new Error(`Atomically installed staged output failed verification: ${targetPath}`);
+    }
+    return installedVerification;
+  } finally {
+    await fs.unlink(temporaryPath).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+}
+
+async function verifyDerivative(filePath, dimensions, expectedSha256 = null) {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile() || stat.size <= 0) return null;
+    const metadata = await assetMetadata(filePath);
+    if (metadata.width !== dimensions.width || metadata.height !== dimensions.height) return null;
+    const digest = await fileDigest(filePath);
+    if (expectedSha256 && digest.sha256 !== expectedSha256) return null;
+    return { ...digest, dimensions: metadata };
+  } catch {
+    return null;
+  }
+}
+
+async function verifyExactJson(filePath, expectedValue, expectedSha256 = null) {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile() || stat.size <= 0) return null;
+    const bytes = await fs.readFile(filePath);
+    const parsed = JSON.parse(bytes.toString("utf8"));
+    if (stableJson(parsed) !== stableJson(expectedValue)) return null;
+    const sha256 = sha256Bytes(bytes);
+    if (expectedSha256 && sha256 !== expectedSha256) return null;
+    if (!bytes.equals(jsonBytes(expectedValue))) return null;
+    return { bytes: bytes.length, sha256 };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveImporterCommit(runtime) {
+  if (runtime.importerCommit) {
+    return runtime.importerCommit;
+  }
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: APP_ROOT });
+  return stdout.trim();
+}
+
+async function invokeFault(runtime, point, details = {}) {
+  if (runtime.injectFault) {
+    await runtime.injectFault(point, details);
+  }
+}
+
+async function readRunDescriptor(runPath) {
+  try {
+    return JSON.parse(await fs.readFile(runPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error(`Cannot safely read staged run descriptor: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function createInitialRunFiles({ runPath, journalPath, journalRoot, descriptor, runId }) {
+  await assertTargetInsideRoot(runPath, journalRoot);
+  await assertTargetInsideRoot(journalPath, journalRoot);
+  await fs.mkdir(journalRoot, { recursive: true });
+  await atomicWriteArtifact({
+    targetPath: runPath,
+    selectedRoot: journalRoot,
+    runId,
+    writeTemporary: async (temporaryPath) => fs.writeFile(temporaryPath, jsonBytes(descriptor), { flag: "wx" }),
+    verifyTemporary: async (temporaryPath) => verifyExactJson(temporaryPath, descriptor)
+  });
+  const handle = await fs.open(journalPath, "wx");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(journalRoot);
+}
+
+async function loadProgressJournal(journalPath) {
+  let textValue = "";
+  try {
+    textValue = await fs.readFile(journalPath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return { events: [], truncatedBytes: 0, create: true };
+  }
+  const finalNewline = textValue.lastIndexOf("\n");
+  const completeText = finalNewline >= 0 ? textValue.slice(0, finalNewline + 1) : "";
+  const remainder = finalNewline >= 0 ? textValue.slice(finalNewline + 1) : textValue;
+  const events = [];
+  for (const line of completeText.split("\n").filter(Boolean)) {
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      throw new Error("Progress journal contains a malformed completed record; refusing to resume");
+    }
+  }
+  return { events, truncatedBytes: Buffer.byteLength(remainder), truncateToBytes: Buffer.byteLength(completeText), create: false };
+}
+
+function journalArtifactMap(events) {
+  const artifacts = new Map();
+  for (const event of events) {
+    if (event?.type === "artifact-complete" && typeof event.path === "string" && typeof event.sha256 === "string") {
+      artifacts.set(event.path, event);
+    }
+  }
+  return artifacts;
+}
+
+function createProgressJournal(journalPath, initialEvents) {
+  const artifacts = journalArtifactMap(initialEvents);
+  let queue = Promise.resolve();
+  return {
+    artifacts,
+    append(event) {
+      queue = queue.then(async () => {
+        const handle = await fs.open(journalPath, "a");
+        try {
+          await handle.write(`${JSON.stringify(event)}\n`);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        if (event.type === "artifact-complete") artifacts.set(event.path, event);
+      });
+      return queue;
+    },
+    flush() {
+      return queue;
+    }
+  };
+}
+
+function stagedRelativePath(stagingRoot, absolutePath) {
+  return toPosixPath(path.relative(stagingRoot, absolutePath));
+}
+
+function artifactEvent({ stagingRoot, targetPath, kind, verification }) {
+  return {
+    type: "artifact-complete",
+    path: stagedRelativePath(stagingRoot, targetPath),
+    kind,
+    bytes: verification.bytes,
+    sha256: verification.sha256,
+    ...(verification.dimensions ? { dimensions: verification.dimensions } : {})
+  };
+}
+
+async function ensureDerivativeArtifact({ photo, asset, kind, selectedRoot, stagingRoot, runId, journal, runtime }) {
+  const relativePath = stagedRelativePath(stagingRoot, asset.path);
+  const recorded = journal.artifacts.get(relativePath);
+  const verified = recorded ? await verifyDerivative(asset.path, asset.dimensions, recorded.sha256) : null;
+  if (verified) {
+    return { ...verified, generated: false, path: asset.path, key: asset.key };
+  }
+  const result = await atomicWriteArtifact({
+    targetPath: asset.path,
+    selectedRoot,
+    runId,
+    writeTemporary: async (temporaryPath) => {
+      const pipeline = sharp(photo.absolutePath, { failOn: "none", limitInputPixels: false }).rotate();
+      if (kind === "thumbnail") {
+        await pipeline.resize({ width: THUMB_WIDTH, withoutEnlargement: true }).jpeg({ quality: 76, mozjpeg: true }).toFile(temporaryPath);
+      } else {
+        await pipeline
+          .resize({ width: DISPLAY_MAX_WIDTH, height: DISPLAY_MAX_HEIGHT, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 84, mozjpeg: true })
+          .toFile(temporaryPath);
+      }
+    },
+    verifyTemporary: async (temporaryPath) => verifyDerivative(temporaryPath, asset.dimensions)
+  });
+  const event = artifactEvent({ stagingRoot, targetPath: asset.path, kind, verification: result });
+  await journal.append(event);
+  await invokeFault(runtime, `${kind}-generation`, { photoId: photo.id, path: asset.path });
+  return { ...result, generated: true, path: asset.path, key: asset.key };
+}
+
+async function ensureJsonArtifact({ value, targetPath, kind, selectedRoot, stagingRoot, runId, journal, runtime, faultPoint = null }) {
+  const relativePath = stagedRelativePath(stagingRoot, targetPath);
+  const expectedSha256 = sha256Bytes(jsonBytes(value));
+  const recorded = journal.artifacts.get(relativePath);
+  let verified = await verifyExactJson(targetPath, value, expectedSha256);
+  let generated = false;
+  if (!verified) {
+    verified = await atomicWriteArtifact({
+      targetPath,
+      selectedRoot,
+      runId,
+      writeTemporary: async (temporaryPath) => fs.writeFile(temporaryPath, jsonBytes(value), { flag: "wx" }),
+      verifyTemporary: async (temporaryPath) => verifyExactJson(temporaryPath, value, expectedSha256)
+    });
+    generated = true;
+  }
+  if (!recorded || recorded.sha256 !== verified.sha256 || recorded.bytes !== verified.bytes) {
+    await journal.append(artifactEvent({ stagingRoot, targetPath, kind, verification: verified }));
+  }
+  if (generated && faultPoint) {
+    await invokeFault(runtime, faultPoint, { path: targetPath });
+  }
+  return { ...verified, generated, path: targetPath };
+}
+
+async function requireRecordedDerivative({ targetPath, dimensions, stagingRoot, journal }) {
+  const relativePath = stagedRelativePath(stagingRoot, targetPath);
+  const recorded = journal.artifacts.get(relativePath);
+  if (!recorded) throw new Error(`Referenced derivative is not journaled as complete: ${relativePath}`);
+  const verified = await verifyDerivative(targetPath, dimensions, recorded.sha256);
+  if (!verified) throw new Error(`Referenced derivative failed sealing verification: ${relativePath}`);
+  return verified;
+}
+
+async function requireRecordedJson({ targetPath, value, stagingRoot, journal }) {
+  const relativePath = stagedRelativePath(stagingRoot, targetPath);
+  const recorded = journal.artifacts.get(relativePath);
+  if (!recorded) throw new Error(`Referenced JSON is not journaled as complete: ${relativePath}`);
+  const verified = await verifyExactJson(targetPath, value, recorded.sha256);
+  if (!verified) throw new Error(`Referenced JSON failed sealing verification: ${relativePath}`);
+  return verified;
+}
+
+async function assertNewStagingRootIsEmpty(stagingRoot) {
+  const files = await walkRegularFiles(stagingRoot);
+  if (files.length) {
+    throw new Error(`Staging root already contains files but has no matching run descriptor: ${files[0]}`);
+  }
+}
+
+function buildStagedModel({
+  args,
+  outputConfig,
+  sourceScope,
+  scanned,
+  report,
+  selectedPhotos,
+  albums,
+  importerCommit,
+  importerScriptSha256,
+  sharpVersion,
+  recipe
+}) {
+  const stagingRoot = outputConfig.stagingRoot;
+  const assetsByPhotoId = new Map();
+  for (const photo of selectedPhotos) {
+    assetsByPhotoId.set(photo.id, projectedAssets(photo, outputConfig.roots.media, args.year));
+  }
+  const albumModels = albums.map((album) => ({
+    id: album.id,
+    name: album.name,
+    items: album.items,
+    manifestUrl: `data/${args.year}/albums/${album.id}.json`,
+    manifestPath: path.join(outputConfig.roots.data, "data", args.year, "albums", `${album.id}.json`)
+  }));
+  const albumSummaries = albumModels.map((album) => ({ id: album.id, name: album.name, count: album.items.length, manifestUrl: album.manifestUrl }));
+  const sequencePhotos = albumModels
+    .flatMap((album) => album.items.map((photo, albumSortPosition) => ({ photo, albumSortPosition })))
+    .map(({ photo, albumSortPosition }, sortPosition) => {
+      const assets = assetsByPhotoId.get(photo.id);
+      return {
+        photo,
+        clientPhoto: photoToClientPhoto(
+          photo,
+          {
+            thumbnailKey: assets.thumbnail.key,
+            displayKey: assets.display.key,
+            displayWidth: assets.display.dimensions.width,
+            displayHeight: assets.display.dimensions.height
+          },
+          sortPosition,
+          albumSortPosition
+        )
+      };
+    });
+  const photosByAlbum = new Map();
+  for (const { clientPhoto } of sequencePhotos) {
+    if (!photosByAlbum.has(clientPhoto.albumId)) photosByAlbum.set(clientPhoto.albumId, []);
+    photosByAlbum.get(clientPhoto.albumId).push(clientPhoto);
+  }
+  for (const album of albumModels) {
+    album.manifest = { photos: (photosByAlbum.get(album.id) || []).sort((left, right) => left.albumSortPosition - right.albumSortPosition) };
+  }
+  const index = {
+    year: args.year,
+    scannedCount: scanned.files.length,
+    albums: albumSummaries,
+    sequence: sequencePhotos.map(({ clientPhoto }) => ({ id: clientPhoto.id }))
+  };
+  const catalog = { years: [{ year: args.year, indexUrl: publicUrlForYear(args.year) }] };
+  const sourceSelection = {
+    year: args.year,
+    mode: sourceScope.mode,
+    sourceRoot: sourceScope.sourceRoot,
+    scanRoots: sourceScope.scanRoots,
+    sourceFolders: sourceScope.sourceFolders,
+    limit: args.limit,
+    files: selectedPhotos.map((photo) => ({
+      path: photo.absolutePath,
+      relativePath: photo.relativePath,
+      bytes: photo.sourceSize,
+      sha256: photo.sha256,
+      photoId: photo.id,
+      albumId: photo.albumId,
+      album: photo.album,
+      sourceWidth: photo.sourceWidth,
+      sourceHeight: photo.sourceHeight,
+      exifOrientation: photo.exifOrientation,
+      captureTime: photo.captureTime,
+      dateSource: photo.dateSource,
+      sortSource: photo.sortSource
+    })),
+    omissions: {
+      unsupported: report.unsupportedFiles,
+      unreadable: report.unreadableFiles,
+      skippedNoise: scanned.skippedNoiseFiles,
+      skippedSymlinks: scanned.skippedSymlinks
+    }
+  };
+  const proposedManifestSet = {
+    albums: albumModels.map((album) => ({
+      id: album.id,
+      name: album.name,
+      path: `data/${args.year}/albums/${album.id}.json`,
+      photoIds: album.manifest.photos.map((photo) => photo.id)
+    })),
+    yearIndexPath: `data/${args.year}/index.json`,
+    yearIndex: index,
+    catalogPath: "data/catalog.json",
+    catalog
+  };
+  const binding = {
+    schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+    importerCommit,
+    importerScriptSha256,
+    sharpVersion,
+    derivativeRecipe: recipe,
+    sourceSelectionSha256: sha256Bytes(stableJson(sourceSelection)),
+    proposedManifestSetSha256: sha256Bytes(stableJson(proposedManifestSet)),
+    sourceSelection,
+    proposedManifestSet,
+    outputLayout: {
+      data: "public",
+      media: "generated/library",
+      reports: "generated/reports",
+      cache: "generated/inventory-cache",
+      journal: "generated/journal"
+    }
+  };
+  return {
+    stagingRoot,
+    assetsByPhotoId,
+    albumModels,
+    albumSummaries,
+    sequencePhotos,
+    index,
+    catalog,
+    sourceSelection,
+    proposedManifestSet,
+    yearIndexPath: path.join(outputConfig.roots.data, "data", args.year, "index.json"),
+    catalogPath: path.join(outputConfig.roots.data, "data", "catalog.json"),
+    binding,
+    runId: sha256Bytes(stableJson(binding))
+  };
+}
+
+async function closedWorldAudit({ stagingRoot, expectedPaths }) {
+  const files = await walkRegularFiles(stagingRoot);
+  const actual = files.map((filePath) => stagedRelativePath(stagingRoot, filePath)).sort();
+  const expected = Array.from(expectedPaths).sort();
+  const missing = expected.filter((filePath) => !actual.includes(filePath));
+  const unexpected = actual.filter((filePath) => !expected.includes(filePath));
+  if (missing.length || unexpected.length) {
+    throw new Error(`Closed-world staged audit failed: missing ${missing.join(", ") || "none"}; unexpected ${unexpected.join(", ") || "none"}`);
+  }
+  const records = [];
+  for (const relativePath of actual) {
+    const absolutePath = path.join(stagingRoot, relativePath);
+    const digest = await fileDigest(absolutePath);
+    records.push({ path: relativePath, ...digest });
+  }
+  return { files: records, sha256: sha256Bytes(stableJson(records)) };
+}
+
+async function runStagedImport({ args, runtime, outputConfig, sourceScope, scanned, report, selectedPhotos, albums }) {
+  const importerCommit = await resolveImporterCommit(runtime);
+  const importerScriptSha256 = runtime.importerScriptSha256 || (await fileDigest(fileURLToPath(import.meta.url))).sha256;
+  const sharpVersion = runtime.sharpVersion || sharp.versions.sharp;
+  const recipe = runtime.derivativeRecipe || STAGED_RECIPE;
+  const model = buildStagedModel({
+    args,
+    outputConfig,
+    sourceScope,
+    scanned,
+    report,
+    selectedPhotos,
+    albums,
+    importerCommit,
+    importerScriptSha256,
+    sharpVersion,
+    recipe
+  });
+  const { stagingRoot, runId } = model;
+  const journalRoot = outputConfig.roots.journal;
+  const runPath = path.join(journalRoot, "run.json");
+  const journalPath = path.join(journalRoot, "progress.ndjson");
+  const completePath = path.join(journalRoot, "complete.json");
+  await assertNoSymlinks(stagingRoot);
+  let descriptor = await readRunDescriptor(runPath);
+  if (descriptor) {
+    if (descriptor.runId !== runId || stableJson(descriptor.binding) !== stableJson(model.binding)) {
+      throw new Error(`Staged run identity changed; refusing to resume ${descriptor.runId || "unknown"} as ${runId}`);
+    }
+    if (descriptor.stagingRoot !== stagingRoot || stableJson(descriptor.stagedPaths) !== stableJson(outputConfig.roots)) {
+      throw new Error("Staged run paths changed; refusing to resume from a moved or reconfigured root");
+    }
+  } else {
+    await assertNewStagingRootIsEmpty(stagingRoot);
+    descriptor = {
+      schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+      runId,
+      createdAt: new Date().toISOString(),
+      binding: model.binding,
+      stagingRoot,
+      stagedPaths: outputConfig.roots,
+      publicationApproved: false,
+      note: "A completed staged run is not approval to publish, including sources under 2002 New."
+    };
+    await createInitialRunFiles({ runPath, journalPath, journalRoot, descriptor, runId });
+  }
+  const loadedJournal = await loadProgressJournal(journalPath);
+  if (loadedJournal.create) {
+    const handle = await fs.open(journalPath, "wx");
+    await handle.close();
+  }
+  if (loadedJournal.truncatedBytes) {
+    await fs.truncate(journalPath, loadedJournal.truncateToBytes);
+    await syncPath(journalPath);
+  }
+  const removedTemporaryFiles = await removeLeftoverTemporaryFiles(stagingRoot);
+  const journal = createProgressJournal(journalPath, loadedJournal.events);
+  if (loadedJournal.truncatedBytes || removedTemporaryFiles) {
+    await journal.append({ type: "recovery", truncatedJournalBytes: loadedJournal.truncatedBytes, removedTemporaryFiles });
+  }
+  const completionMarker = await readRunDescriptor(completePath);
+  if (completionMarker && completionMarker.runId !== runId) {
+    throw new Error("Completion marker belongs to a different staged run");
+  }
+
+  let generatedDerivatives = 0;
+  let reusedDerivatives = 0;
+  for (const photo of selectedPhotos) {
+    const assets = model.assetsByPhotoId.get(photo.id);
+    const thumbnail = await ensureDerivativeArtifact({
+      photo,
+      asset: assets.thumbnail,
+      kind: "thumbnail",
+      selectedRoot: outputConfig.roots.media,
+      stagingRoot,
+      runId,
+      journal,
+      runtime
+    });
+    const display = await ensureDerivativeArtifact({
+      photo,
+      asset: assets.display,
+      kind: "display",
+      selectedRoot: outputConfig.roots.media,
+      stagingRoot,
+      runId,
+      journal,
+      runtime
+    });
+    generatedDerivatives += Number(thumbnail.generated) + Number(display.generated);
+    reusedDerivatives += Number(!thumbnail.generated) + Number(!display.generated);
+  }
+
+  for (const album of model.albumModels) {
+    for (const photo of album.items) {
+      const assets = model.assetsByPhotoId.get(photo.id);
+      await requireRecordedDerivative({ targetPath: assets.thumbnail.path, dimensions: assets.thumbnail.dimensions, stagingRoot, journal });
+      await requireRecordedDerivative({ targetPath: assets.display.path, dimensions: assets.display.dimensions, stagingRoot, journal });
+    }
+    await ensureJsonArtifact({
+      value: album.manifest,
+      targetPath: album.manifestPath,
+      kind: "album-manifest",
+      selectedRoot: outputConfig.roots.data,
+      stagingRoot,
+      runId,
+      journal,
+      runtime,
+      faultPoint: "album-manifest-writing"
+    });
+  }
+  for (const album of model.albumModels) {
+    await requireRecordedJson({ targetPath: album.manifestPath, value: album.manifest, stagingRoot, journal });
+  }
+  const yearIndexPath = model.yearIndexPath;
+  await ensureJsonArtifact({
+    value: model.index,
+    targetPath: yearIndexPath,
+    kind: "year-index",
+    selectedRoot: outputConfig.roots.data,
+    stagingRoot,
+    runId,
+    journal,
+    runtime,
+    faultPoint: "year-index-writing"
+  });
+  for (const album of model.albumModels) {
+    await requireRecordedJson({ targetPath: album.manifestPath, value: album.manifest, stagingRoot, journal });
+  }
+  await requireRecordedJson({ targetPath: yearIndexPath, value: model.index, stagingRoot, journal });
+  const catalogPath = model.catalogPath;
+  await ensureJsonArtifact({
+    value: model.catalog,
+    targetPath: catalogPath,
+    kind: "catalog",
+    selectedRoot: outputConfig.roots.data,
+    stagingRoot,
+    runId,
+    journal,
+    runtime,
+    faultPoint: "catalogue-writing"
+  });
+
+  const sourceReportPath = path.join(outputConfig.roots.reports, `${args.year}-source-selection-report.json`);
+  const sourceReport = {
+    schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+    runId,
+    sourceSelectionSha256: model.binding.sourceSelectionSha256,
+    sourceSelection: model.sourceSelection
+  };
+  await ensureJsonArtifact({
+    value: sourceReport,
+    targetPath: sourceReportPath,
+    kind: "source-report",
+    selectedRoot: outputConfig.roots.reports,
+    stagingRoot,
+    runId,
+    journal,
+    runtime
+  });
+  const importReportPath = path.join(outputConfig.roots.reports, `${args.year}-import-report.json`);
+  const stagedImportReport = {
+    schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+    runId,
+    year: args.year,
+    mode: args.limit === null ? "complete" : "sample",
+    sourceSelectionSha256: model.binding.sourceSelectionSha256,
+    proposedManifestSetSha256: model.binding.proposedManifestSetSha256,
+    photoCount: selectedPhotos.length,
+    albumCount: model.albumModels.length,
+    derivativeCount: selectedPhotos.length * 2,
+    omissions: model.sourceSelection.omissions,
+    outputLayout: model.binding.outputLayout,
+    publicationApproved: false
+  };
+  await ensureJsonArtifact({
+    value: stagedImportReport,
+    targetPath: importReportPath,
+    kind: "import-report",
+    selectedRoot: outputConfig.roots.reports,
+    stagingRoot,
+    runId,
+    journal,
+    runtime
+  });
+
+  const receiptPath = path.join(outputConfig.roots.reports, `${args.year}-stage-receipt.json`);
+  const outputPaths = [
+    ...selectedPhotos.flatMap((photo) => {
+      const assets = model.assetsByPhotoId.get(photo.id);
+      return [assets.thumbnail.path, assets.display.path];
+    }),
+    ...model.albumModels.map((album) => album.manifestPath),
+    yearIndexPath,
+    catalogPath,
+    sourceReportPath,
+    importReportPath
+  ];
+  const outputChecksums = [];
+  for (const outputPath of outputPaths) {
+    const digest = await fileDigest(outputPath);
+    outputChecksums.push({ path: stagedRelativePath(stagingRoot, outputPath), ...digest });
+  }
+  outputChecksums.sort((left, right) => left.path.localeCompare(right.path));
+  const receipt = {
+    schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+    status: "staged-complete",
+    publicationApproved: false,
+    runId,
+    importerCommit,
+    importerScriptSha256,
+    sharpVersion,
+    derivativeRecipe: recipe,
+    sourceSelectionSha256: model.binding.sourceSelectionSha256,
+    proposedManifestSetSha256: model.binding.proposedManifestSetSha256,
+    counts: {
+      sources: selectedPhotos.length,
+      albums: model.albumModels.length,
+      derivatives: selectedPhotos.length * 2,
+      omissions: report.unsupportedFiles.length + report.unreadableFiles.length
+    },
+    omissions: model.sourceSelection.omissions,
+    stagedPaths: outputConfig.roots,
+    sourceChecksums: model.sourceSelection.files.map((file) => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
+    outputChecksums,
+    outputSetSha256: sha256Bytes(stableJson(outputChecksums)),
+    note: "This receipt verifies a local staged output set; it does not approve publication or 2002 New."
+  };
+  const receiptArtifact = await ensureJsonArtifact({
+    value: receipt,
+    targetPath: receiptPath,
+    kind: "receipt",
+    selectedRoot: outputConfig.roots.reports,
+    stagingRoot,
+    runId,
+    journal,
+    runtime
+  });
+  await journal.flush();
+
+  const operationalPaths = [runPath, journalPath];
+  const expectedWithoutComplete = new Set([...outputPaths, receiptPath, ...operationalPaths].map((filePath) => stagedRelativePath(stagingRoot, filePath)));
+  if (completionMarker) {
+    const expectedWithComplete = new Set([...expectedWithoutComplete, stagedRelativePath(stagingRoot, completePath)]);
+    const finalAudit = await closedWorldAudit({ stagingRoot, expectedPaths: expectedWithComplete });
+    const completeRelativePath = stagedRelativePath(stagingRoot, completePath);
+    const preSealFiles = finalAudit.files.filter((file) => file.path !== completeRelativePath);
+    const preSealSha256 = sha256Bytes(stableJson(preSealFiles));
+    if (completionMarker.closedWorldSha256 !== preSealSha256 || completionMarker.receiptSha256 !== receiptArtifact.sha256) {
+      throw new Error("Completed staged run no longer matches its closed-world seal");
+    }
+    return { receipt, receiptPath, closedWorld: finalAudit, generatedDerivatives, reusedDerivatives, resumed: true };
+  }
+
+  await invokeFault(runtime, "final-sealing", { receiptPath });
+  const closedWorld = await closedWorldAudit({ stagingRoot, expectedPaths: expectedWithoutComplete });
+  const completion = {
+    schemaVersion: STAGED_RUN_SCHEMA_VERSION,
+    runId,
+    status: "complete",
+    closedWorldSha256: closedWorld.sha256,
+    receiptSha256: receiptArtifact.sha256,
+    expectedFileCountBeforeSeal: expectedWithoutComplete.size
+  };
+  await atomicWriteArtifact({
+    targetPath: completePath,
+    selectedRoot: journalRoot,
+    runId,
+    writeTemporary: async (temporaryPath) => fs.writeFile(temporaryPath, jsonBytes(completion), { flag: "wx" }),
+    verifyTemporary: async (temporaryPath) => verifyExactJson(temporaryPath, completion)
+  });
+  const finalExpected = new Set([...expectedWithoutComplete, stagedRelativePath(stagingRoot, completePath)]);
+  await closedWorldAudit({ stagingRoot, expectedPaths: finalExpected });
+  return { receipt, receiptPath, closedWorld, generatedDerivatives, reusedDerivatives, resumed: loadedJournal.events.length > 0 };
+}
+
 async function buildPlanReport({ args, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, startedAt }) {
   const physicalSourceRoot = await fs.realpath(sourceScope.sourceRoot);
   const yearDataRoot = path.join(outputConfig.roots.data, "data", args.year);
@@ -1509,6 +2349,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   const dataOutputRoot = outputConfig.roots.data;
   const mediaOutputRoot = outputConfig.roots.media;
   const reportsOutputRoot = outputConfig.roots.reports;
+  const isStagedRun = Boolean(outputConfig.stagingRoot);
   const yearDataRoot = path.join(dataOutputRoot, "data", args.year);
   const albumsDataRoot = path.join(yearDataRoot, "albums");
   const importMode = args.limit === null ? "complete" : "sample";
@@ -1567,7 +2408,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     }
 
     try {
-      const photo = await inspectPhoto(filePath, sourceScope, args.year, args.plan);
+      const photo = await inspectPhoto(filePath, sourceScope, args.year, args.plan || isStagedRun);
       inspectedCount += 1;
       if (!args.plan && (inspectedCount % 500 === 0 || inspectedCount === scannedFiles.length - report.unsupported)) {
         writeStdout(`Inspected ${inspectedCount}/${scannedFiles.length - report.unsupported}\n`);
@@ -1655,6 +2496,25 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     });
     writeStdout(`${JSON.stringify(planReport, null, 2)}\n`);
     return planReport;
+  }
+
+  if (isStagedRun) {
+    const stagedResult = await runStagedImport({
+      args,
+      runtime,
+      outputConfig,
+      sourceScope,
+      scanned,
+      report,
+      selectedPhotos,
+      albums: preliminaryAlbums
+    });
+    writeStdout(
+      `Staged run ${stagedResult.receipt.runId} complete. Sources ${stagedResult.receipt.counts.sources}. ` +
+        `Outputs ${stagedResult.receipt.outputChecksums.length}. Generated derivatives ${stagedResult.generatedDerivatives}. ` +
+        `Reused verified derivatives ${stagedResult.reusedDerivatives}. Receipt ${stagedResult.receiptPath}.\n`
+    );
+    return stagedResult;
   }
 
   await writeSourceSelectionReport(reportsOutputRoot, args.year, report.sourceSelection);

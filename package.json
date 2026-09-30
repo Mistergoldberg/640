@@ -11,7 +11,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "import:year": "node scripts/import-photos.mjs",
     "import:plan": "node scripts/import-photos.mjs --plan",
-    "test:importer": "node --test scripts/import-photos.node-test.mjs",
+    "test:importer": "node --test scripts/*node-test.mjs",
     "import:2013:sample": "npm run import:year -- --year 2013 --limit 300",
     "import:2013": "npm run import:year -- --year 2013",
     "import": "npm run import:year --",

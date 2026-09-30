@@ -297,11 +297,24 @@ manifests.
 Never use a partial output override for a rehearsal. Use `--staging-root PATH` to
 place public data, media, reports, cache, and journal roots under one isolated
 directory, or provide all five independent options: `--data-root`, `--media-root`,
-`--reports-root`, `--cache-root`, and `--journal-root`. Staging roots that alias or
-overlap canonical outputs are rejected before source inspection. The legacy
-published command remains `npm run import:year -- --year YYYY`. Inspect the
-private import report after any approved staged or published import. The catalogue
-drives year navigation; do not hard-code a year list in components.
+`--reports-root`, `--cache-root`, and `--journal-root` as overrides that remain
+inside that staging root. Staging roots that alias or overlap sources or canonical
+outputs are rejected before source inspection. Non-plan isolated imports require
+`--staging-root`; independent overrides without that boundary are rejected.
+
+A staged run records source hashes, the importer commit and script hash, Sharp
+version, derivative recipe, proposed manifests, and selected paths in
+`generated/journal/run.json`. Its fsynced NDJSON progress journal permits only a
+matching run to resume. Derivatives and JSON are verified before same-directory
+atomic renames, manifests are sealed in dependency order, and
+`generated/reports/YYYY-stage-receipt.json` records source and output checksums.
+`generated/journal/complete.json` exists only after the closed-world output audit
+passes. A staging receipt is never publication approval.
+
+The legacy published command remains `npm run import:year -- --year YYYY` and
+retains its existing behavior when no staging root is selected. Inspect the private
+import report and staged receipt after any approved rehearsal. The catalogue drives
+year navigation; do not hard-code a year list in components.
 
 Audit all public manifests and derivatives again, review labels, verify counts,
 publish only generated library keys, and make a new committed static release.

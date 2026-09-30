@@ -153,18 +153,22 @@ test("disposable-root rehearsal contains outputs and preserves every canonical o
   const before = await Promise.all(canonicalRoots.map(snapshotTree));
   const stagingRoot = path.join(appRoot, "disposable-stage");
 
-  const report = await runImporter(["--year", "2098", "--staging-root", stagingRoot], { appRoot, writeStdout: () => {} });
+  const report = await runImporter(["--year", "2098", "--staging-root", stagingRoot], {
+    appRoot,
+    importerCommit: "test-importer-commit",
+    writeStdout: () => {}
+  });
 
-  assert.equal(report.successfullyImported, 2);
+  assert.equal(report.receipt.counts.sources, 2);
   assert.deepEqual(await Promise.all(canonicalRoots.map(snapshotTree)), before);
   const staged = await snapshotTree(stagingRoot);
   assert(Object.keys(staged).some((entry) => entry.startsWith("public/data/2098/")));
   assert(Object.keys(staged).some((entry) => entry.startsWith("generated/library/2098/")));
   assert(Object.keys(staged).some((entry) => entry.startsWith("generated/reports/")));
   assert(!Object.keys(staged).some((entry) => entry.startsWith("generated/inventory-cache/")));
-  assert(!Object.keys(staged).some((entry) => entry.startsWith("generated/journal/")));
+  assert(Object.keys(staged).some((entry) => entry.startsWith("generated/journal/")));
   for (const relativePath of Object.keys(staged).filter((entry) => staged[entry].type === "file")) {
-    assert.match(relativePath, /^(public|generated\/library|generated\/reports)\//);
+    assert.match(relativePath, /^(public|generated\/library|generated\/reports|generated\/journal)\//);
   }
 });
 
@@ -174,7 +178,7 @@ test("non-plan custom output refuses partial isolation and canonical aliases", a
   await writeJpeg(path.join(sourceFolder, "valid.jpg"));
   await assert.rejects(
     runImporter(["--year", "2099", "--data-root", path.join(appRoot, "stage-data")], { appRoot, writeStdout: () => {} }),
-    /configure all five output roots/
+    /must use --staging-root/
   );
   await assert.rejects(
     runImporter(
@@ -194,6 +198,6 @@ test("non-plan custom output refuses partial isolation and canonical aliases", a
       ],
       { appRoot, writeStdout: () => {} }
     ),
-    /aliases or overlaps canonical data output/
+    /must use --staging-root/
   );
 });
