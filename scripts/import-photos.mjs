@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import exifr from "exifr";
+import { createSourcePolicyTemplate, evaluateSourcePolicy, inspectSourcePolicy, renderDecisionReport } from "./source-policy.mjs";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff", ".heic", ".heif"]);
 const DEFAULT_CONCURRENCY = 6;
@@ -55,6 +56,7 @@ function workspacePaths(appRoot = APP_ROOT) {
 function parseArgs(argv) {
   const args = {
     source: null,
+    sourcePolicy: null,
     year: null,
     limit: null,
     output: null,
@@ -89,6 +91,8 @@ function parseArgs(argv) {
     index += 1;
     if (key === "source") {
       args.source = value;
+    } else if (key === "source-policy") {
+      args.sourcePolicy = value;
     } else if (key === "year") {
       args.year = value;
     } else if (key === "limit") {
@@ -1554,6 +1558,26 @@ async function resolveImporterCommit(runtime) {
   return stdout.trim();
 }
 
+async function inspectSourceGate(args, sourceScope, workspace) {
+  const inspection = await inspectSourcePolicy({
+    sourceRoot: sourceScope.sourceRoot,
+    scanRoots: sourceScope.scanRoots,
+    selectedYear: args.year,
+    concurrency: args.concurrency,
+    publicDataRoot: workspace.canonicalOutputs.data
+  });
+  const policyPath = args.sourcePolicy ? resolveMaybeRelative(args.sourcePolicy, workspace.appRoot) : null;
+  const policy = policyPath ? JSON.parse(await fs.readFile(policyPath, "utf8")) : null;
+  const eligibility = evaluateSourcePolicy(inspection, policy);
+  return {
+    policyPath,
+    inspection,
+    policyTemplate: createSourcePolicyTemplate(inspection),
+    eligibility,
+    decisionReportMarkdown: renderDecisionReport(inspection, eligibility)
+  };
+}
+
 async function invokeFault(runtime, point, details = {}) {
   if (runtime.injectFault) {
     await runtime.injectFault(point, details);
@@ -1748,6 +1772,7 @@ function buildStagedModel({
   report,
   selectedPhotos,
   albums,
+  sourceGate,
   importerCommit,
   importerScriptSha256,
   sharpVersion,
@@ -1851,6 +1876,14 @@ function buildStagedModel({
     proposedManifestSetSha256: sha256Bytes(stableJson(proposedManifestSet)),
     sourceSelection,
     proposedManifestSet,
+    sourcePolicy: {
+      policyPath: sourceGate.policyPath,
+      policySha256: sourceGate.eligibility.policySha256,
+      freshInventory: sourceGate.inspection.inventory,
+      decisionSetSha256: sourceGate.inspection.decisionSetSha256,
+      publicationEligible: sourceGate.eligibility.publicationEligible,
+      unresolvedDecisionIds: sourceGate.eligibility.unresolvedDecisionIds
+    },
     outputLayout: {
       data: "public",
       media: "generated/library",
@@ -1894,7 +1927,7 @@ async function closedWorldAudit({ stagingRoot, expectedPaths }) {
   return { files: records, sha256: sha256Bytes(stableJson(records)) };
 }
 
-async function runStagedImport({ args, runtime, outputConfig, sourceScope, scanned, report, selectedPhotos, albums }) {
+async function runStagedImport({ args, runtime, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, sourceGate }) {
   const importerCommit = await resolveImporterCommit(runtime);
   const importerScriptSha256 = runtime.importerScriptSha256 || (await fileDigest(fileURLToPath(import.meta.url))).sha256;
   const sharpVersion = runtime.sharpVersion || sharp.versions.sharp;
@@ -1907,6 +1940,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     report,
     selectedPhotos,
     albums,
+    sourceGate,
     importerCommit,
     importerScriptSha256,
     sharpVersion,
@@ -2067,6 +2101,13 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     derivativeCount: selectedPhotos.length * 2,
     omissions: model.sourceSelection.omissions,
     outputLayout: model.binding.outputLayout,
+    publicationEligibility: {
+      eligible: sourceGate.eligibility.publicationEligible,
+      freshInventorySha256: sourceGate.eligibility.freshInventorySha256,
+      policySha256: sourceGate.eligibility.policySha256,
+      resolved: sourceGate.eligibility.counts.resolved,
+      unresolved: sourceGate.eligibility.counts.unresolved
+    },
     publicationApproved: false
   };
   await ensureJsonArtifact({
@@ -2101,6 +2142,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
   const receipt = {
     schemaVersion: STAGED_RUN_SCHEMA_VERSION,
     status: "staged-complete",
+    publicationEligible: sourceGate.eligibility.publicationEligible,
     publicationApproved: false,
     runId,
     importerCommit,
@@ -2120,6 +2162,15 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     sourceChecksums: model.sourceSelection.files.map((file) => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
     outputChecksums,
     outputSetSha256: sha256Bytes(stableJson(outputChecksums)),
+    sourcePolicy: {
+      policyPath: sourceGate.policyPath,
+      policySha256: sourceGate.eligibility.policySha256,
+      freshInventorySha256: sourceGate.eligibility.freshInventorySha256,
+      inventoryMatches: sourceGate.eligibility.inventoryMatches,
+      resolvedDecisions: sourceGate.eligibility.counts.resolved,
+      unresolvedDecisions: sourceGate.eligibility.counts.unresolved,
+      unresolvedDecisionIds: sourceGate.eligibility.unresolvedDecisionIds
+    },
     note: "This receipt verifies a local staged output set; it does not approve publication or 2002 New."
   };
   const receiptArtifact = await ensureJsonArtifact({
@@ -2170,7 +2221,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
   return { receipt, receiptPath, closedWorld, generatedDerivatives, reusedDerivatives, resumed: loadedJournal.events.length > 0 };
 }
 
-async function buildPlanReport({ args, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, startedAt }) {
+async function buildPlanReport({ args, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, sourceGate, startedAt }) {
   const physicalSourceRoot = await fs.realpath(sourceScope.sourceRoot);
   const yearDataRoot = path.join(outputConfig.roots.data, "data", args.year);
   const expectedAssetKeys = new Set();
@@ -2281,6 +2332,14 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
       unreadable: unreadableFiles.length
     });
   }
+  if (!sourceGate.eligibility.publicationEligible) {
+    unresolvedCuratorialDecisions.push({
+      decision: "Resolve the exact source policy against the fresh inventory before publication",
+      unresolved: sourceGate.eligibility.counts.unresolved,
+      inventoryMatches: sourceGate.eligibility.inventoryMatches,
+      freshInventorySha256: sourceGate.eligibility.freshInventorySha256
+    });
+  }
 
   return {
     schemaVersion: 1,
@@ -2334,6 +2393,13 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
       },
       photos
     },
+    sourcePolicy: {
+      inventory: sourceGate.inspection.inventory,
+      findings: sourceGate.inspection.findings,
+      eligibility: sourceGate.eligibility,
+      policyTemplate: sourceGate.policyTemplate,
+      decisionReportMarkdown: sourceGate.decisionReportMarkdown
+    },
     unresolvedCuratorialDecisions
   };
 }
@@ -2358,6 +2424,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     throw new Error(`Source folder does not exist: ${toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot))}`);
   }
 
+  const sourceGate = args.plan || isStagedRun ? await inspectSourceGate(args, sourceScope, workspace) : null;
   const scanned = await scanFiles(sourceScope, workspace);
   const scannedFiles = scanned.files;
   const report = {
@@ -2492,6 +2559,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
       report,
       selectedPhotos,
       albums: preliminaryAlbums,
+      sourceGate,
       startedAt
     });
     writeStdout(`${JSON.stringify(planReport, null, 2)}\n`);
@@ -2507,7 +2575,8 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
       scanned,
       report,
       selectedPhotos,
-      albums: preliminaryAlbums
+      albums: preliminaryAlbums,
+      sourceGate
     });
     writeStdout(
       `Staged run ${stagedResult.receipt.runId} complete. Sources ${stagedResult.receipt.counts.sources}. ` +

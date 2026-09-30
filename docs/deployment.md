@@ -294,6 +294,62 @@ input problems, conflicts, and stale-output candidates as JSON on stdout. Planni
 does not create directories, reports, caches, temporary files, derivatives, or
 manifests.
 
+Before treating a staged receipt as publication-eligible, create and review an
+exact source policy. This command reads and decodes the selected sources and
+prints a JSON policy template to stdout; redirect it only to a disposable or
+review-controlled location outside canonical outputs:
+
+```sh
+npm run source:policy -- \
+  --source original-photos \
+  --scan-root 'original-photos/2002 New' \
+  --scan-root 'original-photos/2002-Thialand' \
+  --scan-root 'original-photos/2002-WHEN-CANADA' \
+  --year 2002 \
+  --template-only
+```
+
+The schema is versioned by `schemaVersion`. `inventory` binds the physical
+source root, exact physical scan roots, selected year, every selected relative
+path, byte length and SHA-256, symlinks, totals, and the complete inventory
+digest. Every `decisions` entry has a stable ID, category, subject, exact file
+signatures, scope digest, allowed actions, and starts with
+`status: "unresolved"` and `action: null`. Categories cover folder/year mapping, public
+album labels, unsupported or unreadable files, duplicate-content groups,
+off-year EXIF dates, and published source paths whose rename would change an
+existing photo ID. Exclusion and repair choices are per exact file; pattern,
+glob, and regex fields are rejected.
+
+Because this cycle does not change import behavior, eligibility accepts only
+resolved choices that match the current importer: selected-folder year,
+unchanged source-path album label, exact exclusion of unsupported/unreadable
+files, separate photos for duplicate content, folder year for off-year EXIF,
+and preserved paths for published IDs. The format can record a future repair,
+remap, relabel, or exact duplicate exclusion, but that action remains ineligible
+until the source is repaired or a separately reviewed importer change applies it.
+
+After recording human decisions, verify them against a new physical scan:
+
+```sh
+npm run source:eligibility -- \
+  --source original-photos \
+  --scan-root 'original-photos/2002 New' \
+  --scan-root 'original-photos/2002-Thialand' \
+  --scan-root 'original-photos/2002-WHEN-CANADA' \
+  --year 2002 \
+  --policy /path/to/reviewed-2002-policy.json \
+  --format markdown
+```
+
+The eligibility command exits 2 unless the fresh inventory is identical and
+all current decisions have exact resolved records. Added, removed, renamed, or
+changed bytes invalidate the policy; an old partial inventory cannot pass.
+`2002 New` is unresolved by default. An unresolved policy may be used with an
+isolated staging root for inspection, but its receipt remains
+`publicationEligible: false`. Eligibility is not publication authorization.
+Pass the same policy to staging with `--source-policy`; the run identity binds
+its policy digest, inventory, decision set, and eligibility result.
+
 Never use a partial output override for a rehearsal. Use `--staging-root PATH` to
 place public data, media, reports, cache, and journal roots under one isolated
 directory, or provide all five independent options: `--data-root`, `--media-root`,
