@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "provider": "cloudflare-r2",
+  "accountIdSha256": "8c7c42f3975342d7b6ac0394ef5beda738af67722cb0f359ded04d735066cb26",
+  "bucket": "insertcatchytitlehere-media",
+  "endpointSha256": "12531713cd9d0e91d1dfa0b57f28b1d6c51fb0ef86f49d0753e62c59c51ac66b",
+  "namespace": {
+    "id": "pixilation-generated-media-v1",
+    "remotePrefix": "",
+    "allowedYears": ["2001", "2002", "2013"],
+    "derivativeDirectories": ["thumbs", "display"],
+    "keyFormat": "pixilation-media-key-v1"
+  }
+}

@@ -210,11 +210,16 @@ the approved new-key set, writes with no-overwrite semantics, never deletes, and
 does not activate manifests. The durable receipt is PASS only after every media
 key required by the candidate manifests independently reconciles.
 
-An R2 adapter is intentionally not implemented yet. Before an R2 pilot, define
-and test an account- and bucket-bound adapter that can return trustworthy
-SHA-256 for existing objects, uses conditional create/no-overwrite requests,
-lists the complete package-defined scope, and preserves the same journal and
-receipt contract. Never use a broader directory or `sync --delete`.
+A read-only R2 adapter and preflight are available through
+`npm run media:r2:preflight`. They pin the expected account endpoint and bucket,
+enumerate the full managed namespace with pagination, and use only `HeadBucket`,
+`ListObjectsV2`, `HeadObject`, and bounded `GetObject` calls. The command does
+not expose PUT, COPY, DELETE, metadata mutation or a publication receipt. See
+`docs/public-media-r2.md` for the exact command and checksum limitations.
+
+Before an R2 pilot, prove conditional `PutObject` with `If-None-Match: *`,
+checksum handling, retry behavior and metadata in a new isolated bucket. Never
+use a broader directory or `sync --delete`.
 
 ## Server release and rollback
 

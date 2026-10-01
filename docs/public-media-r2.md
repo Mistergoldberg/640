@@ -100,14 +100,62 @@ inventory, and exact `media/new` set. It accepts an existing object only after a
 full-byte SHA-256 readback, writes only absent approved new keys, and performs no
 deletes. Manifest activation is a separate later operation.
 
-## Future R2 adapter
+## Read-only R2 preflight
 
-No R2 adapter or R2 execution command is provided in this cycle. Before a pilot,
-the R2 interface must prove existing-object SHA-256 with a trustworthy method;
-size and ETag alone do not qualify. It must also support conditional
-create/no-overwrite behavior, bounded retries, complete scoped listing, durable
-resume, and independent post-upload reconciliation under the package-bound
-receipt contract.
+The checked-in R2 destination pin records hashes of the expected account and
+endpoint, the exact bucket name, and the managed year/derivative namespace. The
+runtime credential file must match every pin. Account, bucket, endpoint and
+namespace identities are reported, but access keys and secrets are never
+printed.
+
+Run a bounded read-only comparison of the existing R2 namespace with canonical
+local media using:
+
+```bash
+npm run media:r2:preflight -- \
+  --baseline \
+  --config config/r2-publication-readonly.json \
+  --credentials /absolute/path/to/insertcatchytitlehere-r2.json \
+  --canonical-media-root /absolute/path/to/generated/library \
+  --sample-count 6 \
+  --max-readback-bytes 10485760
+```
+
+When a real completed promotion package exists, replace `--baseline` and the
+canonical-media option with `--package-root /absolute/path/to/package`. The
+command validates the sealed package, lists the complete namespace with
+continuation tokens, and classifies candidate, rollback, other-known and
+unexpected objects. It prints JSON to stdout and never creates a publication
+receipt.
+
+R2 currently supports `ListObjectsV2` pagination and conditional operations on
+`PutObject`, but its compatibility table does not support a SHA-256
+`FULL_OBJECT` checksum type. The preflight therefore accepts checksum metadata
+only if it explicitly identifies full-object SHA-256; otherwise it performs a
+bounded GET and hashes every returned byte. Size and ETag alone never prove
+SHA-256 equality. See the current official
+[R2 S3 compatibility table](https://developers.cloudflare.com/r2/api/s3/api/)
+and [AWS SDK v3 R2 example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/).
+AWS likewise documents that an
+[ETag may not be a full-object MD5](https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html),
+and it is never treated here as SHA-256 proof. Request reports separate Class A
+listing calls from Class B HEAD/GET calls using Cloudflare's current
+[R2 operation pricing categories](https://developers.cloudflare.com/r2/pricing/).
+
+The R2 adapter imports and permits only `HeadBucket`, `ListObjectsV2`,
+`HeadObject`, and `GetObject`. `--execute`, upload, copy, delete, metadata and
+force flags fail before credentials are loaded or a client is created.
+
+## Future isolated write test
+
+Production publication remains unavailable. The intended create operation is a
+single-object `PutObject` with `If-None-Match: *`, a supplied payload checksum,
+and immutable content-versioned key. Cloudflare documents the conditional
+operation in its
+[S3 compatibility table](https://developers.cloudflare.com/r2/api/s3/api/), but
+its exact behavior with this SDK, R2 checksum response, retry path, metadata,
+and a competing writer must be proven in a new isolated bucket before any
+production adapter is implemented.
 
 Do not substitute direct `rclone copy`, because that bypasses the package gate
 and its durable receipt. Never run `sync --delete` for this archive.
