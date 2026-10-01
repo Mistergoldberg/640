@@ -2655,15 +2655,17 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   const albumsDataRoot = path.join(yearDataRoot, "albums");
   const importMode = args.limit === null ? "complete" : "sample";
 
+  if (isCanonicalRun) {
+    throw new Error(
+      "Direct canonical photo imports are disabled. Build an isolated completed stage, then create a verified promotion package; no flag or resolved policy bypass is supported"
+    );
+  }
+
   if (!(await exists(sourceScope.sourceRoot))) {
     throw new Error(`Source folder does not exist: ${toPosixPath(path.relative(workspace.photoSourceRoot, sourceScope.sourceRoot))}`);
   }
 
-  if (isCanonicalRun && !args.sourcePolicy) {
-    throw new Error("Canonical import requires --source-policy with a fresh, exact, fully resolved policy; no environment variable or --force bypass is supported");
-  }
   const sourceGate = await inspectSourceGate(args, sourceScope, workspace);
-  if (isCanonicalRun) assertCanonicalSourceEligibility(sourceGate);
   const scanned = await scanFiles(sourceScope, workspace);
   const scannedFiles = scanned.files;
   const report = {

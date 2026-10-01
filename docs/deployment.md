@@ -414,18 +414,30 @@ photo IDs, album IDs, ordering, or direct-photo URL parameters. Canonical import
 behavior remains legacy-key compatible behind the source-policy gate; only an
 explicit isolated staging root selects versioned derivative keys.
 
-The canonical command is now:
+The safe replacement workflow packages a verified staged run with:
 
 ```sh
-npm run import:year -- --year YYYY \
+npm run release:package -- \
+  --staging-root /isolated/completed-stage \
+  --package-root /isolated/new-package \
   --source-policy /path/to/reviewed-policy.json
 ```
 
-It retains existing IDs,
-ordering, duplicate handling, encoders, manifests, and media keys after the
-eligibility gate passes. Inspect the private import report and staged receipt
-after any approved rehearsal. The catalogue drives year navigation; do not
-hard-code a year list in components.
+Direct canonical photo imports are disabled, including when supplied a resolved
+policy. The legacy writer remains in the importer for compatibility analysis but
+is not a publication route. Planning remains zero-write and generation must use
+an isolated staging root.
+
+The package command accepts only a complete, closed-world staged receipt with
+content-versioned media, an unlimited selected year, and a freshly matching,
+fully resolved policy. It validates every staged checksum before writing, merges
+the sealed selected year with byte-identical unaffected published years, and
+atomically installs a package only after its own closed-world seal passes. The
+package contains `candidate/public/data`, new media under `media/new`, exact
+public-data and media inventories, a manifest-to-media map, `package.json`, and
+`complete.json`. Previous media and manifests are inventoried for rollback;
+obsolete keys are listed but never deleted. Creating this package is still not
+deployment or publication authorization.
 
 For before/after preservation checks, use `npm run canonical:inventory`. Its
 ledger hash is SHA-256 over JSON for a path-sorted array of each relative path,

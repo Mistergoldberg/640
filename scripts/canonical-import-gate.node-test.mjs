@@ -95,7 +95,7 @@ async function makePolicy(fixture, filename, transform = (policy) => policy) {
   return { inspection, policy, policyPath };
 }
 
-test("all canonical runImporter flag variants fail before writing without an explicit eligible policy", async (t) => {
+test("all canonical runImporter flag variants fail before writing and cannot route around staged promotion", async (t) => {
   const fixture = await workspace();
   t.after(() => fs.rm(fixture.appRoot, { recursive: true, force: true }));
   const before = await canonicalSnapshot(fixture);
@@ -110,13 +110,13 @@ test("all canonical runImporter flag variants fail before writing without an exp
   for (const variant of variants) {
     await assert.rejects(
       runImporter(["--year", fixture.year, ...variant], { appRoot: fixture.appRoot, writeStdout: () => {} }),
-      /Canonical import requires --source-policy/
+      /Direct canonical photo imports are disabled/
     );
     assert.deepEqual(await canonicalSnapshot(fixture), before);
   }
 });
 
-test("canonical gate rejects unresolved, stale, mismatched, and incompatible policies with zero writes, then accepts an exact resolved disposable fixture", async (t) => {
+test("direct canonical imports fail before writes for unresolved, stale, mismatched, incompatible, and exact resolved policies", async (t) => {
   const fixture = await workspace();
   t.after(() => fs.rm(fixture.appRoot, { recursive: true, force: true }));
   const before = await canonicalSnapshot(fixture);
@@ -134,21 +134,21 @@ test("canonical gate rejects unresolved, stale, mismatched, and incompatible pol
   await fs.writeFile(unresolvedPath, JSON.stringify(createSourcePolicyTemplate(unresolvedInspection)));
   await assert.rejects(
     runImporter(["--year", fixture.year, "--source-policy", unresolvedPath], { appRoot: fixture.appRoot, writeStdout: () => {} }),
-    /Canonical import blocked.*Unresolved decisions:/
+    /Direct canonical photo imports are disabled/
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
   const mismatch = await makePolicy(fixture, "mismatch.json", (policy) => ({ ...policy, inventory: { ...policy.inventory, selectedYear: "2095" } }));
   await assert.rejects(
     runImporter(["--year", fixture.year, "--source-policy", mismatch.policyPath], { appRoot: fixture.appRoot, writeStdout: () => {} }),
-    /Inventory match: false/
+    /Direct canonical photo imports are disabled/
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
   const incompatible = await makePolicy(fixture, "incompatible.json", (policy) => ({ ...policy, schemaVersion: 1 }));
   await assert.rejects(
     runImporter(["--year", fixture.year, "--source-policy", incompatible.policyPath], { appRoot: fixture.appRoot, writeStdout: () => {} }),
-    /Unsupported source-policy schemaVersion/
+    /Direct canonical photo imports are disabled/
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
@@ -156,17 +156,17 @@ test("canonical gate rejects unresolved, stale, mismatched, and incompatible pol
   await jpeg(path.join(fixture.sourceFolder, "Album One", "one.jpg"), { r: 1, g: 2, b: 3 });
   await assert.rejects(
     runImporter(["--year", fixture.year, "--source-policy", stale.policyPath, "--force"], { appRoot: fixture.appRoot, writeStdout: () => {} }),
-    /Inventory match: false.*changed: 1/
+    /Direct canonical photo imports are disabled/
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
   const exact = await makePolicy(fixture, "exact.json");
   assert.equal(evaluateSourcePolicy(exact.inspection, exact.policy).publicationEligible, true);
-  const report = await runImporter(["--year", fixture.year, "--source-policy", exact.policyPath], { appRoot: fixture.appRoot, writeStdout: () => {} });
-  assert.equal(report.successfullyImported, 2);
-  const after = await canonicalSnapshot(fixture);
-  assert.notDeepEqual(after, before);
-  assert((await fs.readdir(path.join(fixture.appRoot, "generated", "library", fixture.year, "display"))).length === 2);
+  await assert.rejects(
+    runImporter(["--year", fixture.year, "--source-policy", exact.policyPath], { appRoot: fixture.appRoot, writeStdout: () => {} }),
+    /Direct canonical photo imports are disabled/
+  );
+  assert.deepEqual(await canonicalSnapshot(fixture), before);
 });
 
 test("direct script and npm alias ignore environment-variable and force bypass attempts", async (t) => {
@@ -194,13 +194,13 @@ test("direct script and npm alias ignore environment-variable and force bypass a
   const directScriptPath = await fs.realpath(path.join(fixture.appRoot, "scripts", "import-photos.mjs"));
   await assert.rejects(
     execFileAsync(process.execPath, [directScriptPath, "--year", fixture.year, "--force"], { cwd: await fs.realpath(fixture.appRoot), env }),
-    (error) => /Canonical import requires --source-policy/.test(error.stderr)
+    (error) => /Direct canonical photo imports are disabled/.test(error.stderr)
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
   await assert.rejects(
     execFileAsync("npm", ["run", "import:year", "--", "--year", fixture.year, "--limit", "1"], { cwd: fixture.appRoot, env }),
-    (error) => /Canonical import requires --source-policy/.test(error.stderr)
+    (error) => /Direct canonical photo imports are disabled/.test(error.stderr)
   );
   assert.deepEqual(await canonicalSnapshot(fixture), before);
 
