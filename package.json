@@ -22,6 +22,8 @@
     "canonical:inventory": "node scripts/canonical-inventory.mjs",
     "release:audit": "node scripts/release-audit.mjs",
     "release:package": "node scripts/promote-staged-release.mjs",
+    "media:publish:plan": "node scripts/package-media-publication.mjs --plan",
+    "media:publish:local": "node scripts/package-media-publication.mjs --execute",
     "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
     "media:upload": "node scripts/media-upload-r2.mjs --execute"
   },

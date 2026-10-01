@@ -137,7 +137,6 @@ npm run dev
 npm test
 npm run build
 npm run release:audit
-npm run media:upload:dry-run
 ```
 
 Development currently uses `/`; Vite serves the local generated library at
@@ -181,34 +180,41 @@ authenticated access. Stop before overwriting unexpected objects in a non-empty
 bucket. Confirm R2 Standard storage, attach the media custom domain, and configure
 public HTTPS GET/HEAD access without public listing or mutation.
 
-Use the audited uploader:
+The former broad canonical-tree uploader is disabled. Both legacy commands below
+exit nonzero for every flag and environment combination:
 
 ```sh
 npm run media:upload:dry-run
 npm run media:upload
 ```
 
-Execution requires `rclone`. Version 1.75.1 was downloaded from the official
-release and its SHA-256 checksum verified; the binary is kept in ignored local
-tooling. The script uses `rclone copy` with overwrite protection, explicit ordered
-allowlist filters and zero deletes.
-The overwrite guard is separate from HTTP caching: images are not served with
-an immutable cache directive. The uploader sets:
+New media must instead come from a completed promotion package. The package-bound
+gate verifies the package ID and closed-world seal, media inventory,
+manifest-to-media map, and exact `media/new` set before planning any write. This
+cycle provides only a filesystem object-store adapter for local verification:
 
-```text
-Content-Type: image/jpeg
-Cache-Control: public, max-age=14400, must-revalidate
+```sh
+npm run media:publish:plan -- \
+  --package-root /absolute/path/to/package \
+  --object-root /absolute/path/to/disposable-object-store
+
+npm run media:publish:local -- \
+  --package-root /absolute/path/to/package \
+  --object-root /absolute/path/to/disposable-object-store \
+  --journal-root /absolute/path/to/durable-journal
 ```
 
-A local endpoint-only CONNECT tunnel was needed because one DNS address of the
-S3 endpoint timed out from this Mac. The tunnel retries the endpoint addresses;
-TLS verification and signing remain in rclone. It runs only for the child upload
-process, binds to loopback and makes no global network changes. Credentials are
-passed in the child environment and never sent through a third-party proxy.
+The local adapter proves equality by reading the complete object and calculating
+SHA-256. Size and ETag are not accepted as checksum proof. Publication uses only
+the approved new-key set, writes with no-overwrite semantics, never deletes, and
+does not activate manifests. The durable receipt is PASS only after every media
+key required by the candidate manifests independently reconciles.
 
-Compare the authenticated remote count and bytes against the local audit. Check
-representative checksums and public thumbnail/display URLs from every year.
-Never upload a broader directory and never use `sync --delete`.
+An R2 adapter is intentionally not implemented yet. Before an R2 pilot, define
+and test an account- and bucket-bound adapter that can return trustworthy
+SHA-256 for existing objects, uses conditional create/no-overwrite requests,
+lists the complete package-defined scope, and preserves the same journal and
+receipt contract. Never use a broader directory or `sync --delete`.
 
 ## Server release and rollback
 

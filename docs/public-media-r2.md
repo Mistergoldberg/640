@@ -76,25 +76,43 @@ http://127.0.0.1:5173/media/
 
 For production builds, set `VITE_MEDIA_BASE_URL` to the custom media domain.
 
-## Dry Run
+## Package-bound publication gate
 
-The dry run performs no upload and no deletion. It runs the release audit first and refuses to plan an upload unless the audit passes.
+The legacy canonical-tree uploader is disabled. These commands now always fail
+closed and must not be used as a publication route:
 
 ```bash
 npm run media:upload:dry-run
-```
-
-## Future Upload
-
-Install `rclone`, export the environment variables above, run a fresh dry-run, then run:
-
-```bash
 npm run media:upload
 ```
 
-The upload script uses `rclone copy` semantics. It does not delete remote objects and it does not print credentials.
+Media publication starts with a completed, publication-eligible promotion
+package. A zero-write plan and local execution against a disposable filesystem
+fixture are available as follows:
 
-The equivalent remote configuration is provided to rclone through environment variables:
+```bash
+npm run media:publish:plan -- --package-root /path/to/package --object-root /path/to/disposable-store
+npm run media:publish:local -- --package-root /path/to/package --object-root /path/to/disposable-store --journal-root /path/to/journal
+```
+
+The gate binds the package ID, closed-world seal, manifest-reference map, media
+inventory, and exact `media/new` set. It accepts an existing object only after a
+full-byte SHA-256 readback, writes only absent approved new keys, and performs no
+deletes. Manifest activation is a separate later operation.
+
+## Future R2 adapter
+
+No R2 adapter or R2 execution command is provided in this cycle. Before a pilot,
+the R2 interface must prove existing-object SHA-256 with a trustworthy method;
+size and ETag alone do not qualify. It must also support conditional
+create/no-overwrite behavior, bounded retries, complete scoped listing, durable
+resume, and independent post-upload reconciliation under the package-bound
+receipt contract.
+
+Do not substitute direct `rclone copy`, because that bypasses the package gate
+and its durable receipt. Never run `sync --delete` for this archive.
+
+The historical rclone environment mapping was:
 
 ```text
 RCLONE_CONFIG_R2_TYPE=s3
@@ -103,5 +121,3 @@ RCLONE_CONFIG_R2_ACCESS_KEY_ID=<from R2_ACCESS_KEY_ID>
 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<from R2_SECRET_ACCESS_KEY>
 RCLONE_CONFIG_R2_ENDPOINT=<from R2_ENDPOINT>
 ```
-
-Do not run `rclone sync` for this archive unless deletion behavior has been reviewed separately.
