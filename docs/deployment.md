@@ -390,6 +390,30 @@ atomic renames, manifests are sealed in dependency order, and
 `generated/journal/complete.json` exists only after the closed-world output audit
 passes. A staging receipt is never publication approval.
 
+New staged derivatives use immutable content-versioned keys:
+
+```text
+YYYY/{thumbs|display}/PHOTO_ID-cv1-SHA256.jpg
+```
+
+The final digest binds the unchanged path-derived photo ID, source SHA-256,
+derivative type, key schema version, Sharp version, and the derivative-specific
+settings from the versioned recipe. A source-byte, recipe, encoder-version, type,
+or photo-identity change therefore selects a different key. Resume reuse requires
+the matching journal identity plus the recorded output checksum and dimensions;
+mtime is never evidence. An unjournaled file at a proposed key is a collision and
+fails closed rather than being overwritten.
+
+Legacy published keys are retained for rollback. Their filenames and current
+bytes do not prove which source checksum and exact encoder recipe produced them,
+so a new staged manifest does not reuse them without a separately verified
+provenance record. Plans and receipts list every legacy-to-versioned transition,
+the old keys that become obsolete for the proposed manifest but remain retained,
+and any proposed-key collision. This adds no deletion behavior and does not alter
+photo IDs, album IDs, ordering, or direct-photo URL parameters. Canonical import
+behavior remains legacy-key compatible behind the source-policy gate; only an
+explicit isolated staging root selects versioned derivative keys.
+
 The canonical command is now:
 
 ```sh

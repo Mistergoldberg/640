@@ -77,6 +77,10 @@ test("plan mode reports valid, malformed, and unsupported inputs with zero files
   await fs.writeFile(path.join(appRoot, "generated", "library", "2099", "thumbs", "stale.jpg"), "stale\n");
   await fs.mkdir(path.join(appRoot, "public", "data", "2099", "albums"), { recursive: true });
   await fs.writeFile(path.join(appRoot, "public", "data", "2099", "albums", "stale.json"), "{}\n");
+  const firstPlan = await runImporter(["--plan", "--year", "2099"], { appRoot, writeStdout: () => {} });
+  const proposedConflictPath = firstPlan.observedFacts.photos.find((photo) => photo.proposedPhotoId === validId).proposedOutputs.thumbnail.path;
+  await fs.mkdir(path.dirname(proposedConflictPath), { recursive: true });
+  await fs.writeFile(proposedConflictPath, "conflicting versioned key\n");
   const before = await snapshotTree(appRoot);
   const stdout = captureStdout();
 
@@ -88,7 +92,7 @@ test("plan mode reports valid, malformed, and unsupported inputs with zero files
   assert.equal(plan.observedFacts.unsupportedFiles.length, 1);
   assert.equal(plan.observedFacts.duplicateContentGroups.length, 1);
   assert.equal(plan.observedFacts.existingKeyConflicts.length, 1);
-  assert.deepEqual(plan.observedFacts.outputsThatWouldBecomeStale.mediaKeys, ["2099/thumbs/stale.jpg"]);
+  assert.deepEqual(plan.observedFacts.outputsThatWouldBecomeStale.mediaKeys, [`2099/thumbs/${validId}.jpg`, "2099/thumbs/stale.jpg"]);
   assert.equal(plan.observedFacts.outputsThatWouldBecomeStale.albumManifestPaths.length, 1);
   assert(plan.observedFacts.photos.every((photo) => path.isAbsolute(photo.sourcePath) && path.isAbsolute(photo.proposedOutputs.display.path)));
   assert.deepEqual(JSON.parse(stdout.value()), plan);

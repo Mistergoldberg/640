@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { isSupportedMediaKey } from "./content-versioned-media.mjs";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
@@ -166,7 +167,7 @@ function derivativeType(assetKey) {
 }
 
 function isSafeAssetKey(assetKey) {
-  return /^(?:19|20)\d{2}\/(?:thumbs|display)\/(?:19|20)\d{2}-[a-f0-9]{14}\.(?:jpg|jpeg|png|webp|gif|tif|tiff|heic|heif)$/i.test(assetKey);
+  return isSupportedMediaKey(assetKey);
 }
 
 function inspectJpegMarkers(buffer) {

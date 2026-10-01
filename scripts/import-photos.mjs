@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import exifr from "exifr";
 import { createSourcePolicyTemplate, evaluateSourcePolicy, inspectSourcePolicy, renderDecisionReport } from "./source-policy.mjs";
+import { CONTENT_MEDIA_KEY_VERSION, contentVersionedMediaAsset } from "./content-versioned-media.mjs";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff", ".heic", ".heif"]);
 const DEFAULT_CONCURRENCY = 6;
@@ -15,7 +16,7 @@ const THUMB_WIDTH = 300;
 const DISPLAY_MAX_WIDTH = 640;
 const DISPLAY_MAX_HEIGHT = 480;
 const execFileAsync = promisify(execFile);
-const STAGED_RUN_SCHEMA_VERSION = 1;
+const STAGED_RUN_SCHEMA_VERSION = 2;
 const STAGED_RECIPE = Object.freeze({
   version: 1,
   thumbnail: { width: THUMB_WIDTH, withoutEnlargement: true, format: "jpeg", quality: 76, mozjpeg: true, autoOrient: true },
@@ -1280,41 +1281,67 @@ async function writeSourceSelectionReport(reportsRoot, year, sourceSelection) {
   await writeJson(path.join(reportsRoot, `${year}-source-selection-report.json`), sourceSelection);
 }
 
-function projectedAssets(photo, mediaRoot, year) {
-  const thumbnailKey = `${year}/thumbs/${photo.id}.jpg`;
-  const displayKey = `${year}/display/${photo.id}.jpg`;
+function projectedVersionedAssets(photo, mediaRoot, year, recipe, sharpVersion) {
+  const thumbnailIdentity = contentVersionedMediaAsset({
+    year,
+    photoId: photo.id,
+    sourceSha256: photo.sha256,
+    derivativeType: "thumbnail",
+    recipe,
+    sharpVersion
+  });
+  const displayIdentity = contentVersionedMediaAsset({
+    year,
+    photoId: photo.id,
+    sourceSha256: photo.sha256,
+    derivativeType: "display",
+    recipe,
+    sharpVersion
+  });
   return {
     thumbnail: {
-      key: thumbnailKey,
-      path: path.join(mediaRoot, thumbnailKey),
-      dimensions: resizedToWidth(photo.sourceWidth, photo.sourceHeight, THUMB_WIDTH)
+      ...thumbnailIdentity,
+      path: path.join(mediaRoot, thumbnailIdentity.key),
+      dimensions: resizedToWidth(photo.sourceWidth, photo.sourceHeight, THUMB_WIDTH),
+      derivativeType: "thumbnail",
+      sourceIdentity: { photoId: photo.id, sourceSha256: photo.sha256 }
     },
     display: {
-      key: displayKey,
-      path: path.join(mediaRoot, displayKey),
-      dimensions: resizedInside(photo.sourceWidth, photo.sourceHeight, DISPLAY_MAX_WIDTH, DISPLAY_MAX_HEIGHT)
+      ...displayIdentity,
+      path: path.join(mediaRoot, displayIdentity.key),
+      dimensions: resizedInside(photo.sourceWidth, photo.sourceHeight, DISPLAY_MAX_WIDTH, DISPLAY_MAX_HEIGHT),
+      derivativeType: "display",
+      sourceIdentity: { photoId: photo.id, sourceSha256: photo.sha256 }
     }
   };
 }
 
-async function inspectExistingAsset(asset, photo, force) {
+async function inspectExistingVersionedAsset(asset) {
   let stat = null;
   try {
-    stat = await fs.stat(asset.path);
+    stat = await fs.lstat(asset.path);
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw error;
     }
   }
-  const reusable = Boolean(stat) && !force && (await shouldReuseAsset(asset.path, photo.sourceMtimeMs, asset.dimensions));
+  const verification = stat?.isFile() ? await verifyDerivative(asset.path, asset.dimensions) : null;
   return {
     key: asset.key,
     path: asset.path,
     exists: Boolean(stat),
     existingBytes: stat?.size ?? null,
-    reusable,
-    proposedAction: reusable ? "reuse" : "generate",
-    existingKeyConflict: Boolean(stat) && !reusable
+    existingSha256: verification?.sha256 || null,
+    dimensionsValid: Boolean(verification),
+    reusable: false,
+    proposedAction: stat ? "fail-unless-bound-by-this-run-journal" : "generate",
+    existingKeyConflict: Boolean(stat),
+    keyIdentitySha256: asset.keyIdentitySha256,
+    recipeIdentitySha256: asset.recipeIdentitySha256,
+    derivativeType: asset.derivativeType,
+    note: stat
+      ? "A filename match alone is not provenance. Reuse requires this run journal's exact source, recipe, checksum, and dimensions."
+      : "New immutable content-versioned key."
   };
 }
 
@@ -1336,6 +1363,36 @@ async function readPublishedYearIndex(dataRoot, year) {
   } catch {
     return null;
   }
+}
+
+async function readPublishedMediaReferences(dataRoot, year) {
+  const index = await readPublishedYearIndex(dataRoot, year);
+  const byPhotoId = new Map();
+  const manifestPaths = [];
+  for (const album of index?.albums || []) {
+    if (!album?.manifestUrl) continue;
+    const manifestPath = path.resolve(dataRoot, album.manifestUrl);
+    if (!isInside(manifestPath, path.resolve(dataRoot))) {
+      throw new Error(`Published album manifest escapes the public data root: ${album.manifestUrl}`);
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    } catch (error) {
+      throw new Error(`Cannot inspect published album manifest ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    manifestPaths.push(manifestPath);
+    for (const photo of manifest.photos || []) {
+      if (!photo?.id || !photo.thumbnailKey || !photo.displayKey) continue;
+      byPhotoId.set(photo.id, {
+        photoId: photo.id,
+        thumbnailKey: photo.thumbnailKey,
+        displayKey: photo.displayKey,
+        manifestPath
+      });
+    }
+  }
+  return { index, byPhotoId, manifestPaths };
 }
 
 function exactDuplicateGroups(photos, physicalSourceRoot) {
@@ -1493,7 +1550,7 @@ async function removeLeftoverTemporaryFiles(stagingRoot) {
   return removed;
 }
 
-async function atomicWriteArtifact({ targetPath, selectedRoot, runId, writeTemporary, verifyTemporary }) {
+async function atomicWriteArtifact({ targetPath, selectedRoot, runId, writeTemporary, verifyTemporary, noClobber = false }) {
   await assertTargetInsideRoot(targetPath, selectedRoot);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await assertTargetInsideRoot(targetPath, selectedRoot);
@@ -1506,7 +1563,19 @@ async function atomicWriteArtifact({ targetPath, selectedRoot, runId, writeTempo
     if (!verification) {
       throw new Error(`Temporary staged output failed verification: ${temporaryPath}`);
     }
-    await fs.rename(temporaryPath, targetPath);
+    if (noClobber) {
+      try {
+        await fs.link(temporaryPath, targetPath);
+        await fs.unlink(temporaryPath);
+      } catch (error) {
+        if (error?.code === "EEXIST") {
+          throw new Error(`Content-versioned media key collision; refusing to overwrite existing bytes: ${targetPath}`);
+        }
+        throw error;
+      }
+    } else {
+      await fs.rename(temporaryPath, targetPath);
+    }
     await syncDirectory(path.dirname(targetPath));
     const installedVerification = await verifyTemporary(targetPath);
     if (!installedVerification) {
@@ -1690,23 +1759,40 @@ function stagedRelativePath(stagingRoot, absolutePath) {
   return toPosixPath(path.relative(stagingRoot, absolutePath));
 }
 
-function artifactEvent({ stagingRoot, targetPath, kind, verification }) {
+function artifactEvent({ stagingRoot, targetPath, kind, verification, mediaIdentity = null }) {
   return {
     type: "artifact-complete",
     path: stagedRelativePath(stagingRoot, targetPath),
     kind,
     bytes: verification.bytes,
     sha256: verification.sha256,
-    ...(verification.dimensions ? { dimensions: verification.dimensions } : {})
+    ...(verification.dimensions ? { dimensions: verification.dimensions } : {}),
+    ...(mediaIdentity ? { mediaIdentity } : {})
   };
 }
 
 async function ensureDerivativeArtifact({ photo, asset, kind, selectedRoot, stagingRoot, runId, journal, runtime }) {
   const relativePath = stagedRelativePath(stagingRoot, asset.path);
   const recorded = journal.artifacts.get(relativePath);
+  const mediaIdentity = {
+    key: asset.key,
+    derivativeType: asset.derivativeType,
+    sourceIdentity: asset.sourceIdentity,
+    keyIdentitySha256: asset.keyIdentitySha256,
+    recipeIdentitySha256: asset.recipeIdentitySha256
+  };
+  if (recorded?.mediaIdentity && stableJson(recorded.mediaIdentity) !== stableJson(mediaIdentity)) {
+    throw new Error(`Journal media identity mismatch; refusing to reuse or overwrite ${relativePath}`);
+  }
+  if (recorded && !recorded.mediaIdentity) {
+    throw new Error(`Journal derivative lacks content-version provenance; refusing to reuse or overwrite ${relativePath}`);
+  }
   const verified = recorded ? await verifyDerivative(asset.path, asset.dimensions, recorded.sha256) : null;
   if (verified) {
-    return { ...verified, generated: false, path: asset.path, key: asset.key };
+    return { ...verified, generated: false, path: asset.path, key: asset.key, mediaIdentity };
+  }
+  if (!recorded && (await exists(asset.path))) {
+    throw new Error(`Content-versioned media key collision without matching run provenance: ${asset.key}`);
   }
   const result = await atomicWriteArtifact({
     targetPath: asset.path,
@@ -1723,12 +1809,13 @@ async function ensureDerivativeArtifact({ photo, asset, kind, selectedRoot, stag
           .toFile(temporaryPath);
       }
     },
-    verifyTemporary: async (temporaryPath) => verifyDerivative(temporaryPath, asset.dimensions)
+    verifyTemporary: async (temporaryPath) => verifyDerivative(temporaryPath, asset.dimensions),
+    noClobber: !recorded
   });
-  const event = artifactEvent({ stagingRoot, targetPath: asset.path, kind, verification: result });
+  const event = artifactEvent({ stagingRoot, targetPath: asset.path, kind, verification: result, mediaIdentity });
   await journal.append(event);
   await invokeFault(runtime, `${kind}-generation`, { photoId: photo.id, path: asset.path });
-  return { ...result, generated: true, path: asset.path, key: asset.key };
+  return { ...result, generated: true, path: asset.path, key: asset.key, mediaIdentity };
 }
 
 async function ensureJsonArtifact({ value, targetPath, kind, selectedRoot, stagingRoot, runId, journal, runtime, faultPoint = null }) {
@@ -1756,10 +1843,21 @@ async function ensureJsonArtifact({ value, targetPath, kind, selectedRoot, stagi
   return { ...verified, generated, path: targetPath };
 }
 
-async function requireRecordedDerivative({ targetPath, dimensions, stagingRoot, journal }) {
+async function requireRecordedDerivative({ asset, stagingRoot, journal }) {
+  const { path: targetPath, dimensions } = asset;
   const relativePath = stagedRelativePath(stagingRoot, targetPath);
   const recorded = journal.artifacts.get(relativePath);
   if (!recorded) throw new Error(`Referenced derivative is not journaled as complete: ${relativePath}`);
+  const expectedIdentity = {
+    key: asset.key,
+    derivativeType: asset.derivativeType,
+    sourceIdentity: asset.sourceIdentity,
+    keyIdentitySha256: asset.keyIdentitySha256,
+    recipeIdentitySha256: asset.recipeIdentitySha256
+  };
+  if (stableJson(recorded.mediaIdentity) !== stableJson(expectedIdentity)) {
+    throw new Error(`Referenced derivative has mismatched media identity: ${relativePath}`);
+  }
   const verified = await verifyDerivative(targetPath, dimensions, recorded.sha256);
   if (!verified) throw new Error(`Referenced derivative failed sealing verification: ${relativePath}`);
   return verified;
@@ -1793,12 +1891,13 @@ function buildStagedModel({
   importerCommit,
   importerScriptSha256,
   sharpVersion,
-  recipe
+  recipe,
+  publishedMedia
 }) {
   const stagingRoot = outputConfig.stagingRoot;
   const assetsByPhotoId = new Map();
   for (const photo of selectedPhotos) {
-    assetsByPhotoId.set(photo.id, projectedAssets(photo, outputConfig.roots.media, args.year));
+    assetsByPhotoId.set(photo.id, projectedVersionedAssets(photo, outputConfig.roots.media, args.year, recipe, sharpVersion));
   }
   const albumModels = albums.map((album) => ({
     id: album.id,
@@ -1876,19 +1975,53 @@ function buildStagedModel({
       id: album.id,
       name: album.name,
       path: `data/${args.year}/albums/${album.id}.json`,
-      photoIds: album.manifest.photos.map((photo) => photo.id)
+      sha256: sha256Bytes(jsonBytes(album.manifest)),
+      photos: album.manifest.photos.map((photo) => ({
+        id: photo.id,
+        thumbnailKey: photo.thumbnailKey,
+        displayKey: photo.displayKey
+      }))
     })),
     yearIndexPath: `data/${args.year}/index.json`,
     yearIndex: index,
     catalogPath: "data/catalog.json",
     catalog
   };
+  const mediaKeySet = selectedPhotos.flatMap((photo) => {
+    const assets = assetsByPhotoId.get(photo.id);
+    return [assets.thumbnail, assets.display].map((asset) => ({
+      photoId: photo.id,
+      sourcePath: photo.absolutePath,
+      sourceSha256: photo.sha256,
+      derivativeType: asset.derivativeType,
+      key: asset.key,
+      keyIdentitySha256: asset.keyIdentitySha256,
+      recipeIdentitySha256: asset.recipeIdentitySha256,
+      dimensions: asset.dimensions
+    }));
+  });
+  const legacyTransitions = selectedPhotos
+    .map((photo) => {
+      const published = publishedMedia.byPhotoId.get(photo.id);
+      if (!published) return null;
+      const assets = assetsByPhotoId.get(photo.id);
+      return {
+        photoId: photo.id,
+        legacy: { thumbnailKey: published.thumbnailKey, displayKey: published.displayKey },
+        staged: { thumbnailKey: assets.thumbnail.key, displayKey: assets.display.key },
+        compatibility: "regenerate-versioned",
+        reason: "Legacy key and bytes have no verified source-checksum and encoding-recipe provenance."
+      };
+    })
+    .filter(Boolean);
   const binding = {
     schemaVersion: STAGED_RUN_SCHEMA_VERSION,
     importerCommit,
     importerScriptSha256,
     sharpVersion,
     derivativeRecipe: recipe,
+    contentMediaKeyVersion: CONTENT_MEDIA_KEY_VERSION,
+    mediaKeySet,
     sourceSelectionSha256: sha256Bytes(stableJson(sourceSelection)),
     proposedManifestSetSha256: sha256Bytes(stableJson(proposedManifestSet)),
     sourceSelection,
@@ -1922,6 +2055,8 @@ function buildStagedModel({
     yearIndexPath: path.join(outputConfig.roots.data, "data", args.year, "index.json"),
     catalogPath: path.join(outputConfig.roots.data, "data", "catalog.json"),
     binding,
+    mediaKeySet,
+    legacyTransitions,
     runId: sha256Bytes(stableJson(binding))
   };
 }
@@ -1949,6 +2084,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
   const importerScriptSha256 = runtime.importerScriptSha256 || (await fileDigest(fileURLToPath(import.meta.url))).sha256;
   const sharpVersion = runtime.sharpVersion || sharp.versions.sharp;
   const recipe = runtime.derivativeRecipe || STAGED_RECIPE;
+  const publishedMedia = await readPublishedMediaReferences(outputConfig.canonical.data, args.year);
   const model = buildStagedModel({
     args,
     outputConfig,
@@ -1961,7 +2097,8 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     importerCommit,
     importerScriptSha256,
     sharpVersion,
-    recipe
+    recipe,
+    publishedMedia
   });
   const { stagingRoot, runId } = model;
   const journalRoot = outputConfig.roots.journal;
@@ -2012,6 +2149,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
 
   let generatedDerivatives = 0;
   let reusedDerivatives = 0;
+  const verifiedMedia = [];
   for (const photo of selectedPhotos) {
     const assets = model.assetsByPhotoId.get(photo.id);
     const thumbnail = await ensureDerivativeArtifact({
@@ -2036,13 +2174,39 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     });
     generatedDerivatives += Number(thumbnail.generated) + Number(display.generated);
     reusedDerivatives += Number(!thumbnail.generated) + Number(!display.generated);
+    verifiedMedia.push(
+      {
+        photoId: photo.id,
+        sourcePath: photo.absolutePath,
+        sourceSha256: photo.sha256,
+        derivativeType: "thumbnail",
+        key: assets.thumbnail.key,
+        keyIdentitySha256: assets.thumbnail.keyIdentitySha256,
+        recipeIdentitySha256: assets.thumbnail.recipeIdentitySha256,
+        dimensions: thumbnail.dimensions,
+        bytes: thumbnail.bytes,
+        outputSha256: thumbnail.sha256
+      },
+      {
+        photoId: photo.id,
+        sourcePath: photo.absolutePath,
+        sourceSha256: photo.sha256,
+        derivativeType: "display",
+        key: assets.display.key,
+        keyIdentitySha256: assets.display.keyIdentitySha256,
+        recipeIdentitySha256: assets.display.recipeIdentitySha256,
+        dimensions: display.dimensions,
+        bytes: display.bytes,
+        outputSha256: display.sha256
+      }
+    );
   }
 
   for (const album of model.albumModels) {
     for (const photo of album.items) {
       const assets = model.assetsByPhotoId.get(photo.id);
-      await requireRecordedDerivative({ targetPath: assets.thumbnail.path, dimensions: assets.thumbnail.dimensions, stagingRoot, journal });
-      await requireRecordedDerivative({ targetPath: assets.display.path, dimensions: assets.display.dimensions, stagingRoot, journal });
+      await requireRecordedDerivative({ asset: assets.thumbnail, stagingRoot, journal });
+      await requireRecordedDerivative({ asset: assets.display, stagingRoot, journal });
     }
     await ensureJsonArtifact({
       value: album.manifest,
@@ -2166,6 +2330,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     importerScriptSha256,
     sharpVersion,
     derivativeRecipe: recipe,
+    contentMediaKeyVersion: CONTENT_MEDIA_KEY_VERSION,
     sourceSelectionSha256: model.binding.sourceSelectionSha256,
     proposedManifestSetSha256: model.binding.proposedManifestSetSha256,
     counts: {
@@ -2177,6 +2342,23 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     omissions: model.sourceSelection.omissions,
     stagedPaths: outputConfig.roots,
     sourceChecksums: model.sourceSelection.files.map((file) => ({ path: file.path, bytes: file.bytes, sha256: file.sha256 })),
+    media: verifiedMedia.sort(
+      (left, right) => left.key.localeCompare(right.key, undefined, { numeric: true }) || left.derivativeType.localeCompare(right.derivativeType)
+    ),
+    manifestReferences: model.proposedManifestSet.albums.map((album) => ({
+      path: album.path,
+      sha256: album.sha256,
+      photos: album.photos
+    })),
+    legacyCompatibility: {
+      rule: "A legacy reference may be reused only with evidence binding its exact bytes to the same source SHA-256 and encoding recipe; no such provenance is inferred from its filename.",
+      reusedLegacyReferences: [],
+      transitions: model.legacyTransitions,
+      obsoleteButRetainedKeys: Array.from(
+        new Set(model.legacyTransitions.flatMap((entry) => [entry.legacy.thumbnailKey, entry.legacy.displayKey]))
+      ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+      deletionPlanned: false
+    },
     outputChecksums,
     outputSetSha256: sha256Bytes(stableJson(outputChecksums)),
     sourcePolicy: {
@@ -2238,18 +2420,22 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
   return { receipt, receiptPath, closedWorld, generatedDerivatives, reusedDerivatives, resumed: loadedJournal.events.length > 0 };
 }
 
-async function buildPlanReport({ args, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, sourceGate, startedAt }) {
+async function buildPlanReport({ args, runtime, workspace, outputConfig, sourceScope, scanned, report, selectedPhotos, albums, sourceGate, startedAt }) {
   const physicalSourceRoot = await fs.realpath(sourceScope.sourceRoot);
   const yearDataRoot = path.join(outputConfig.roots.data, "data", args.year);
+  const sharpVersion = runtime.sharpVersion || sharp.versions.sharp;
+  const recipe = runtime.derivativeRecipe || STAGED_RECIPE;
+  const publishedMedia = await readPublishedMediaReferences(outputConfig.canonical.data, args.year);
   const expectedAssetKeys = new Set();
   const assetInspection = await mapWithConcurrency(selectedPhotos, args.concurrency, async (photo) => {
-    const assets = projectedAssets(photo, outputConfig.roots.media, args.year);
+    const assets = projectedVersionedAssets(photo, outputConfig.roots.media, args.year, recipe, sharpVersion);
     expectedAssetKeys.add(assets.thumbnail.key);
     expectedAssetKeys.add(assets.display.key);
     return {
       photo,
-      thumbnail: await inspectExistingAsset(assets.thumbnail, photo, args.force),
-      display: await inspectExistingAsset(assets.display, photo, args.force)
+      assets,
+      thumbnail: await inspectExistingVersionedAsset(assets.thumbnail),
+      display: await inspectExistingVersionedAsset(assets.display)
     };
   });
   const albumSummaries = albums.map((album) => ({
@@ -2327,6 +2513,24 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
       .filter((asset) => asset.exists)
       .map((asset) => ({ sourcePath: photo.sourcePath, photoId: photo.proposedPhotoId, ...asset }))
   );
+  const legacyMediaTransitions = assetInspection
+    .map(({ photo, assets }) => {
+      const legacy = publishedMedia.byPhotoId.get(photo.id);
+      if (!legacy) return null;
+      return {
+        photoId: photo.id,
+        sourcePath: photo.absolutePath,
+        sourceSha256: photo.sha256,
+        legacy: { thumbnailKey: legacy.thumbnailKey, displayKey: legacy.displayKey },
+        staged: { thumbnailKey: assets.thumbnail.key, displayKey: assets.display.key },
+        proposedAction: "generate-versioned-and-retain-legacy",
+        reason: "The legacy filename and bytes do not prove the exact source checksum and encoding recipe."
+      };
+    })
+    .filter(Boolean);
+  const obsoleteButRetainedKeys = Array.from(
+    new Set(legacyMediaTransitions.flatMap((entry) => [entry.legacy.thumbnailKey, entry.legacy.displayKey]))
+  ).sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
   const unresolvedCuratorialDecisions = [];
   const unpublishedFolders = sourceFolders.filter((folder) => !folder.representedByPublishedAlbumId);
   if (unpublishedFolders.length) {
@@ -2359,7 +2563,7 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: "plan",
     zeroWrite: true,
     generatedAt: new Date().toISOString(),
@@ -2375,7 +2579,12 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
       year: args.year,
       limit: args.limit,
       force: args.force,
-      concurrency: args.concurrency
+      concurrency: args.concurrency,
+      contentVersionedMedia: {
+        keyVersion: CONTENT_MEDIA_KEY_VERSION,
+        sharpVersion,
+        derivativeRecipe: recipe
+      }
     },
     observedFacts: {
       selectionPolicy:
@@ -2395,9 +2604,17 @@ async function buildPlanReport({ args, workspace, outputConfig, sourceScope, sca
       offYearDates,
       existingKeys,
       existingKeyConflicts,
+      legacyCompatibility: {
+        rule: "Retain a legacy reference only with evidence binding its bytes to the exact source SHA-256 and recipe. Filename similarity is not evidence.",
+        reusedLegacyReferences: [],
+        transitions: legacyMediaTransitions,
+        obsoleteButRetainedKeys,
+        deletionPlanned: false
+      },
       outputsThatWouldBecomeStale: {
         mediaKeys: staleMediaKeys,
-        albumManifestPaths: staleManifestPaths
+        albumManifestPaths: staleManifestPaths,
+        disposition: "retain; this cycle adds no deletion logic"
       },
       proposedSharedOutputs: {
         catalogPath: path.join(outputConfig.roots.data, "data", "catalog.json"),
@@ -2574,6 +2791,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   if (args.plan) {
     const planReport = await buildPlanReport({
       args,
+      runtime,
       workspace,
       outputConfig,
       sourceScope,

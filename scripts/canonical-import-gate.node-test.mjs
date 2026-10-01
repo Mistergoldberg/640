@@ -175,6 +175,7 @@ test("direct script and npm alias ignore environment-variable and force bypass a
   await fs.mkdir(path.join(fixture.appRoot, "scripts"), { recursive: true });
   await fs.copyFile(path.join(REPO_ROOT, "scripts", "import-photos.mjs"), path.join(fixture.appRoot, "scripts", "import-photos.mjs"));
   await fs.copyFile(path.join(REPO_ROOT, "scripts", "source-policy.mjs"), path.join(fixture.appRoot, "scripts", "source-policy.mjs"));
+  await fs.copyFile(path.join(REPO_ROOT, "scripts", "content-versioned-media.mjs"), path.join(fixture.appRoot, "scripts", "content-versioned-media.mjs"));
   await fs.symlink(path.join(REPO_ROOT, "node_modules"), path.join(fixture.appRoot, "node_modules"));
   await fs.writeFile(
     path.join(fixture.appRoot, "package.json"),
