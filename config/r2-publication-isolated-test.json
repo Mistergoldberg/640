@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "provider": "cloudflare-r2",
+  "environment": "isolated-write-test",
+  "accountIdSha256": "8c7c42f3975342d7b6ac0394ef5beda738af67722cb0f359ded04d735066cb26",
+  "bucket": "pixilation-media-publication-test-20261001",
+  "endpointSha256": "12531713cd9d0e91d1dfa0b57f28b1d6c51fb0ef86f49d0753e62c59c51ac66b",
+  "forbiddenBuckets": ["insertcatchytitlehere-media"],
+  "forbiddenPublicEndpoints": [
+    "https://media.pixilation.org",
+    "https://media.insertcatchytitlehere.com"
+  ],
+  "credentialScope": {
+    "type": "cloudflare-r2-temporary",
+    "bucket": "pixilation-media-publication-test-20261001",
+    "permission": "object-read-write",
+    "actionClaimStatus": "unsupported-by-r2-observed-2026-10-01",
+    "adapterActions": ["GetObject", "ListObjectsV2", "PutObject"]
+  },
+  "namespace": {
+    "id": "pixilation-isolated-publication-test-v1",
+    "remotePrefix": "",
+    "keyFormat": "pixilation-media-key-v1"
+  }
+}

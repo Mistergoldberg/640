@@ -25,6 +25,8 @@
     "media:publish:plan": "node scripts/package-media-publication.mjs --plan",
     "media:publish:local": "node scripts/package-media-publication.mjs --execute",
     "media:r2:preflight": "node scripts/r2-preflight.mjs",
+    "media:r2:test:plan": "node scripts/r2-package-upload.mjs --plan",
+    "media:r2:test:publish": "node scripts/r2-package-upload.mjs --execute",
     "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
     "media:upload": "node scripts/media-upload-r2.mjs --execute"
   },

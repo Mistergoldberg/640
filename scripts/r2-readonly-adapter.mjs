@@ -119,7 +119,7 @@ function isNotFound(error) {
   return error?.name === "NotFound" || error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404;
 }
 
-export function createR2ReadOnlyAdapter({ configuration, client = null, pageSize = 1000, maxPages = 1000 }) {
+export function createR2ReadOnlyAdapter({ configuration, client = null, pageSize = 1000, maxPages = 1000, allowAnyGrammarYear = false }) {
   if (!configuration?.identity || !configuration?.credentials) throw new Error("A validated R2 configuration is required");
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000) throw new Error("R2 page size must be from 1 to 1000");
   if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error("R2 max pages must be positive");
@@ -133,7 +133,7 @@ export function createR2ReadOnlyAdapter({ configuration, client = null, pageSize
     const key = remoteKey.slice(identity.namespace.remotePrefix.length);
     if (!isSupportedMediaKey(key)) return null;
     const [year, derivative] = key.split("/");
-    if (!years.has(year) || !identity.namespace.derivativeDirectories.includes(derivative)) return null;
+    if ((!allowAnyGrammarYear && !years.has(year)) || !identity.namespace.derivativeDirectories.includes(derivative)) return null;
     return key;
   }
 
@@ -242,6 +242,6 @@ export function createR2ReadOnlyAdapter({ configuration, client = null, pageSize
   };
 }
 
-export function createAuthenticatedR2ReadOnlyAdapter({ configuration, pageSize = 1000, maxPages = 1000 }) {
-  return createR2ReadOnlyAdapter({ configuration, client: createR2S3Client(configuration), pageSize, maxPages });
+export function createAuthenticatedR2ReadOnlyAdapter({ configuration, pageSize = 1000, maxPages = 1000, allowAnyGrammarYear = false }) {
+  return createR2ReadOnlyAdapter({ configuration, client: createR2S3Client(configuration), pageSize, maxPages, allowAnyGrammarYear });
 }

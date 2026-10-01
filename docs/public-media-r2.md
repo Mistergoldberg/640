@@ -146,16 +146,60 @@ The R2 adapter imports and permits only `HeadBucket`, `ListObjectsV2`,
 `HeadObject`, and `GetObject`. `--execute`, upload, copy, delete, metadata and
 force flags fail before credentials are loaded or a client is created.
 
-## Future isolated write test
+## Isolated conditional-write verification
 
-Production publication remains unavailable. The intended create operation is a
-single-object `PutObject` with `If-None-Match: *`, a supplied payload checksum,
-and immutable content-versioned key. Cloudflare documents the conditional
-operation in its
-[S3 compatibility table](https://developers.cloudflare.com/r2/api/s3/api/), but
-its exact behavior with this SDK, R2 checksum response, retry path, metadata,
-and a competing writer must be proven in a new isolated bucket before any
-production adapter is implemented.
+Production publication remains unavailable. The isolated-test adapter accepts
+only a verified promotion package and an `environment: isolated-write-test`
+destination pin. Its command surface contains only `ListObjectsV2`, `GetObject`,
+and `PutObject`; it has no copy, delete, metadata-replacement, or unconditional
+write operation. The package's exact `media/new` set is the upload allowlist.
+
+Run only against the pinned disposable bucket:
+
+```bash
+npm run media:r2:test:plan -- \
+  --package-root /path/to/synthetic/package \
+  --config config/r2-publication-isolated-test.json \
+  --credentials /absolute/path/to/isolated-test-credentials.json
+
+npm run media:r2:test:publish -- \
+  --package-root /path/to/synthetic/package \
+  --config config/r2-publication-isolated-test.json \
+  --credentials /absolute/path/to/isolated-test-credentials.json \
+  --journal-root /path/to/durable/journal
+```
+
+Every create uses `PutObject` with `If-None-Match: *`, a supplied payload
+SHA-256 checksum, `Content-Type: image/jpeg`, and
+`Cache-Control: public, max-age=31536000, immutable`. A 412 response is treated
+only as “already present”; the object is then downloaded in full and hashed.
+A successful PUT is also downloaded and hashed before the journal can record it
+as complete. Service checksum metadata, size, and ETag are retained as evidence
+but never replace full-object SHA-256 readback.
+
+The 2026-10-01 isolated-bucket exercise demonstrated absent creation, repeated
+identical and different-byte 412 responses, one winner in a concurrent race,
+lost-response recovery, bounded retry exhaustion, payload-checksum rejection,
+and metadata persistence. Cloudflare R2 rejected temporary credentials carrying
+an `actions` claim even though the temporary-credential documentation describes
+action restriction. The tested credential therefore used an exact-bucket
+`object-read-write` scope, while the adapter's imported command set supplies the
+additional local restriction. This discrepancy must be resolved with
+Cloudflare before production enablement; do not represent the credential itself
+as operation-limited.
+
+The checked-in isolated destination pin names the test bucket and hashes its
+account and endpoint. The runtime credential must be a Cloudflare temporary
+credential for that exact bucket, must not be expired, and must match the pin.
+The production bucket and public media hosts are explicit deny-list entries.
+Cloudflare documents bucket-scoped tokens and temporary credentials in its
+[R2 token guide](https://developers.cloudflare.com/r2/api/tokens/) and
+[temporary-credential guide](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/).
+
+The disposable bucket is retained empty for later isolated tests. Each test run
+must record its exact synthetic keys before creation, remove only that recorded
+set after verification, list the bucket to prove cleanup, and allow its temporary
+credential to expire. Never point this adapter at the production bucket.
 
 Do not substitute direct `rclone copy`, because that bypasses the package gate
 and its durable receipt. Never run `sync --delete` for this archive.

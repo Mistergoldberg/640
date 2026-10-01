@@ -112,6 +112,17 @@ test("adapter validates identity and follows every pagination token", async (t) 
   assert.deepEqual(client.operations.map((item) => item.name), ["HeadBucketCommand", "ListObjectsV2Command", "ListObjectsV2Command"]);
 });
 
+test("package inspection accepts package years through the pinned key grammar, not the baseline year list", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-r2-package-year-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const configuration = await makeConfiguration(root);
+  const futureKey = `2093/thumbs/2093-${"a".repeat(14)}-cv1-${"b".repeat(64)}.jpg`;
+  const response = { Name: "fixture-media", Prefix: "", Contents: [{ Key: futureKey, Size: 12 }], IsTruncated: false, $metadata: { attempts: 1 } };
+  const baseline = createR2ReadOnlyAdapter({ configuration, client: new FakeClient(() => response) });
+  const packageBound = createR2ReadOnlyAdapter({ configuration, client: new FakeClient(() => response), allowAnyGrammarYear: true });
+  assert.deepEqual((await baseline.listNamespace()).outsideNamespace.map((item) => item.remoteKey), [futureKey]);
+  assert.equal((await packageBound.listNamespace()).objects.has(futureKey), true);
+});
+
 test("truncated pagination, namespace escape, and wrong returned bucket fail closed", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-r2-list-fail-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const configuration = await makeConfiguration(root);

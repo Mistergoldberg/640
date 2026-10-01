@@ -268,7 +268,14 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const configuration = await loadR2ReadOnlyConfiguration({ configPath: path.resolve(APP_ROOT, args.configPath), credentialsPath: path.resolve(APP_ROOT, args.credentialsPath) });
   runtimeSecrets.push(configuration.credentials.accessKeyId, configuration.credentials.secretAccessKey);
-  const adapter = createAuthenticatedR2ReadOnlyAdapter({ configuration, pageSize: args.pageSize });
+  // Baseline mode intentionally keeps the pinned published-year inventory.
+  // Package mode accepts any year allowed by the pinned media-key grammar;
+  // the independently verified package supplies the exact permissible set.
+  const adapter = createAuthenticatedR2ReadOnlyAdapter({
+    configuration,
+    pageSize: args.pageSize,
+    allowAnyGrammarYear: Boolean(args.packageRoot)
+  });
   const report = args.baseline
     ? await runR2Baseline({ adapter, canonicalMediaRoot: path.resolve(APP_ROOT, args.canonicalMediaRoot), sampleCount: args.sampleCount, maximumReadbackBytes: args.maximumReadbackBytes })
     : await runR2PackagePreflight({ adapter, packageRoot: path.resolve(APP_ROOT, args.packageRoot), maximumReadbackBytes: args.maximumReadbackBytes });
