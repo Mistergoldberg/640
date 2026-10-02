@@ -209,7 +209,7 @@ export async function createPublicationPlan({ packageRoot, adapter }) {
   for (const expected of pkg.expectedByKey.values()) {
     const actual = await adapter.inspect(expected.key);
     if (!actual.exists) (pkg.newByKey.has(expected.key) ? missingKeys : missingRequiredUnavailable).push(publicEntry(expected));
-    else if (matchesExpected(actual, expected)) matchingExistingKeys.push({ ...publicEntry(expected), verificationMethod: actual.verificationMethod });
+    else if (matchesExpected(actual, expected)) matchingExistingKeys.push({ ...publicEntry(expected), verificationMethod: actual.verificationMethod, credentialRole: actual.credentialRole || null });
     else byteConflicts.push({ key: expected.key, expected: { bytes: expected.bytes, sha256: expected.sha256 }, actual });
   }
   const executable = byteConflicts.length === 0 && missingRequiredUnavailable.length === 0 && unexpectedRemoteKeys.length === 0;
@@ -270,7 +270,7 @@ async function reconcile(pkg, adapter) {
     const actual = await adapter.inspect(expected.key);
     if (!actual.exists) missing.push(expected.key);
     else if (!matchesExpected(actual, expected)) conflicts.push({ key: expected.key, expected: publicEntry(expected), actual });
-    else objects.push({ key: expected.key, expectedBytes: expected.bytes, expectedSha256: expected.sha256, verifiedBytes: actual.bytes, verifiedSha256: actual.sha256, verificationMethod: actual.verificationMethod, verifiedAt: actual.verifiedAt });
+    else objects.push({ key: expected.key, expectedBytes: expected.bytes, expectedSha256: expected.sha256, verifiedBytes: actual.bytes, verifiedSha256: actual.sha256, verificationMethod: actual.verificationMethod, credentialRole: actual.credentialRole || null, verifiedAt: actual.verifiedAt });
   }
   const allowed = new Set([...pkg.expectedByKey.keys(), ...(pkg.media.obsoleteButRetainedKeys || []).map((entry) => entry.key), ...(pkg.media.rollbackKeys || []).map((entry) => entry.key)]);
   const unexpected = (await adapter.listKeys()).filter((key) => !allowed.has(key)).sort();
@@ -322,7 +322,7 @@ export async function executePublication({ packageRoot, adapter, journalRoot, co
         faultInjector?.({ point: "after-upload-before-verification", key: expected.key, attempt });
         const actual = await adapter.inspect(expected.key);
         if (!matchesExpected(actual, expected)) throw new Error(`Uploaded object failed independent SHA-256 verification: ${expected.key}`);
-        await appendJournal(journalPath, { type: "object-verified", runId, packageId: pkg.receipt.packageId, key: expected.key, attempt, created: result.created, bytes: actual.bytes, sha256: actual.sha256, verificationMethod: actual.verificationMethod, verifiedAt: actual.verifiedAt });
+        await appendJournal(journalPath, { type: "object-verified", runId, packageId: pkg.receipt.packageId, key: expected.key, attempt, created: result.created, creationCredentialRole: result.credentialRole || null, bytes: actual.bytes, sha256: actual.sha256, verificationMethod: actual.verificationMethod, verificationCredentialRole: actual.credentialRole || null, verifiedAt: actual.verifiedAt });
         faultInjector?.({ point: "after-verification", key: expected.key, attempt });
         return;
       } catch (error) {

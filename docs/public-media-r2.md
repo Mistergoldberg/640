@@ -157,6 +157,13 @@ write operation. The package's exact `media/new` set is the upload allowlist.
 Run only against the pinned disposable bucket:
 
 ```bash
+npm run media:r2:test:credentials -- \
+  --package-root /path/to/synthetic/package \
+  --config config/r2-publication-isolated-test.json \
+  --parent-credentials /absolute/path/to/parent-r2-credentials.json \
+  --output /absolute/ignored/path/package-r2-credentials.json \
+  --ttl-seconds 900
+
 npm run media:r2:test:plan -- \
   --package-root /path/to/synthetic/package \
   --config config/r2-publication-isolated-test.json \
@@ -177,20 +184,35 @@ A successful PUT is also downloaded and hashed before the journal can record it
 as complete. Service checksum metadata, size, and ETag are retained as evidence
 but never replace full-object SHA-256 readback.
 
-The 2026-10-01 isolated-bucket exercise demonstrated absent creation, repeated
-identical and different-byte 412 responses, one winner in a concurrent race,
-lost-response recovery, bounded retry exhaustion, payload-checksum rejection,
-and metadata persistence. Cloudflare R2 rejected temporary credentials carrying
-an `actions` claim even though the temporary-credential documentation describes
-action restriction. The tested credential therefore used an exact-bucket
-`object-read-write` scope, while the adapter's imported command set supplies the
-additional local restriction. This discrepancy must be resolved with
-Cloudflare before production enablement; do not represent the credential itself
-as operation-limited.
+The publisher uses locally signed, short-lived, action-only credentials. Its
+credential permits only `GetObject` and `PutObject`, and its `objectPaths` claim
+must exactly equal the verified package's `media/new` key set. A separate
+`ListObjectsV2` credential supplies complete isolated-bucket inventory. When a
+package retains existing media, a third `GetObject` credential is bound exactly
+to that retained-key set. These roles, actions, paths, expiration times, and
+credential fingerprints are included in the publication run binding and
+receipt without including credential secrets.
+
+Cloudflare's current local-signing example includes both `scope` and `actions`,
+but R2 returned `400 InvalidArgument: X-Amz-Security-Token` for that form on
+2026-10-02. The action-only form described by the same temporary-credential
+reference succeeded and was authorization-tested. The `GetObject`/`PutObject`
+credential received `403 AccessDenied` for `DeleteObject`, `DeleteObjects`,
+`CopyObject`, `CreateMultipartUpload`, `ListObjectsV2`, cross-bucket PUT, and PUT
+outside its exact object paths. Sentinels remained byte-identical after every
+denial. Keep this runtime/documentation discrepancy in the release record.
+
+Action restriction does not turn `PutObject` into create-only permission. A
+different client holding the publisher credential could issue an unconditional
+PUT to one of its approved paths. The package adapter therefore still requires
+`If-None-Match: *`, rejects any command outside its three-command surface, and
+performs full-object SHA-256 readback. Do not treat the credential restriction
+alone as overwrite protection.
 
 The checked-in isolated destination pin names the test bucket and hashes its
-account and endpoint. The runtime credential must be a Cloudflare temporary
-credential for that exact bucket, must not be expired, and must match the pin.
+account and endpoint. Every runtime role must be a locally signed Cloudflare
+temporary credential for that exact bucket, must not be expired, and must match
+the package-bound action and path pin.
 The production bucket and public media hosts are explicit deny-list entries.
 Cloudflare documents bucket-scoped tokens and temporary credentials in its
 [R2 token guide](https://developers.cloudflare.com/r2/api/tokens/) and

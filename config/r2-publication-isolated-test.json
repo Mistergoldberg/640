@@ -10,12 +10,20 @@
     "https://media.pixilation.org",
     "https://media.insertcatchytitlehere.com"
   ],
-  "credentialScope": {
-    "type": "cloudflare-r2-temporary",
-    "bucket": "pixilation-media-publication-test-20261001",
-    "permission": "object-read-write",
-    "actionClaimStatus": "unsupported-by-r2-observed-2026-10-01",
-    "adapterActions": ["GetObject", "ListObjectsV2", "PutObject"]
+  "credentialRoles": {
+    "publisher": {
+      "actions": ["GetObject", "PutObject"],
+      "paths": "exact-package-new-keys"
+    },
+    "verifier": {
+      "actions": ["GetObject"],
+      "paths": "exact-package-retained-keys"
+    },
+    "inventory": {
+      "actions": ["ListObjectsV2"],
+      "paths": "complete-isolated-bucket"
+    },
+    "actionClaimStatus": "proven-action-only-2026-10-02"
   },
   "namespace": {
     "id": "pixilation-isolated-publication-test-v1",

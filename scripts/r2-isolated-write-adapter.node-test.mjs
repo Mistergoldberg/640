@@ -6,6 +6,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { executePublication, verifyPublicationPackage } from "./package-media-publication.mjs";
+import { mintPackageBoundR2Credentials } from "./r2-package-credentials.mjs";
+import { createR2LocalTemporaryCredentials } from "./r2-local-temporary-credentials.mjs";
 import {
   createIsolatedR2WriteAdapter,
   isolatedR2WriteContract,
@@ -16,7 +18,7 @@ const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), 
 const ACCOUNT = "a".repeat(32);
 const BUCKET = "pixilation-isolated-test";
 const ENDPOINT = `https://${ACCOUNT}.r2.cloudflarestorage.com`;
-const ADAPTER_ACTIONS = ["GetObject", "ListObjectsV2", "PutObject"];
+const ROLE_ACTIONS = { publisher: ["GetObject", "PutObject"], inventory: ["ListObjectsV2"] };
 const stableValue = (value) => Array.isArray(value) ? value.map(stableValue) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])])) : value;
 const stableJson = (value) => JSON.stringify(stableValue(value));
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
@@ -47,7 +49,7 @@ function mediaKey(kind, idChar, contentChar) {
   return `2092/${kind}/2092-${idChar.repeat(14)}-cv1-${contentChar.repeat(64)}.jpg`;
 }
 
-async function packageFixture() {
+async function packageFixture({ retainedLast = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-r2-write-"));
   const packageRoot = path.join(root, "package");
   const journalRoot = path.join(root, "journal");
@@ -59,7 +61,9 @@ async function packageFixture() {
   ];
   const entries = raw.map(({ key, data }) => ({ key, bytes: data.length, sha256: digest(data), source: "staged-new", data }));
   const expectedMedia = entries.map(({ data, ...entry }) => entry);
-  const media = { schemaVersion: 1, expectedMedia, expectedMediaSha256: digest(stableJson(expectedMedia)), newVersionedKeys: expectedMedia, existingVersionedKeys: [], existingLegacyKeysRetained: [], obsoleteButRetainedKeys: [], rollbackKeys: [], conflicts: [] };
+  const newVersionedKeys = retainedLast ? expectedMedia.slice(0, -1) : expectedMedia;
+  const existingVersionedKeys = retainedLast ? expectedMedia.slice(-1) : [];
+  const media = { schemaVersion: 1, expectedMedia, expectedMediaSha256: digest(stableJson(expectedMedia)), newVersionedKeys, existingVersionedKeys, existingLegacyKeysRetained: [], obsoleteButRetainedKeys: [], rollbackKeys: [], conflicts: [] };
   const photos = [
     { id: `2092-${"a".repeat(14)}`, thumbnailKey: entries[0].key, displayKey: entries[1].key },
     { id: `2092-${"b".repeat(14)}`, thumbnailKey: entries[2].key, displayKey: entries[3].key }
@@ -73,7 +77,7 @@ async function packageFixture() {
   await write(path.join(packageRoot, "inventories/public-data.json"), jsonBytes({ schemaVersion: 1, ...publicInventory }));
   await write(path.join(packageRoot, "inventories/media.json"), jsonBytes(media));
   await write(path.join(packageRoot, "maps/manifest-media.json"), jsonBytes(map));
-  for (const entry of entries) await write(path.join(packageRoot, "media/new", entry.key), entry.data);
+  for (const entry of entries.filter(({ key }) => newVersionedKeys.some((item) => item.key === key))) await write(path.join(packageRoot, "media/new", entry.key), entry.data);
   const binding = { schemaVersion: 1, selectedYear: "2092", stagedRunId: "synthetic-fixture", stagedReceiptSha256: "6".repeat(64), stagedClosedWorldSha256: "7".repeat(64), sourcePolicySha256: "8".repeat(64), sourceInventorySha256: "9".repeat(64), importerCommit: "synthetic", previousPublicDataSha256: "0".repeat(64), publicDataSha256: publicInventory.sha256, mediaInventorySha256: digest(stableJson(media)), manifestReferenceMapSha256: map.sha256, obsoleteButRetainedManifests: [] };
   const packageId = digest(stableJson(binding));
   await write(path.join(packageRoot, "package.json"), jsonBytes({ schemaVersion: 1, status: "publishable-local-package", publicationEligible: true, packageId, binding }));
@@ -84,19 +88,27 @@ async function packageFixture() {
 
 function base64url(value) { return Buffer.from(JSON.stringify(value)).toString("base64url"); }
 
-async function configurationFixture(overrides = {}) {
+async function configurationFixture(verifiedPackage, overrides = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-r2-config-"));
   const accessKeyId = "fixture-access-key";
   const now = Math.floor(Date.now() / 1000);
-  const claims = { bucket: BUCKET, scope: "object-read-write", sub: ACCOUNT, iss: accessKeyId, aud: new URL(ENDPOINT).host, iat: now, exp: now + 3600, ...overrides.claims };
-  const unsigned = `${base64url({ alg: "HS256", typ: "JWT" })}.${base64url(claims)}`;
-  const signature = crypto.createHmac("sha256", "fixture-parent-secret").update(unsigned).digest("base64url");
-  const jwt = `${unsigned}.${signature}`;
-  const credentials = { R2_ACCOUNT_ID: ACCOUNT, R2_BUCKET: BUCKET, R2_ENDPOINT: ENDPOINT, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: digest(jwt), R2_SESSION_TOKEN: Buffer.from(`jwt/${jwt}`).toString("base64"), ...overrides.credentials };
-  const pin = { schemaVersion: 1, provider: "cloudflare-r2", environment: "isolated-write-test", accountIdSha256: digest(ACCOUNT), bucket: BUCKET, endpointSha256: digest(ENDPOINT), forbiddenBuckets: ["production-media"], forbiddenPublicEndpoints: ["https://media.example.com"], credentialScope: { type: "cloudflare-r2-temporary", bucket: BUCKET, permission: "object-read-write", actionClaimStatus: "unsupported-by-r2-observed-2026-10-01", adapterActions: ADAPTER_ACTIONS }, namespace: { id: "pixilation-isolated-publication-test-v1", remotePrefix: "", keyFormat: "pixilation-media-key-v1" }, ...overrides.pin };
+  const role = (name, actions, objectPaths = [], claimChanges = {}) => {
+    const claims = { bucket: BUCKET, actions, ...(objectPaths.length ? { paths: { prefixPaths: [], objectPaths } } : {}), sub: ACCOUNT, iss: accessKeyId, aud: new URL(ENDPOINT).host, iat: now, exp: now + 3600, ...claimChanges };
+    const unsigned = `${base64url({ alg: "HS256", typ: "JWT" })}.${base64url(claims)}`;
+    const signature = crypto.createHmac("sha256", "fixture-parent-secret").update(unsigned).digest("base64url");
+    const jwt = `${unsigned}.${signature}`;
+    return {
+      credentials: { accessKeyId, secretAccessKey: digest(jwt), sessionToken: Buffer.from(`jwt/${jwt}`).toString("base64") },
+      descriptor: { type: "cloudflare-r2-locally-signed-temporary", accountId: ACCOUNT, bucket: claims.bucket, endpoint: ENDPOINT, scope: null, actions: claims.actions, paths: claims.paths || null, issuedAt: new Date(claims.iat * 1000).toISOString(), expiresAt: new Date(claims.exp * 1000).toISOString(), ttlSeconds: claims.exp - claims.iat, accessKeyFingerprint: digest(accessKeyId).slice(0, 16), sessionFingerprint: digest(jwt).slice(0, 16), role: name }
+    };
+  };
+  const newKeys = [...verifiedPackage.newByKey.keys()].sort();
+  const retainedKeys = [...verifiedPackage.expectedByKey.keys()].filter((key) => !verifiedPackage.newByKey.has(key)).sort();
+  const bundle = { schemaVersion: 2, environment: "isolated-write-test-action-scoped", identity: { accountId: ACCOUNT, bucket: BUCKET, endpoint: ENDPOINT, ...overrides.identity }, packageId: verifiedPackage.receipt.packageId, publicationId: verifiedPackage.publicationId, roles: { publisher: role("publisher", ROLE_ACTIONS.publisher, newKeys, overrides.publisherClaims), inventory: role("inventory", ROLE_ACTIONS.inventory, [], overrides.inventoryClaims), ...(retainedKeys.length ? { verifier: role("verifier", ["GetObject"], retainedKeys, overrides.verifierClaims) } : {}) } };
+  const pin = { schemaVersion: 1, provider: "cloudflare-r2", environment: "isolated-write-test", accountIdSha256: digest(ACCOUNT), bucket: BUCKET, endpointSha256: digest(ENDPOINT), forbiddenBuckets: ["production-media"], forbiddenPublicEndpoints: ["https://media.example.com"], credentialRoles: { publisher: { actions: ROLE_ACTIONS.publisher }, verifier: { actions: ["GetObject"] }, inventory: { actions: ROLE_ACTIONS.inventory }, actionClaimStatus: "proven-action-only-2026-10-02" }, namespace: { id: "pixilation-isolated-publication-test-v1", remotePrefix: "", keyFormat: "pixilation-media-key-v1" }, ...overrides.pin };
   const configPath = path.join(root, "config.json"), credentialsPath = path.join(root, "credentials.json");
-  await write(configPath, jsonBytes(pin)); await write(credentialsPath, jsonBytes(credentials));
-  return { root, configPath, credentialsPath, configuration: await loadIsolatedR2WriteConfiguration({ configPath, credentialsPath }) };
+  await write(configPath, jsonBytes(pin)); await write(credentialsPath, jsonBytes(bundle));
+  return { root, configPath, credentialsPath, configuration: await loadIsolatedR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage }) };
 }
 
 class MemoryR2Client {
@@ -135,18 +147,62 @@ class MemoryR2Client {
   }
 }
 
+test("documented local signing produces action-only, exact-path, short-lived credentials", async () => {
+  const result = await createR2LocalTemporaryCredentials({ endpoint: ENDPOINT, accountId: ACCOUNT, parentAccessKeyId: "parent-access", parentSecretAccessKey: "parent-secret", bucket: BUCKET, actions: ["PutObject", "GetObject"], paths: { objectPaths: ["2092/display/example.jpg"] }, ttlSeconds: 300, now: 1_800_000_000 });
+  const jwt = Buffer.from(result.credentials.sessionToken, "base64").toString("utf8").slice(4);
+  const claims = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString("utf8"));
+  assert.equal(claims.scope, undefined);
+  assert.deepEqual(claims.actions, ["GetObject", "PutObject"]);
+  assert.deepEqual(claims.paths, { prefixPaths: [], objectPaths: ["2092/display/example.jpg"] });
+  assert.equal(claims.exp - claims.iat, 300);
+  assert.equal(result.credentials.secretAccessKey, digest(jwt));
+  await assert.rejects(createR2LocalTemporaryCredentials({ endpoint: ENDPOINT, accountId: ACCOUNT, parentAccessKeyId: "a", parentSecretAccessKey: "b", bucket: BUCKET, actions: ["DeleteBucket"], ttlSeconds: 300 }), /unsupported or empty action/);
+  await assert.rejects(createR2LocalTemporaryCredentials({ endpoint: ENDPOINT, accountId: ACCOUNT, parentAccessKeyId: "a", parentSecretAccessKey: "b", bucket: BUCKET, actions: ["PutObject"], paths: { objectPaths: ["../escape"] }, ttlSeconds: 300 }), /Unsafe R2 credential path/);
+});
+
+test("credential mint binds publisher and inventory roles to one verified package without printing secrets", async (t) => {
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage);
+  t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
+  const parentPath = path.join(pkg.root, "parent.json"), outputPath = path.join(pkg.root, "bundle.json");
+  await write(parentPath, jsonBytes({ R2_ACCOUNT_ID: ACCOUNT, R2_ENDPOINT: ENDPOINT, R2_BUCKET: "production-media", R2_ACCESS_KEY_ID: "parent-access", R2_SECRET_ACCESS_KEY: "parent-secret" }));
+  const report = await mintPackageBoundR2Credentials({ packageRoot: pkg.packageRoot, configPath: cfg.configPath, parentCredentialsPath: parentPath, outputPath, ttlSeconds: 300 });
+  assert.deepEqual(report.roles.publisher.actions, ["GetObject", "PutObject"]);
+  assert.deepEqual(report.roles.publisher.paths.objectPaths, pkg.entries.map((entry) => entry.key).sort());
+  assert.deepEqual(report.roles.inventory.actions, ["ListObjectsV2"]);
+  assert.equal(JSON.stringify(report).includes("parent-secret"), false);
+  assert.equal((await fs.stat(outputPath)).mode & 0o777, 0o600);
+  const loaded = await loadIsolatedR2WriteConfiguration({ configPath: cfg.configPath, credentialsPath: outputPath, verifiedPackage: pkg.verifiedPackage });
+  assert.deepEqual(loaded.identity.credentialRoles.publisher.credentialActions, ["GetObject", "PutObject"]);
+});
+
+test("retained media receives a separate exact-path GetObject verifier role", async (t) => {
+  const pkg = await packageFixture({ retainedLast: true }), cfg = await configurationFixture(pkg.verifiedPackage);
+  t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
+  const parentPath = path.join(pkg.root, "parent.json"), outputPath = path.join(pkg.root, "bundle.json");
+  await write(parentPath, jsonBytes({ R2_ACCOUNT_ID: ACCOUNT, R2_ENDPOINT: ENDPOINT, R2_BUCKET: "production-media", R2_ACCESS_KEY_ID: "parent-access", R2_SECRET_ACCESS_KEY: "parent-secret" }));
+  const report = await mintPackageBoundR2Credentials({ packageRoot: pkg.packageRoot, configPath: cfg.configPath, parentCredentialsPath: parentPath, outputPath, ttlSeconds: 300 });
+  assert.deepEqual(report.roles.verifier.actions, ["GetObject"]);
+  assert.deepEqual(report.roles.verifier.paths.objectPaths, [pkg.entries.at(-1).key]);
+  assert.equal(report.roles.publisher.paths.objectPaths.includes(pkg.entries.at(-1).key), false);
+  const loaded = await loadIsolatedR2WriteConfiguration({ configPath: cfg.configPath, credentialsPath: outputPath, verifiedPackage: pkg.verifiedPackage });
+  assert.deepEqual(loaded.identity.credentialRoles.verifier.credentialActions, ["GetObject"]);
+});
+
 test("isolated config validates destination and temporary credential claims without exposing secrets", async (t) => {
-  const fx = await configurationFixture(); t.after(() => fs.rm(fx.root, { recursive: true, force: true }));
+  const pkg = await packageFixture(); t.after(() => fs.rm(pkg.root, { recursive: true, force: true }));
+  const fx = await configurationFixture(pkg.verifiedPackage); t.after(() => fs.rm(fx.root, { recursive: true, force: true }));
   assert.equal(fx.configuration.identity.bucket, BUCKET);
-  assert.deepEqual(fx.configuration.identity.credentialScope.adapterActions, ADAPTER_ACTIONS);
-  assert.equal(JSON.stringify(fx.configuration.identity).includes(fx.configuration.credentials.secretAccessKey), false);
+  assert.deepEqual(fx.configuration.identity.credentialRoles.publisher.credentialActions, ROLE_ACTIONS.publisher);
+  assert.equal(JSON.stringify(fx.configuration.identity).includes(fx.configuration.credentials.publisher.secretAccessKey), false);
   for (const variant of [
-    { credentials: { R2_BUCKET: "production-media" } },
-    { claims: { bucket: "production-media" } },
-    { claims: { actions: ["DeleteObject"] } },
-    { claims: { exp: Math.floor(Date.now() / 1000) - 1 } }
+    { identity: { bucket: "production-media" } },
+    { publisherClaims: { bucket: "production-media" } },
+    { publisherClaims: { scope: "object-read-write" } },
+    { publisherClaims: { actions: ["DeleteObject"] } },
+    { publisherClaims: { paths: { prefixPaths: [], objectPaths: ["2092/thumbs/foreign.jpg"] } } },
+    { publisherClaims: { exp: Math.floor(Date.now() / 1000) - 1 } }
   ]) {
-    const result = await configurationFixture(variant).catch((error) => ({ error }));
+    const result = await configurationFixture(pkg.verifiedPackage, variant).catch((error) => ({ error }));
     if (!result.error) {
       await fs.rm(result.root, { recursive: true, force: true });
       assert.fail("unsafe credential accepted");
@@ -155,10 +211,10 @@ test("isolated config validates destination and temporary credential claims with
 });
 
 test("conditional creation validates checksum and metadata and never overwrites identical or conflicting bytes", async (t) => {
-  const pkg = await packageFixture(), cfg = await configurationFixture();
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage);
   t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
   const client = new MemoryR2Client({ pageSize: 1 });
-  const adapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, client, pageSize: 1 });
+  const adapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: client, inventory: client }, pageSize: 1 });
   const entry = pkg.entries[0], source = path.join(pkg.packageRoot, "media/new", entry.key);
   assert.equal((await adapter.putIfAbsent(entry.key, source)).created, true);
   assert.equal((await adapter.putIfAbsent(entry.key, source)).created, false);
@@ -173,21 +229,21 @@ test("conditional creation validates checksum and metadata and never overwrites 
 });
 
 test("concurrent writers race atomically and only one payload becomes visible", async (t) => {
-  const pkg = await packageFixture(), cfg = await configurationFixture();
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage);
   t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
   const client = new MemoryR2Client(), entry = pkg.entries[0], source = path.join(pkg.packageRoot, "media/new", entry.key);
-  const one = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, client });
-  const two = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, client });
+  const one = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: client, inventory: client } });
+  const two = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: client, inventory: client } });
   const results = await Promise.all([one.putIfAbsent(entry.key, source), two.putIfAbsent(entry.key, source)]);
   assert.deepEqual(results.map((item) => item.created).sort(), [false, true]);
   assert.equal((await one.inspect(entry.key)).sha256, entry.sha256);
 });
 
 test("lost response resumes by readback, transient failures are bounded, and retry exhaustion never PASSes", async (t) => {
-  const lost = await packageFixture(), cfg = await configurationFixture();
+  const lost = await packageFixture(), cfg = await configurationFixture(lost.verifiedPackage);
   t.after(() => Promise.all([fs.rm(lost.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
   const lostClient = new MemoryR2Client({ loseFirstPutResponse: true });
-  const lostAdapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: lost.verifiedPackage, client: lostClient });
+  const lostAdapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: lost.verifiedPackage, clients: { publisher: lostClient, inventory: lostClient } });
   const result = await executePublication({ packageRoot: lost.packageRoot, adapter: lostAdapter, journalRoot: lost.journalRoot, concurrency: 1, maxAttempts: 3 });
   assert.equal(result.receipt.status, "PASS");
   assert.equal(result.receipt.objects.every((item) => item.verificationMethod === "full-object-sha256-readback"), true);
@@ -195,22 +251,23 @@ test("lost response resumes by readback, transient failures are bounded, and ret
 
   const exhausted = await packageFixture(); t.after(() => fs.rm(exhausted.root, { recursive: true, force: true }));
   const failingClient = new MemoryR2Client({ failPuts: 100 });
-  const failingAdapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: exhausted.verifiedPackage, client: failingClient });
+  const exhaustedCfg = await configurationFixture(exhausted.verifiedPackage); t.after(() => fs.rm(exhaustedCfg.root, { recursive: true, force: true }));
+  const failingAdapter = createIsolatedR2WriteAdapter({ configuration: exhaustedCfg.configuration, verifiedPackage: exhausted.verifiedPackage, clients: { publisher: failingClient, inventory: failingClient } });
   await assert.rejects(executePublication({ packageRoot: exhausted.packageRoot, adapter: failingAdapter, journalRoot: exhausted.journalRoot, concurrency: 1, maxAttempts: 2 }), /retry limit exhausted/);
   await assert.rejects(fs.access(path.join(exhausted.journalRoot, "receipt.json")), /ENOENT/);
   assert.equal(failingClient.requests.filter((item) => item.name === "PutObjectCommand").length, 2);
 });
 
 test("corrupt readback, unexpected keys, foreign keys, and CLI bypass flags fail closed", async (t) => {
-  const pkg = await packageFixture(), cfg = await configurationFixture();
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage);
   t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
   const corrupt = new MemoryR2Client({ corruptAfterPut: true });
-  const corruptAdapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, client: corrupt });
+  const corruptAdapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: corrupt, inventory: corrupt } });
   await assert.rejects(executePublication({ packageRoot: pkg.packageRoot, adapter: corruptAdapter, journalRoot: pkg.journalRoot, concurrency: 1, maxAttempts: 1 }), /retry limit exhausted/);
   await assert.rejects(fs.access(path.join(pkg.journalRoot, "receipt.json")), /ENOENT/);
 
   const client = new MemoryR2Client(); client.objects.set("foreign/file.jpg", { bytes: Buffer.from("x") });
-  const adapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, client });
+  const adapter = createIsolatedR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: client, inventory: client } });
   assert.equal((await adapter.listKeys()).includes("foreign/file.jpg"), true);
   await assert.rejects(adapter.putIfAbsent("2093/display/foreign.jpg", "/tmp/nope"), /grammar|verified package/);
 
@@ -219,6 +276,6 @@ test("corrupt readback, unexpected keys, foreign keys, and CLI bypass flags fail
     const result = spawnSync(process.execPath, [script, "--execute", flag, "value"], { cwd: REPO_ROOT, encoding: "utf8" });
     assert.notEqual(result.status, 0); assert.match(result.stderr, /Forbidden R2 publication option/);
   }
-  assert.deepEqual(isolatedR2WriteContract.allowedCommands, ["GetObjectCommand", "ListObjectsV2Command", "PutObjectCommand"]);
+  assert.deepEqual(isolatedR2WriteContract.credentialRoles.publisher, ["GetObject", "PutObject"]);
   assert.equal(isolatedR2WriteContract.deletes, false); assert.equal(isolatedR2WriteContract.overwrites, false);
 });

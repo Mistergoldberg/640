@@ -37,8 +37,8 @@ function parseArgs(argv) {
 export async function runIsolatedR2PackageUpload(args) {
   const packageRoot = path.resolve(args.packageRoot);
   const verifiedPackage = await verifyPublicationPackage(packageRoot);
-  const configuration = await loadIsolatedR2WriteConfiguration({ configPath: path.resolve(args.configPath), credentialsPath: path.resolve(args.credentialsPath) });
-  runtimeSecrets.push(configuration.credentials.accessKeyId, configuration.credentials.secretAccessKey, configuration.credentials.sessionToken);
+  const configuration = await loadIsolatedR2WriteConfiguration({ configPath: path.resolve(args.configPath), credentialsPath: path.resolve(args.credentialsPath), verifiedPackage });
+  for (const credential of Object.values(configuration.credentials)) runtimeSecrets.push(credential.accessKeyId, credential.secretAccessKey, credential.sessionToken);
   const adapter = createAuthenticatedIsolatedR2WriteAdapter({ configuration, verifiedPackage, pageSize: args.pageSize });
   if (args.mode === "plan") return createPublicationPlan({ packageRoot, adapter });
   return executePublication({ packageRoot, adapter, journalRoot: path.resolve(args.journalRoot), concurrency: args.concurrency, maxAttempts: args.maxAttempts });
