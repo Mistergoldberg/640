@@ -708,7 +708,8 @@ img {
   pointer-events: auto;
 }
 
-.player-controls.is-speed-menu-open {
+.player-controls.is-speed-menu-open,
+.player-controls.is-rotation-mode-open {
   opacity: 1;
   pointer-events: auto;
 }
@@ -774,7 +775,7 @@ img {
   left: 50%;
   bottom: max(12px, env(safe-area-inset-bottom));
   display: grid;
-  grid-template-columns: repeat(7, 44px);
+  grid-template-columns: repeat(8, 44px);
   align-items: center;
   gap: 6px;
   width: max-content;
@@ -940,7 +941,8 @@ img {
 }
 
 .player-onboarding {
-  --onboarding-prompt-width: min(240px, calc(100vw - 112px));
+  --player-image-action-context-width: min(240px, calc(100vw - 112px));
+  --onboarding-prompt-width: var(--player-image-action-context-width);
   position: fixed;
   inset: 0;
   z-index: 12;
@@ -991,8 +993,8 @@ img {
 
 .player-onboarding__center-prompt--browse {
   --onboarding-prompt-transform: translate(-50%, -50%);
-  top: calc(var(--onboarding-image-top, 50vh) + var(--onboarding-image-height, 0px) / 2);
-  left: calc(var(--onboarding-image-left, 50vw) + var(--onboarding-image-width, 0px) / 2);
+  top: calc(var(--player-image-arrow-top, 50vh) + var(--player-image-arrow-height, 0px) / 2);
+  left: calc(var(--player-image-arrow-left, 50vw) + var(--player-image-arrow-width, 0px) / 2);
 }
 
 .player-onboarding__center-prompt--interactive {
@@ -1012,19 +1014,19 @@ img {
   to { opacity: 1; transform: var(--onboarding-prompt-transform, translateX(-50%)) scale(1); }
 }
 
-.player-onboarding__frame-zones {
+.player-image-arrow-pair {
   position: fixed;
-  top: var(--onboarding-image-top, 0);
-  left: var(--onboarding-image-left, 0);
+  top: var(--player-image-arrow-top, 0);
+  left: var(--player-image-arrow-left, 0);
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
-  width: var(--onboarding-image-width, 100vw);
-  height: var(--onboarding-image-height, 100vh);
+  width: var(--player-image-arrow-width, 100vw);
+  height: var(--player-image-arrow-height, 100vh);
   pointer-events: none;
 }
 
-.player-onboarding__frame-zone {
+.player-image-arrow-zone {
   position: relative;
   border: 0;
   box-shadow: none;
@@ -1048,7 +1050,7 @@ img {
   animation-delay: 2.4s;
 }
 
-.player-onboarding__gesture-cue {
+.player-image-arrow-control {
   position: absolute;
   top: 50%;
   display: flex;
@@ -1065,7 +1067,7 @@ img {
   transform: translateY(-50%);
 }
 
-.player-onboarding__gesture-icon {
+.player-image-arrow-icon {
   position: relative;
   display: grid;
   width: 40px;
@@ -1087,16 +1089,22 @@ img {
   animation: onboarding-gesture-ring 4.8s ease-out infinite;
 }
 
-.player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
-  right: calc(var(--onboarding-prompt-width) / 2 + 4px);
+.player-image-arrow-zone--left .player-image-arrow-control {
+  right: calc(var(--player-image-action-context-width) / 2 + 4px);
   left: auto;
+}
+
+.player-onboarding__frame-zone--back .player-onboarding__gesture-cue {
   animation: onboarding-cue-left 4.8s ease-in-out infinite;
 }
 
-.player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
+.player-image-arrow-zone--right .player-image-arrow-control {
   right: auto;
-  left: calc(var(--onboarding-prompt-width) / 2 + 4px);
+  left: calc(var(--player-image-action-context-width) / 2 + 4px);
   flex-direction: row-reverse;
+}
+
+.player-onboarding__frame-zone--forward .player-onboarding__gesture-cue {
   animation: onboarding-cue-right 4.8s 2.4s ease-in-out infinite;
 }
 
@@ -1149,6 +1157,69 @@ img {
 
 .player-onboarding.is-auto-sequencing .player-onboarding__gesture-cue.is-demo-active .player-onboarding__gesture-icon::after {
   animation: onboarding-demo-ring 700ms ease-out both;
+}
+
+.player-rotation-controls {
+  --player-image-action-context-width: min(160px, calc(100vw - 112px));
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+}
+
+.player-rotation-controls__button {
+  width: 52px;
+  height: 52px;
+  appearance: none;
+  justify-content: center;
+  padding: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+}
+
+.player-rotation-controls__button:hover,
+.player-rotation-controls__button:focus-visible {
+  border-color: #f4f1ea;
+  outline: 2px solid rgba(143, 178, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.player-rotation-controls__button:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.96);
+}
+
+.player-rotation-controls__button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.player-rotation-controls__context {
+  position: fixed;
+  top: calc(var(--player-image-arrow-top, 50vh) + var(--player-image-arrow-height, 0px) / 2);
+  left: calc(var(--player-image-arrow-left, 50vw) + var(--player-image-arrow-width, 0px) / 2);
+  display: grid;
+  width: var(--player-image-action-context-width);
+  min-height: 52px;
+  place-items: center;
+  padding: 12px 18px;
+  border: 1px solid rgba(244, 241, 234, 0.22);
+  border-radius: 14px;
+  color: #f4f1ea;
+  background: linear-gradient(155deg, rgba(24, 25, 28, 0.97), rgba(8, 9, 11, 0.97));
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.56), inset 0 1px rgba(255, 255, 255, 0.05);
+  font-size: 0.88rem;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(18px);
+  pointer-events: none;
 }
 
 @keyframes onboarding-demo-zone {
@@ -1345,19 +1416,20 @@ img {
   }
 }
 
+@media (max-width: 422px) {
+  .player-controls {
+    gap: 2px;
+    padding: 4px;
+  }
+}
+
 @media (max-width: 370px) {
   .player-controls {
-    right: 0;
-    left: 0;
-    grid-template-columns: repeat(7, minmax(44px, 1fr));
-    gap: 0;
-    width: 100vw;
-    max-width: 100vw;
-    padding: 4px 0;
-    border-right: 0;
-    border-left: 0;
-    border-radius: 0;
-    transform: none;
+    grid-template-columns: repeat(4, 44px);
+  }
+
+  .player-surface:not(.player-surface--expanded) {
+    padding-bottom: calc(126px + env(safe-area-inset-bottom));
   }
 
   .icon-button {
@@ -1448,7 +1520,8 @@ img {
 
   .player-overlay.has-visible-controls .player-controls,
   .player-controls:focus-within,
-  .player-controls.is-speed-menu-open {
+  .player-controls.is-speed-menu-open,
+  .player-controls.is-rotation-mode-open {
     opacity: 1;
     pointer-events: none;
   }
@@ -1489,6 +1562,13 @@ img {
     position: fixed;
     right: max(2px, env(safe-area-inset-right));
     bottom: calc(max(2px, env(safe-area-inset-bottom)) + 46px);
+    left: auto;
+  }
+
+  .player-controls > [data-player-control="rotation"] {
+    position: fixed;
+    right: max(2px, env(safe-area-inset-right));
+    bottom: calc(max(2px, env(safe-area-inset-bottom)) + 92px);
     left: auto;
   }
 

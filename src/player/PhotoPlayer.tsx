@@ -3,7 +3,8 @@ import { CircleHelp, X } from "lucide-react";
 import { mediaUrl } from "../lib/assets";
 import type { Photo } from "../types";
 import { exitDocumentFullscreen, fullscreenElement, requestDocumentFullscreen, subscribeToFullscreenChanges } from "./fullscreen";
-import { calculateImageGeometry, playerFitClearance, type ImageGeometry, type ImageMode } from "./imageGeometry";
+import { calculateImageGeometry, playerFitClearance, type ImageGeometry, type ImageMode, type Rotation } from "./imageGeometry";
+import { PlayerRotationControls } from "./PlayerRotationControls";
 import { PlayerControls } from "./PlayerControls";
 import { createPlayerControlState, playerControlReducer, screenModeActive } from "./playerControlState";
 import { PlayerFrameNavigationController, type FrameNavigationDirection } from "./playerFrameNavigation";
@@ -16,6 +17,7 @@ import {
   shouldSuppressSyntheticClick
 } from "./playerTouchNavigation";
 import { usePlaybackClock } from "./usePlaybackClock";
+import { playerRotationReducer, rotationForPhoto, type RotationDirection } from "./playerRotation";
 import { settledRange, usableRange } from "./homepageAutoplay";
 import { PlayerOnboardingTour } from "./PlayerOnboardingTour";
 import {
@@ -201,7 +203,8 @@ function visibleRect(element: Element) {
 function photoImageGeometry(
   photo: Photo,
   mode: ImageMode,
-  viewport: { width: number; height: number; landscapeRail: boolean }
+  viewport: { width: number; height: number; landscapeRail: boolean },
+  rotation: Rotation
 ) {
   const clearance = mode === "fit" && !viewport.landscapeRail
     ? playerFitClearance(viewport.width, viewport.height)
@@ -213,18 +216,21 @@ function photoImageGeometry(
     viewportHeight: viewport.height,
     controlClearance: clearance.vertical,
     mode,
-    rotation: 0
+    rotation
   });
 }
 
-function expandedImageStyle(mode: ImageMode, geometry: ImageGeometry | null) {
-  return mode === "expanded" && geometry
-    ? {
-        width: `${Math.round(geometry.layoutWidth)}px`,
-        height: `${Math.round(geometry.layoutHeight)}px`,
-        transform: `translate(-50%, -50%) rotate(${geometry.rotation}deg)`
-      }
-    : undefined;
+function imageGeometryStyle(mode: ImageMode, geometry: ImageGeometry | null) {
+  if (!geometry || (mode === "fit" && geometry.rotation === 0)) return undefined;
+  return {
+    width: `${Math.round(geometry.layoutWidth)}px`,
+    height: `${Math.round(geometry.layoutHeight)}px`,
+    maxWidth: "none",
+    maxHeight: "none",
+    transform: mode === "expanded"
+      ? `translate(-50%, -50%) rotate(${geometry.rotation}deg)`
+      : `rotate(${geometry.rotation}deg)`
+  };
 }
 
 export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard" }: PhotoPlayerProps) {
@@ -241,6 +247,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     photo: photos[clampIndex(initialIndex, photos.length)] ?? null
   }));
   const [controlState, controlDispatch] = useReducer(playerControlReducer, { openExpanded: openInFullscreen }, createPlayerControlState);
+  const [photoRotations, rotationDispatch] = useReducer(playerRotationReducer, {});
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hasMusicLoaded, setHasMusicLoaded] = useState(false);
   const [shouldPlayMusic, setShouldPlayMusic] = useState(false);
@@ -249,6 +256,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const [shareStatus, setShareStatus] = useState<ShareStatus>("idle");
   const [nativeFullscreenActive, setNativeFullscreenActive] = useState(() => Boolean(fullscreenElement()));
   const onboardingDescriptionId = useId();
+  const rotationControlsId = useId();
   const initialOnboardingStateRef = useRef<PlayerOnboardingState | null>(null);
   if (!initialOnboardingStateRef.current) {
     initialOnboardingStateRef.current = createPlayerOnboardingState(reducedMotion);
@@ -269,6 +277,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const stateRef = useRef<PlayerState>(playerState);
   const currentIndexRef = useRef(playerState.currentIndex);
   const currentImageRef = useRef<HTMLImageElement | null>(null);
+  const paintedImageRef = useRef<HTMLImageElement | null>(null);
   const desiredPhotoIdRef = useRef<string | null>(null);
   const nativeFullscreenRef = useRef(nativeFullscreenActive);
   const fullscreenRequestTokenRef = useRef(0);
@@ -284,8 +293,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const surfaceRef = useRef<HTMLButtonElement | null>(null);
   const speedControlRef = useRef<HTMLButtonElement | null>(null);
   const musicControlRef = useRef<HTMLButtonElement | null>(null);
+  const rotationControlRef = useRef<HTMLButtonElement | null>(null);
   const helpControlRef = useRef<HTMLButtonElement | null>(null);
   const focusRestoreFrameRef = useRef<number | null>(null);
+  const rotationFocusFrameRef = useRef<number | null>(null);
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
   const resetKeyRef = useRef(resetKey);
 
@@ -303,6 +314,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const initialPlayPending = status === "loading" || status === "initial-delay";
   const temporaryResumePending = status === "temporarily-paused";
   const imageMode = controlState.imageMode;
+  const rotationModeOpen = controlState.rotationModeOpen;
+  const rotationModeOpenRef = useRef(rotationModeOpen);
+  rotationModeOpenRef.current = rotationModeOpen;
+  const currentRotation = rotationForPhoto(photoRotations, currentPhoto?.id);
+  const paintedRotation = rotationForPhoto(photoRotations, paintedPhoto?.id);
   const isScreenModeActive = screenModeActive(controlState, nativeFullscreenActive);
   const onboardingStep = playerOnboardingStep(onboardingState.phase);
   const onboardingActive = onboardingStep !== null;
@@ -452,7 +468,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       window.clearTimeout(controlsTimerRef.current);
     }
 
-    if (isPlayerOnboardingInstructionPhase(onboardingStateRef.current.phase)) {
+    if (isPlayerOnboardingInstructionPhase(onboardingStateRef.current.phase) || rotationModeOpenRef.current) {
       controlsTimerRef.current = null;
       return;
     }
@@ -469,6 +485,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
   const playExplicitly = useCallback(() => {
     revealControls();
+    controlDispatch({ type: "CLOSE_ROTATION_MODE" });
     if (stateRef.current.status === "loading") {
       return;
     }
@@ -481,6 +498,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, [clearInitialDelayTimer, clearResumeTimer, revealControls, warmBuffer]);
 
   const openOnboardingHelp = useCallback(() => {
+    controlDispatch({ type: "CLOSE_ROTATION_MODE" });
     const resumeAfterExit = shouldResumeAfterHelp(stateRef.current.status);
     sendOnboarding({ type: "OPEN_HELP", resumeAfterExit });
     pauseExplicitly();
@@ -551,6 +569,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       controlsTimerRef.current = null;
     }
   }, [onboardingActive, onboardingStep]);
+
+  useEffect(() => {
+    if (rotationModeOpen) {
+      setControlsVisible(true);
+      if (controlsTimerRef.current !== null) {
+        window.clearTimeout(controlsTimerRef.current);
+        controlsTimerRef.current = null;
+      }
+      return;
+    }
+    revealControls();
+  }, [revealControls, rotationModeOpen]);
 
   const navigateManually = useCallback(
     (direction: -1 | 1) => {
@@ -660,7 +690,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     const overlay = surfaceRef.current?.closest(".player-overlay");
     const controls = Array.from(
-      overlay?.querySelectorAll<HTMLElement>('.player-controls > [data-player-control="music"], .player-controls > [data-player-control="speed"]') || []
+      overlay?.querySelectorAll<HTMLElement>('.player-controls > [data-player-control="music"], .player-controls > [data-player-control="speed"], .player-controls > [data-player-control="rotation"]') || []
     )
       .map(visibleRect)
       .filter((rect): rect is DOMRect => Boolean(rect));
@@ -680,7 +710,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const pointHitsPlayerControl = useCallback((clientX: number, clientY: number) => {
     const overlay = surfaceRef.current?.closest(".player-overlay");
     const controls = Array.from(
-      overlay?.querySelectorAll<HTMLElement>(".player-topbar button, .player-help, .player-controls > [data-player-control], .speed-menu button") || []
+      overlay?.querySelectorAll<HTMLElement>(".player-topbar button, .player-help, .player-controls > [data-player-control], .speed-menu button, .player-rotation-controls button") || []
     )
       .map(visibleRect)
       .filter((rect): rect is DOMRect => Boolean(rect));
@@ -695,6 +725,34 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const toggleSpeedMenu = useCallback(() => {
     controlDispatch({ type: "TOGGLE_SPEED_MENU" });
   }, []);
+
+  const closeRotationMode = useCallback((restoreFocus = false) => {
+    controlDispatch({ type: "CLOSE_ROTATION_MODE" });
+    if (!restoreFocus) return;
+    if (rotationFocusFrameRef.current !== null) window.cancelAnimationFrame(rotationFocusFrameRef.current);
+    rotationFocusFrameRef.current = window.requestAnimationFrame(() => {
+      rotationFocusFrameRef.current = null;
+      rotationControlRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const toggleRotationMode = useCallback(() => {
+    revealControls();
+    if (rotationModeOpenRef.current) {
+      closeRotationMode();
+      return;
+    }
+
+    pauseExplicitly();
+    controlDispatch({ type: "TOGGLE_ROTATION_MODE" });
+  }, [closeRotationMode, pauseExplicitly, revealControls]);
+
+  const rotateCurrentPhoto = useCallback((direction: RotationDirection) => {
+    const photo = photos[currentIndexRef.current];
+    if (!photo) return;
+    revealControls();
+    rotationDispatch({ type: "ROTATE", photoId: photo.id, direction });
+  }, [photos, revealControls]);
 
   const selectSpeed = useCallback(
     (delayMs: number) => {
@@ -949,6 +1007,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         focusRestoreFrameRef.current = null;
       }
       controlDispatch({ type: "RESET", openExpanded: openInFullscreen });
+      rotationDispatch({ type: "RESET" });
       dispatch({
         type: "RESET",
         initialIndex,
@@ -1349,6 +1408,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
       if (event.key === "Escape") {
         event.preventDefault();
+        if (rotationModeOpenRef.current) {
+          closeRotationMode(true);
+          return;
+        }
         if (nativeFullscreenRef.current) {
           void exitDocumentFullscreen();
           return;
@@ -1359,7 +1422,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
       if (event.key === " ") {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest(".player-topbar button, .player-controls button:not(.icon-button--primary)")) {
+        if (target?.closest(".player-topbar button, .player-controls button:not(.icon-button--primary), .player-rotation-controls button")) {
           return;
         }
 
@@ -1386,7 +1449,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [close, navigateManually, pauseExplicitly, playExplicitly, revealControls]);
+  }, [close, closeRotationMode, navigateManually, pauseExplicitly, playExplicitly, revealControls]);
 
   useEffect(() => {
     revealControls();
@@ -1402,6 +1465,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         window.cancelAnimationFrame(focusRestoreFrameRef.current);
         focusRestoreFrameRef.current = null;
       }
+      if (rotationFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(rotationFocusFrameRef.current);
+        rotationFocusFrameRef.current = null;
+      }
       if (rollingWarmupFrameRef.current !== null) {
         window.cancelAnimationFrame(rollingWarmupFrameRef.current);
         rollingWarmupFrameRef.current = null;
@@ -1416,11 +1483,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     };
   }, [clearImageCache, clearInitialDelayTimer, clearResumeTimer, revealControls]);
 
-  const imageGeometry = useMemo(() => currentPhoto ? photoImageGeometry(currentPhoto, imageMode, playerViewport) : null,
-    [currentPhoto, imageMode, playerViewport]);
+  const imageGeometry = useMemo(() => currentPhoto ? photoImageGeometry(currentPhoto, imageMode, playerViewport, currentRotation) : null,
+    [currentPhoto, currentRotation, imageMode, playerViewport]);
   const paintedImageGeometry = useMemo(() => paintedPhoto && paintedPhoto.id !== currentPhoto?.id
-    ? photoImageGeometry(paintedPhoto, imageMode, playerViewport)
-    : imageGeometry, [currentPhoto?.id, imageGeometry, imageMode, paintedPhoto, playerViewport]);
+    ? photoImageGeometry(paintedPhoto, imageMode, playerViewport, paintedRotation)
+    : imageGeometry, [currentPhoto?.id, imageGeometry, imageMode, paintedPhoto, paintedRotation, playerViewport]);
 
   if (!currentPhoto) {
     if (launchMode !== "homepage-autoplay") return null;
@@ -1456,8 +1523,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     );
   }
 
-  const playerImageStyle = expandedImageStyle(imageMode, imageGeometry);
-  const paintedImageStyle = expandedImageStyle(imageMode, paintedImageGeometry);
+  const playerImageStyle = imageGeometryStyle(imageMode, imageGeometry);
+  const paintedImageStyle = imageGeometryStyle(imageMode, paintedImageGeometry);
   const primaryActionLabel = canPause(status) ? "Pause" : "Play";
   const surfaceActionLabel = temporaryResumePending ? "Play" : primaryActionLabel;
   const musicIsActive = shouldPlayMusic || isMusicPlaying;
@@ -1469,6 +1536,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     : onboardingStep === 3
       ? musicControlRef
       : surfaceRef;
+  const visibleImageRef = isImagePending ? paintedImageRef : currentImageRef;
 
   return (
     <div
@@ -1483,6 +1551,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       data-player-pending-images={[...cacheRef.current.values()].filter((entry) => !entry.ready && !entry.failed).length}
       data-player-decoded-images={[...cacheRef.current.values()].filter((entry) => entry.ready).length}
       data-player-onboarding-phase={onboardingState.phase}
+      data-player-rotation-mode={rotationModeOpen ? "active" : "inactive"}
+      data-player-current-rotation={currentRotation}
       onMouseMove={revealControls}
       onTouchStart={revealControls}
     >
@@ -1581,8 +1651,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         >
           {isImagePending && paintedPhoto ? (
             <img
+              ref={paintedImageRef}
               key={paintedPhoto.id}
               src={mediaUrl(paintedPhoto.displayKey)}
+              data-player-photo-id={paintedPhoto.id}
+              data-player-image-rotation={paintedRotation}
               alt=""
               className={`player-image player-image--${paintedPhoto.orientation} player-image--${imageMode}`}
               style={paintedImageStyle}
@@ -1593,6 +1666,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
             ref={currentImageRef}
             key={currentPhoto.id}
             src={mediaUrl(currentPhoto.displayKey)}
+            data-player-photo-id={currentPhoto.id}
+            data-player-image-rotation={currentRotation}
             alt=""
             className={`player-image player-image--${currentPhoto.orientation} player-image--${imageMode}${isImagePending ? " player-image--incoming" : ""}`}
             style={playerImageStyle}
@@ -1625,9 +1700,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           shareActionLabel={shareActionLabel}
           shareIsActive={shareStatus === "copied"}
           screenModeActive={isScreenModeActive}
+          rotationModeOpen={rotationModeOpen}
+          rotationControlsId={rotationControlsId}
           tutorialStep={onboardingStep}
           speedControlRef={speedControlRef}
           musicControlRef={musicControlRef}
+          rotationControlRef={rotationControlRef}
           speedDescriptionId={onboardingStep === 2 ? onboardingDescriptionId : undefined}
           musicDescriptionId={onboardingStep === 3 ? onboardingDescriptionId : undefined}
           onPrevious={() => navigateManually(-1)}
@@ -1647,6 +1725,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           onSelectSpeed={selectSpeed}
           onToggleMusic={toggleMusic}
           onShare={() => void shareCurrentPhoto()}
+          onToggleRotationMode={toggleRotationMode}
           onToggleScreenMode={toggleScreenMode}
           onReveal={revealControls}
         /> : null}
@@ -1685,6 +1764,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           <span />
         </div>
       </div>
+
+      {rotationModeOpen && !onboardingActive ? (
+        <PlayerRotationControls
+          id={rotationControlsId}
+          imageRef={visibleImageRef}
+          photoId={currentPhoto.id}
+          rotation={currentRotation}
+          disabled={isImagePending}
+          onRotate={rotateCurrentPhoto}
+          onReveal={revealControls}
+        />
+      ) : null}
 
       {onboardingStep !== null ? (
         <PlayerOnboardingTour

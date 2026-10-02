@@ -15,7 +15,7 @@ describe("playerControlReducer", () => {
   it("keeps the expanded fallback when native fullscreen never enters", () => {
     const entered = playerControlReducer(createPlayerControlState(), { type: "ENTER_SCREEN_MODE" });
 
-    expect(entered).toEqual({ imageMode: "expanded", speedMenuOpen: false });
+    expect(entered).toEqual({ imageMode: "expanded", speedMenuOpen: false, rotationModeOpen: false });
     expect(screenModeActive(entered, false)).toBe(true);
   });
 
@@ -23,7 +23,7 @@ describe("playerControlReducer", () => {
     const native = playerControlReducer(createPlayerControlState(), { type: "NATIVE_FULLSCREEN_ENTERED" });
     const exited = playerControlReducer(native, { type: "NATIVE_FULLSCREEN_EXITED" });
 
-    expect(exited).toEqual({ imageMode: "fit", speedMenuOpen: false });
+    expect(exited).toEqual({ imageMode: "fit", speedMenuOpen: false, rotationModeOpen: false });
     expect(screenModeActive(exited, false)).toBe(false);
   });
 
@@ -33,6 +33,24 @@ describe("playerControlReducer", () => {
     expect(playerControlReducer(open, { type: "SELECT_SPEED" }).speedMenuOpen).toBe(false);
     expect(playerControlReducer(open, { type: "ENTER_SCREEN_MODE" }).speedMenuOpen).toBe(false);
     expect(playerControlReducer(open, { type: "RESET", openExpanded: false }).speedMenuOpen).toBe(false);
+  });
+
+  it("keeps speed and rotation modes mutually exclusive", () => {
+    const rotation = playerControlReducer(createPlayerControlState(), { type: "TOGGLE_ROTATION_MODE" });
+    expect(rotation).toMatchObject({ rotationModeOpen: true, speedMenuOpen: false });
+
+    const speed = playerControlReducer(rotation, { type: "TOGGLE_SPEED_MENU" });
+    expect(speed).toMatchObject({ rotationModeOpen: false, speedMenuOpen: true });
+
+    const rotationAgain = playerControlReducer(speed, { type: "TOGGLE_ROTATION_MODE" });
+    expect(rotationAgain).toMatchObject({ rotationModeOpen: true, speedMenuOpen: false });
+  });
+
+  it("preserves rotation mode through screen-mode changes and closes it explicitly", () => {
+    const rotation = playerControlReducer(createPlayerControlState(), { type: "TOGGLE_ROTATION_MODE" });
+    const expanded = playerControlReducer(rotation, { type: "ENTER_SCREEN_MODE" });
+    expect(expanded).toMatchObject({ imageMode: "expanded", rotationModeOpen: true });
+    expect(playerControlReducer(expanded, { type: "CLOSE_ROTATION_MODE" }).rotationModeOpen).toBe(false);
   });
 
   it("provides compact and fully spoken labels for every speed", () => {

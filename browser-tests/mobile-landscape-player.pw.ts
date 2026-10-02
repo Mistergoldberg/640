@@ -98,7 +98,7 @@ async function expectLandscapeContainment(page: Page, viewport: { width: number;
   const leftRail = interactiveBoxes.filter(({ left }) => left < viewport.width / 2).sort((top, bottom) => top.top - bottom.top);
   const rightRail = interactiveBoxes.filter(({ left }) => left >= viewport.width / 2).sort((top, bottom) => top.top - bottom.top);
   expect(leftRail.map(({ name }) => name)).toEqual(["Close", "back", "forward", "playback", "share"]);
-  expect(rightRail.map(({ name }) => name)).toEqual(["music", "speed"]);
+  expect(rightRail.map(({ name }) => name)).toEqual(["rotation", "music", "speed"]);
   for (const rail of [leftRail, rightRail]) {
     expect(Math.max(...rail.map(({ left }) => left)) - Math.min(...rail.map(({ left }) => left))).toBeLessThan(2);
     for (let index = 1; index < rail.length; index += 1) {
@@ -475,7 +475,7 @@ test("desktop and mobile portrait retain their horizontal control layout", async
       .filter((control) => getComputedStyle(control).display !== "none")
       .map((control) => ({ name: (control as HTMLElement).dataset.playerControl, left: control.getBoundingClientRect().left, top: control.getBoundingClientRect().top }))
       .sort((left, right) => left.left - right.left));
-    expect(order.map(({ name }) => name)).toEqual(["back", "playback", "forward", "speed", "music", "share", "screen-mode"]);
+    expect(order.map(({ name }) => name)).toEqual(["back", "playback", "forward", "speed", "music", "share", "rotation", "screen-mode"]);
     expect(Math.max(...order.map(({ top }) => top)) - Math.min(...order.map(({ top }) => top))).toBeLessThan(2);
     expectHealthy(health);
     await context.close();

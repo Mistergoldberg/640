@@ -11,12 +11,15 @@ export const PLAYER_SPEED_OPTIONS = [
 export interface PlayerControlState {
   imageMode: ImageMode;
   speedMenuOpen: boolean;
+  rotationModeOpen: boolean;
 }
 
 export type PlayerControlEvent =
   | { type: "TOGGLE_SPEED_MENU" }
   | { type: "CLOSE_SPEED_MENU" }
   | { type: "SELECT_SPEED" }
+  | { type: "TOGGLE_ROTATION_MODE" }
+  | { type: "CLOSE_ROTATION_MODE" }
   | { type: "ENTER_SCREEN_MODE" }
   | { type: "EXIT_SCREEN_MODE" }
   | { type: "NATIVE_FULLSCREEN_ENTERED" }
@@ -26,23 +29,28 @@ export type PlayerControlEvent =
 export function createPlayerControlState({ openExpanded = false }: { openExpanded?: boolean } = {}): PlayerControlState {
   return {
     imageMode: openExpanded ? "expanded" : "fit",
-    speedMenuOpen: false
+    speedMenuOpen: false,
+    rotationModeOpen: false
   };
 }
 
 export function playerControlReducer(state: PlayerControlState, event: PlayerControlEvent): PlayerControlState {
   switch (event.type) {
     case "TOGGLE_SPEED_MENU":
-      return { ...state, speedMenuOpen: !state.speedMenuOpen };
+      return { ...state, speedMenuOpen: !state.speedMenuOpen, rotationModeOpen: false };
     case "CLOSE_SPEED_MENU":
     case "SELECT_SPEED":
       return state.speedMenuOpen ? { ...state, speedMenuOpen: false } : state;
+    case "TOGGLE_ROTATION_MODE":
+      return { ...state, speedMenuOpen: false, rotationModeOpen: !state.rotationModeOpen };
+    case "CLOSE_ROTATION_MODE":
+      return state.rotationModeOpen ? { ...state, rotationModeOpen: false } : state;
     case "ENTER_SCREEN_MODE":
     case "NATIVE_FULLSCREEN_ENTERED":
-      return { imageMode: "expanded", speedMenuOpen: false };
+      return { ...state, imageMode: "expanded", speedMenuOpen: false };
     case "EXIT_SCREEN_MODE":
     case "NATIVE_FULLSCREEN_EXITED":
-      return { imageMode: "fit", speedMenuOpen: false };
+      return { ...state, imageMode: "fit", speedMenuOpen: false };
     case "RESET":
       return createPlayerControlState({ openExpanded: event.openExpanded });
     default:

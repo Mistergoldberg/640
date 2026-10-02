@@ -1,8 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-} from "lucide-react";
+import { PlayerImageArrowIcon } from "./PlayerImageArrowIcon";
 import {
   PLAYER_ONBOARDING_CONTROL_FRAME_MS,
   PLAYER_ONBOARDING_SEQUENCE_FRAME_MS,
@@ -178,10 +175,10 @@ export function PlayerOnboardingTour({
     "--onboarding-target-height": `${targetRect.height}px`
   } as CSSProperties : undefined, [targetRect]);
   const imageStyle = useMemo(() => imageRect ? {
-    "--onboarding-image-top": `${imageRect.top}px`,
-    "--onboarding-image-left": `${imageRect.left}px`,
-    "--onboarding-image-width": `${imageRect.width}px`,
-    "--onboarding-image-height": `${imageRect.height}px`
+    "--player-image-arrow-top": `${imageRect.top}px`,
+    "--player-image-arrow-left": `${imageRect.left}px`,
+    "--player-image-arrow-width": `${imageRect.width}px`,
+    "--player-image-arrow-height": `${imageRect.height}px`
   } as CSSProperties : undefined, [imageRect]);
 
   return (
@@ -197,15 +194,15 @@ export function PlayerOnboardingTour({
       <p className="sr-only" id={descriptionId}>{instruction}</p>
 
       {step === 1 ? (
-        <div className="player-onboarding__frame-zones" style={imageStyle} aria-hidden="true">
-          <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--back${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
-            <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
-              <span className="player-onboarding__gesture-icon"><ArrowLeft size={21} strokeWidth={2} /></span>
+        <div className="player-image-arrow-pair player-onboarding__frame-zones" style={imageStyle} aria-hidden="true">
+          <span className={`player-image-arrow-zone player-image-arrow-zone--left player-onboarding__frame-zone player-onboarding__frame-zone--back${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+            <span className={`player-image-arrow-control player-onboarding__gesture-cue${browseSequenceFrame.direction < 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+              <PlayerImageArrowIcon direction={-1} className="player-onboarding__gesture-icon" />
             </span>
           </span>
-          <span className={`player-onboarding__frame-zone player-onboarding__frame-zone--forward${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
-            <span className={`player-onboarding__gesture-cue${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
-              <span className="player-onboarding__gesture-icon"><ArrowRight size={21} strokeWidth={2} /></span>
+          <span className={`player-image-arrow-zone player-image-arrow-zone--right player-onboarding__frame-zone player-onboarding__frame-zone--forward${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+            <span className={`player-image-arrow-control player-onboarding__gesture-cue${browseSequenceFrame.direction > 0 && !reducedMotion ? " is-demo-active" : ""}`}>
+              <PlayerImageArrowIcon direction={1} className="player-onboarding__gesture-icon" />
             </span>
           </span>
         </div>

@@ -68,6 +68,10 @@ export function calculateImageGeometry(input: ImageGeometryInput): ImageGeometry
 }
 
 export function playerFitClearance(viewportWidth: number, viewportHeight: number) {
+  if (viewportWidth <= 370 && viewportHeight > viewportWidth) {
+    return { vertical: 182, horizontal: 24 };
+  }
+
   if (viewportWidth <= 620) {
     return viewportWidth > viewportHeight && viewportHeight <= 460
       ? { vertical: 108, horizontal: 24 }

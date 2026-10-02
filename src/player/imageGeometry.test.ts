@@ -76,6 +76,31 @@ describe("calculateImageGeometry", () => {
     expect(geometry.renderedHeight).toBeLessThanOrEqual(710);
   });
 
+  it("centers quarter-turn fit geometry inside desktop and mobile portrait viewports", () => {
+    for (const input of [
+      { viewportWidth: 1200, viewportHeight: 900 },
+      { viewportWidth: 366, viewportHeight: 844 }
+    ]) {
+      const geometry = calculateImageGeometry({
+        sourceWidth: 640,
+        sourceHeight: 480,
+        ...input,
+        controlClearance: input.viewportWidth < 400 ? 134 : 0,
+        mode: "fit",
+        rotation: 270
+      });
+
+      expect(geometry.renderedWidth).toBeLessThanOrEqual(input.viewportWidth);
+      expect(geometry.renderedHeight).toBeLessThanOrEqual(input.viewportHeight);
+      expect(geometry.offsetX).toBe((input.viewportWidth - geometry.renderedWidth) / 2);
+      expect(geometry.offsetY).toBe((input.viewportHeight - geometry.renderedHeight) / 2);
+    }
+  });
+
+  it("reserves room for the integrated two-row toolbar on very narrow portrait screens", () => {
+    expect(playerFitClearance(320, 568)).toEqual({ vertical: 182, horizontal: 24 });
+  });
+
   it("uses the full landscape viewport height for fit and expanded images", () => {
     const fit = calculateImageGeometry({
       sourceWidth: 640,

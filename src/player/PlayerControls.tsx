@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type MutableRefObject } from "react";
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, Music, Pause, Play, Share2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Gauge, Maximize2, Minimize2, Music, Pause, Play, RotateCw, Share2 } from "lucide-react";
 import type { FrameNavigationDirection } from "./playerFrameNavigation";
 import { PLAYER_SPEED_OPTIONS, speedOption } from "./playerControlState";
 
@@ -16,9 +16,12 @@ interface PlayerControlsProps {
   shareActionLabel: "Share player link" | "Link copied" | "Share failed";
   shareIsActive: boolean;
   screenModeActive: boolean;
+  rotationModeOpen: boolean;
+  rotationControlsId: string;
   tutorialStep: 1 | 2 | 3 | null;
   speedControlRef: MutableRefObject<HTMLButtonElement | null>;
   musicControlRef: MutableRefObject<HTMLButtonElement | null>;
+  rotationControlRef: MutableRefObject<HTMLButtonElement | null>;
   speedDescriptionId?: string;
   musicDescriptionId?: string;
   onPrevious: () => void;
@@ -32,6 +35,7 @@ interface PlayerControlsProps {
   onSelectSpeed: (delayMs: number) => void;
   onToggleMusic: () => void;
   onShare: () => void;
+  onToggleRotationMode: () => void;
   onToggleScreenMode: () => void;
   onReveal: () => void;
 }
@@ -47,9 +51,12 @@ export function PlayerControls({
   shareActionLabel,
   shareIsActive,
   screenModeActive,
+  rotationModeOpen,
+  rotationControlsId,
   tutorialStep,
   speedControlRef,
   musicControlRef,
+  rotationControlRef,
   speedDescriptionId,
   musicDescriptionId,
   onPrevious,
@@ -63,6 +70,7 @@ export function PlayerControls({
   onSelectSpeed,
   onToggleMusic,
   onShare,
+  onToggleRotationMode,
   onToggleScreenMode,
   onReveal
 }: PlayerControlsProps) {
@@ -310,7 +318,7 @@ export function PlayerControls({
   return (
     <div
       ref={controlsRef}
-      className={`player-controls ${speedMenuOpen ? "is-speed-menu-open" : ""}`}
+      className={`player-controls ${speedMenuOpen ? "is-speed-menu-open" : ""} ${rotationModeOpen ? "is-rotation-mode-open" : ""}`}
       role="toolbar"
       aria-label="Player controls"
       onPointerDown={(event) => {
@@ -426,6 +434,22 @@ export function PlayerControls({
         ) : (
           <Share2 aria-hidden="true" size={19} strokeWidth={2.3} />
         )}
+      </button>
+      <button
+        ref={rotationControlRef}
+        className={`icon-button icon-button--rotation ${rotationModeOpen ? "is-selected" : ""}`}
+        data-player-secondary="true"
+        data-player-control="rotation"
+        type="button"
+        disabled={tutorialActive}
+        onClick={() => runAction(onToggleRotationMode)}
+        aria-label={rotationModeOpen ? "Hide rotation controls" : "Show rotation controls"}
+        aria-pressed={rotationModeOpen}
+        aria-expanded={rotationModeOpen}
+        aria-controls={rotationControlsId}
+        title={rotationModeOpen ? "Hide rotation controls" : "Show rotation controls"}
+      >
+        <RotateCw aria-hidden="true" size={19} strokeWidth={2.3} />
       </button>
       <button
         className={`icon-button icon-button--screen ${screenModeActive ? "is-selected" : ""}`}
