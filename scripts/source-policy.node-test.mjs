@@ -83,6 +83,56 @@ async function inspect(f) {
   return inspectSourcePolicy({ sourceRoot: f.sourceRoot, publicDataRoot: f.publicRoot, concurrency: 2 });
 }
 
+test("policy and importer share evidence-based classification for extensionless sources", async (t) => {
+  const appRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-extensionless-policy-test-"));
+  t.after(() => fs.rm(appRoot, { recursive: true, force: true }));
+  const sourceRoot = path.join(appRoot, "2001");
+  const albumPath = path.join(sourceRoot, "2001-1");
+  await fs.mkdir(albumPath, { recursive: true });
+  const validPath = path.join(albumPath, "valid-photo");
+  const unsupportedPath = path.join(albumPath, "notes");
+  const corruptPath = path.join(albumPath, "corrupt-photo");
+  await jpeg(validPath, { r: 12, g: 34, b: 56 });
+  await fs.writeFile(unsupportedPath, "not image content\n");
+  await fs.writeFile(corruptPath, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]));
+
+  const relativePath = "2001-1/valid-photo";
+  const photoId = `2001-${crypto.createHash("sha1").update(relativePath).digest("hex").slice(0, 14)}`;
+  const publicDataRoot = path.join(appRoot, "public");
+  const albumId = "2001-1-test";
+  await fs.mkdir(path.join(publicDataRoot, "data", "2001", "albums"), { recursive: true });
+  await fs.writeFile(path.join(publicDataRoot, "data", "catalog.json"), `${JSON.stringify({ years: [{ year: "2001", indexUrl: "data/2001/index.json" }] }, null, 2)}\n`);
+  await fs.writeFile(
+    path.join(publicDataRoot, "data", "2001", "index.json"),
+    `${JSON.stringify({ year: "2001", scannedCount: 3, albums: [{ id: albumId, name: "2001-1", count: 1, manifestUrl: `data/2001/albums/${albumId}.json` }], sequence: [{ id: photoId }] }, null, 2)}\n`
+  );
+  await fs.writeFile(
+    path.join(publicDataRoot, "data", "2001", "albums", `${albumId}.json`),
+    `${JSON.stringify({ id: albumId, name: "2001-1", photos: [{ id: photoId, thumbnailKey: `2001/thumbs/${photoId}.jpg`, displayKey: `2001/display/${photoId}.jpg`, albumId }] }, null, 2)}\n`
+  );
+
+  const inspection = await inspectSourcePolicy({ sourceRoot, selectedYear: "2001", publicDataRoot, concurrency: 2 });
+  const byPath = new Map(inspection.files.map((file) => [file.path, file]));
+  assert.equal(byPath.get(relativePath).classification, "importable-image");
+  assert.equal(byPath.get(relativePath).classificationEvidence, "extensionless-full-decode");
+  assert.equal(byPath.get(relativePath).decodedFormat, "jpeg");
+  assert.equal(byPath.get("2001-1/notes").classification, "unsupported-file");
+  assert.equal(byPath.get("2001-1/notes").classificationEvidence, "unsupported-content");
+  assert.equal(byPath.get("2001-1/corrupt-photo").classification, "unreadable-image");
+  assert.equal(byPath.get("2001-1/corrupt-photo").classificationEvidence, "supported-signature-decode-failed");
+  assert.equal(inspection.findings.sourceMoves.length, 1);
+  assert.equal(inspection.findings.sourceMoves[0].photoId, photoId);
+  assert.deepEqual(inspection.findings.missingPublishedPhotoIds, []);
+  const policy = createSourcePolicyTemplate(inspection);
+  assert(policy.decisions.every((decision) => decision.status === "unresolved" && decision.action === null));
+
+  const plan = await runImporter(["--plan", "--year", "2001"], { appRoot, writeStdout: () => {} });
+  assert.equal(plan.observedFacts.importablePhotos, 1);
+  assert.deepEqual(plan.observedFacts.photos.map((photo) => photo.relativePath), [relativePath]);
+  assert.deepEqual(plan.observedFacts.unsupportedFiles.map((file) => file.relativePath), ["2001-1/notes"]);
+  assert.deepEqual(plan.observedFacts.unreadableFiles.map((file) => file.relativePath), ["2001-1/corrupt-photo"]);
+});
+
 test("fresh inspection reports special cases and defaults every decision to unresolved", async (t) => {
   const f = await fixture();
   t.after(() => fs.rm(f.appRoot, { recursive: true, force: true }));

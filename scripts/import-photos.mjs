@@ -7,10 +7,9 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import exifr from "exifr";
-import { createSourcePolicyTemplate, evaluateSourcePolicy, inspectSourcePolicy, renderDecisionReport } from "./source-policy.mjs";
+import { classifySourceImage, createSourcePolicyTemplate, evaluateSourcePolicy, inspectSourcePolicy, renderDecisionReport } from "./source-policy.mjs";
 import { CONTENT_MEDIA_KEY_VERSION, contentVersionedMediaAsset } from "./content-versioned-media.mjs";
 
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff", ".heic", ".heif"]);
 const DEFAULT_CONCURRENCY = 6;
 const THUMB_WIDTH = 300;
 const DISPLAY_MAX_WIDTH = 640;
@@ -681,10 +680,10 @@ function comparePhotos(left, right) {
   return leftPath.localeCompare(rightPath, undefined, { numeric: true });
 }
 
-async function inspectPhoto(filePath, sourceScope, year, includeContentHash = false) {
+async function inspectPhoto(filePath, sourceScope, year, includeContentHash = false, decodedMetadata = null) {
   const relativePath = toPosixPath(path.relative(sourceScope.sourceRoot, filePath));
   const stat = await fs.stat(filePath);
-  const metadata = await sharp(filePath, { failOn: "none", limitInputPixels: false }).metadata();
+  const metadata = decodedMetadata || (await sharp(filePath, { failOn: "none", limitInputPixels: false }).metadata());
   const { width: visualWidth, height: visualHeight } = displayDimensions(metadata);
 
   if (!visualWidth || !visualHeight) {
@@ -2708,34 +2707,37 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   let inspectedCount = 0;
   const inspectedResults = await mapWithConcurrency(scannedFiles, args.concurrency, async (filePath) => {
     const relativePath = toPosixPath(path.relative(sourceScope.sourceRoot, filePath));
-    const extension = path.extname(filePath).toLowerCase();
-    if (extension && !IMAGE_EXTENSIONS.has(extension)) {
+    const image = await classifySourceImage(filePath);
+    if (image.classification === "unsupported-file") {
       report.unsupported += 1;
-      report.unsupportedFiles.push({ relativePath, reason: "Unsupported file extension" });
+      report.unsupportedFiles.push({
+        relativePath,
+        reason: image.decodeError ? `Unsupported source content: ${image.decodeError}` : "Unsupported file extension"
+      });
+      return null;
+    }
+    if (image.classification === "unreadable-image") {
+      report.unreadable += 1;
+      report.unreadableFiles.push({
+        relativePath,
+        reason: image.decodeError || "Unreadable image"
+      });
       return null;
     }
 
     try {
-      const photo = await inspectPhoto(filePath, sourceScope, args.year, args.plan || isStagedRun);
+      const photo = await inspectPhoto(filePath, sourceScope, args.year, args.plan || isStagedRun, image.metadata);
       inspectedCount += 1;
       if (!args.plan && (inspectedCount % 500 === 0 || inspectedCount === scannedFiles.length - report.unsupported)) {
         writeStdout(`Inspected ${inspectedCount}/${scannedFiles.length - report.unsupported}\n`);
       }
       return { photo };
     } catch (error) {
-      if (extension) {
-        report.unreadable += 1;
-        report.unreadableFiles.push({
-          relativePath,
-          reason: error instanceof Error ? error.message : "Unreadable image"
-        });
-      } else {
-        report.unsupported += 1;
-        report.unsupportedFiles.push({
-          relativePath,
-          reason: error instanceof Error ? `Unsupported extensionless file: ${error.message}` : "Unsupported extensionless file"
-        });
-      }
+      report.unreadable += 1;
+      report.unreadableFiles.push({
+        relativePath,
+        reason: error instanceof Error ? error.message : "Unreadable image"
+      });
       return null;
     }
   });

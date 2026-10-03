@@ -12,6 +12,7 @@ export const SOURCE_POLICY_SCHEMA_VERSION = 2;
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff", ".heic", ".heif"]);
+const SUPPORTED_EXTENSIONLESS_FORMATS = new Set(["jpeg", "png", "webp", "gif", "tiff", "heif"]);
 const NOISE_FILENAMES = new Set([".DS_Store", "Thumbs.db", "desktop.ini"]);
 const DECISION_ACTIONS = {
   "folder-year": new Set(["map-to-year"]),
@@ -135,6 +136,76 @@ async function inspectExif(filePath) {
   return null;
 }
 
+function hasSupportedImageSignature(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return true;
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true;
+  if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(bytes.subarray(0, 6).toString("ascii"))) return true;
+  if (bytes.length >= 4 && (bytes.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00])) || bytes.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a])))) return true;
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return true;
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("ascii");
+    if (/^(?:heic|heix|heim|heis|hevc|hevx|mif1|msf1)$/.test(brand)) return true;
+  }
+  return false;
+}
+
+async function extensionlessFailureClassification(filePath) {
+  // A signature never makes a file importable. It only distinguishes corrupt
+  // supported image content from genuinely unsupported content after decoding failed.
+  const handle = await fs.open(filePath, "r");
+  try {
+    const prefix = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
+    return hasSupportedImageSignature(prefix.subarray(0, bytesRead)) ? "unreadable-image" : "unsupported-file";
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function classifySourceImage(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  const extensionless = extension === "";
+  if (!extensionless && !SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
+    return {
+      classification: "unsupported-file",
+      extension,
+      decodable: false,
+      metadata: null,
+      decodeError: null,
+      evidence: "unsupported-extension"
+    };
+  }
+
+  try {
+    const metadata = await sharp(filePath, { failOn: "none", limitInputPixels: false }).metadata();
+    if (!metadata.width || !metadata.height) throw new Error("Could not read image dimensions");
+    if (extensionless) {
+      if (!SUPPORTED_EXTENSIONLESS_FORMATS.has(metadata.format)) {
+        throw new Error(`Unsupported decoded image format: ${metadata.format || "unknown"}`);
+      }
+      await sharp(filePath, { failOn: "none", limitInputPixels: false }).resize({ width: 1, withoutEnlargement: true }).raw().toBuffer();
+    }
+    return {
+      classification: "importable-image",
+      extension,
+      decodable: true,
+      metadata,
+      decodeError: null,
+      evidence: extensionless ? "extensionless-full-decode" : "supported-extension-decode"
+    };
+  } catch (error) {
+    const classification = extensionless ? await extensionlessFailureClassification(filePath) : "unreadable-image";
+    return {
+      classification,
+      extension,
+      decodable: false,
+      metadata: null,
+      decodeError: error instanceof Error ? error.message : String(error),
+      evidence: extensionless ? (classification === "unreadable-image" ? "supported-signature-decode-failed" : "unsupported-content") : "supported-extension-decode-failed"
+    };
+  }
+}
+
 async function inspectPhysicalFile(file) {
   const extension = path.extname(file.absolutePath).toLowerCase();
   const filename = path.basename(file.absolutePath);
@@ -142,12 +213,27 @@ async function inspectPhysicalFile(file) {
   const topLevelFolder = parts.length > 1 ? parts[0] : ".";
   const folderYear = leadingYear(topLevelFolder);
   const supportedImage = SUPPORTED_IMAGE_EXTENSIONS.has(extension);
+  const extensionless = extension === "";
   const thm = extension === ".thm";
   let decodable = false;
   let dimensions = null;
   let decodeError = null;
   let captureDate = null;
-  if (supportedImage || thm) {
+  let classificationEvidence = null;
+  let imageClassification = null;
+  let decodedFormat = null;
+  if (!isNoise(filename) && (supportedImage || extensionless)) {
+    const image = await classifySourceImage(file.absolutePath);
+    imageClassification = image.classification;
+    decodable = image.decodable;
+    decodeError = image.decodeError;
+    classificationEvidence = image.evidence;
+    if (image.metadata) {
+      decodedFormat = image.metadata.format || null;
+      dimensions = { width: image.metadata.width, height: image.metadata.height, orientation: image.metadata.orientation || 1 };
+      captureDate = await inspectExif(file.absolutePath);
+    }
+  } else if (thm) {
     try {
       const metadata = await sharp(file.absolutePath, { failOn: "error", limitInputPixels: false }).metadata();
       if (!metadata.width || !metadata.height) throw new Error("Missing image dimensions");
@@ -155,18 +241,19 @@ async function inspectPhysicalFile(file) {
         await sharp(file.absolutePath, { failOn: "error", limitInputPixels: false }).resize({ width: 1 }).raw().toBuffer();
       }
       decodable = true;
+      decodedFormat = metadata.format || null;
       dimensions = { width: metadata.width, height: metadata.height, orientation: metadata.orientation || 1 };
       captureDate = await inspectExif(file.absolutePath);
+      classificationEvidence = "decodable-unsupported-extension";
     } catch (error) {
       decodeError = error instanceof Error ? error.message : String(error);
+      classificationEvidence = "unsupported-extension-decode-failed";
     }
   }
   const classification = isNoise(filename)
     ? "noise"
-    : supportedImage
-      ? decodable
-        ? "importable-image"
-        : "unreadable-image"
+    : supportedImage || extensionless
+      ? imageClassification
       : thm && decodable
         ? "decodable-unsupported-image"
         : "unsupported-file";
@@ -182,7 +269,9 @@ async function inspectPhysicalFile(file) {
     decodable,
     dimensions,
     captureDate,
-    decodeError
+    decodeError,
+    classificationEvidence,
+    decodedFormat
   };
 }
 
