@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { build2002DecisionPacket, render2002DecisionPacket } from "./decision-packet-2002.mjs";
+import { assertRecordedInventory, build2002DecisionPacket, render2002DecisionPacket } from "./decision-packet-2002.mjs";
 
 test("2002 decision packet separates observations, suggestions, and unresolved choices", () => {
   const albumDefinitions = [
@@ -15,7 +15,11 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
       relativePath: `${album}/photo-${index}.jpg`,
       proposedPhotoId: `2002-${album}-${index}`,
       album: { name: album },
-      sourceSha256: `${index}`.padStart(64, "0")
+      sourceSha256: `${index}`.padStart(64, "0"),
+      proposedOutputs: {
+        thumbnail: { key: `2002/thumbs/photo-${album}-${index}.jpg` },
+        display: { key: `2002/display/photo-${album}-${index}.jpg` }
+      }
     }))
   );
   const inventoryFiles = [
@@ -38,10 +42,19 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
       ],
       skippedNoiseFiles: Array.from({ length: 5 }, (_, index) => ({ relativePath: `2002 New/noise-${index}`, bytes: index })),
       offYearDates: Array.from({ length: 31 }, (_, index) => ({ relativePath: `off-year-${index}.jpg`, exifYear: 2001, exifTime: "2001-01-01T00:00:00.000Z", field: "DateTimeOriginal" })),
-      outputsThatWouldBecomeStale: { mediaKeys: [], albumManifestPaths: [] }
+      outputsThatWouldBecomeStale: { mediaKeys: [], albumManifestPaths: [] },
+      legacyCompatibility: { transitions: [] }
     },
     sourcePolicy: {
-      inventory: { inventorySha256: "d".repeat(64), files: inventoryFiles },
+      inventory: {
+        sourceRoot: "/fixture/original-photos",
+        scanRoots: ["/fixture/original-photos/2002 New"],
+        selectedYear: "2002",
+        fileCount: inventoryFiles.length,
+        totalBytes: inventoryFiles.reduce((sum, file) => sum + file.bytes, 0),
+        inventorySha256: "d".repeat(64),
+        files: inventoryFiles
+      },
       eligibility: { publicationEligible: false, counts: { unresolved: 12 } },
       policyTemplate: { decisions: [], decisionGroups: [] },
       findings: {
@@ -52,6 +65,13 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
   };
 
   const packet = build2002DecisionPacket(plan);
+  assert.equal(packet.schemaVersion, 2);
+  assert.throws(() => assertRecordedInventory(packet), /2002 inventory drift/);
+  packet.sourceInventory.fileCount = 765;
+  packet.sourceInventory.totalBytes = 48_609_569;
+  packet.sourceInventory.inventorySha256 = "58f4650294c9aa740a27dfe0c9471b9934abd9091be54b7e058bfdce71353f43";
+  packet.sourceInventory.matchesRecordedBaseline = true;
+  assert.doesNotThrow(() => assertRecordedInventory(packet));
   assert.equal(packet.publishedArchive.photoCount, 479);
   assert.equal(packet.publishedArchive.everyExistingIdStable, true);
   assert.equal(packet.proposed2002New.photoCount, 279);
@@ -62,6 +82,7 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
   assert.equal(packet.ignoredNoiseFiles.length, 5);
   assert.equal(packet.policyEligibility.reviewUnits, 0);
   assert.equal(packet.scenarios.include2002New.photoCount, 758);
+  assert.equal(packet.scenarios.include2002New.mediaDifference.candidateKeys.length, 1516);
   assert.equal(packet.scenarios.exclude2002New.photoCount, 479);
   assert.match(render2002DecisionPacket(packet), /suggestion only; unapproved/);
   assert.match(render2002DecisionPacket(packet), /off-year-30\.jpg/);

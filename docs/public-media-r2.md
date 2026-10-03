@@ -1,237 +1,261 @@
-# 640x480 Public Media Release
+# Public media R2 runbook
 
-This app publishes generated display and thumbnail derivatives only. Original source folders such as `2001`, `2013`, and future source-year folders stay local and must never be uploaded.
+This is the operative workflow for Pixilation photo-media publication. A
+completed, publication-eligible promotion package is the **only** publication
+input. Never publish `generated/library/` directly, never use the legacy
+uploader, and never use `rclone` as a publication route.
 
-## Public Payload
+The source originals remain private. R2 receives only the exact
+content-versioned derivative keys listed in a verified package's `media/new`
+tree. Manifest activation is a separate operation and must not happen until the
+media publication receipt is `PASS`.
 
-Publish only:
+## Non-negotiable invariants
 
-```text
-generated/library/
-```
+- Start with a completed staged run, a fresh exact source inventory, and a
+  fully resolved source policy.
+- Build and independently verify a sealed promotion package.
+- Plan against the package's exact approved new-key set before any write.
+- Create only absent keys with `If-None-Match: *`; never overwrite, copy, or
+  delete an object.
+- Prove every required object by full-object SHA-256 readback. Size, ETag, and
+  service metadata are evidence, but are not substitutes for the readback.
+- Reconcile the complete required media set and require a durable `PASS`
+  receipt before manifest activation.
+- Retain legacy objects, obsolete-but-retained keys, and every key needed by
+  the prior manifest set. They are rollback data, not cleanup candidates.
+- Use `Cache-Control: public, max-age=31536000, immutable` for newly created
+  content-versioned keys. The former short-cache policy applied to mutable
+  legacy keys and is not the current policy.
 
-Do not publish:
+There is no production write command in this repository. The production R2
+adapter is read-only; the only R2 writer is pinned to an isolated disposable
+test bucket.
 
-```text
-2001/
-2013/
-dev-01/
-generated/reports/
-```
+## Workflow boundaries
 
-Run this before planning any upload:
+The photo-release flow has four distinct boundaries:
 
-```bash
-npm run release:audit
-```
+1. **Staging** creates an isolated, resumable derivative and manifest set.
+2. **Promotion packaging** merges the selected staged year with unaffected
+   published data and seals `public-data`, `media`, and reference inventories.
+3. **Media publication** plans and uploads only the package's `media/new` set,
+   then emits a reconciled receipt. Production execution is not yet enabled.
+4. **Manifest activation** is a later deployment operation. It is deliberately
+   absent from all media commands in this document.
 
-The audit writes:
+Do not substitute a direct canonical import for steps 1 or 2. Direct canonical
+photo imports fail closed, even with a resolved policy.
 
-```text
-generated/reports/public-release-audit.json
-```
+## Promotion package: the sole input
 
-The report is ignored by Git and is not browser-accessible.
-
-## Cloudflare Setup
-
-Create these manually in Cloudflare before any real upload:
-
-1. Create a dedicated R2 Standard bucket for generated public media.
-2. Create a bucket-scoped API token with the minimum permissions needed for object listing, reading, and writing in that bucket.
-3. Configure a custom public media domain for the bucket.
-4. Do not use an `r2.dev` URL as the final production media URL.
-5. Configure public access only for generated derivatives in this bucket.
-6. Set conservative media caching because asset keys are stable and may be reused if a source photograph changes.
-
-Suggested response headers:
-
-```text
-Content-Type: image/jpeg
-Cache-Control: public, max-age=3600, stale-while-revalidate=86400
-```
-
-If the importer later changes to content-versioned asset keys, the cache policy can become longer-lived and immutable.
-
-CORS is not access control. These photographs are intentionally public. The current app uses normal browser image loading only, so start with the narrowest CORS rules needed by the custom site origin and methods `GET` and `HEAD`.
-
-## Environment
-
-Store real values only in your shell or ignored local env files. Do not commit credentials.
+Build the package only from a completed isolated staging root and the exact
+resolved policy used by that run. Keep the package outside canonical
+`public/data`, `generated/library`, and `generated/reports`:
 
 ```bash
-export R2_ACCOUNT_ID=""
-export R2_ACCESS_KEY_ID=""
-export R2_SECRET_ACCESS_KEY=""
-export R2_BUCKET=""
-export R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-export VITE_MEDIA_BASE_URL="https://media.example.com/"
+npm run release:package -- \
+  --staging-root /absolute/isolated/staging-root \
+  --package-root /absolute/isolated/promotion-package \
+  --source-policy /absolute/private/resolved-source-policy.json \
+  --canonical-data-root /absolute/pixilation.org/public/data \
+  --canonical-media-root /absolute/pixilation.org/generated/library
 ```
 
-For local development, leave `VITE_MEDIA_BASE_URL` blank so Vite serves:
+The package command refuses a publication-ineligible staged receipt, a stale or
+unresolved policy, an incomplete selected year, duplicate IDs, missing media,
+unexpected package files, or a changed closed-world seal. Its completed package
+contains:
 
 ```text
-http://127.0.0.1:5173/media/
+package.json
+complete.json
+public-data/
+media/new/
+inventories/public-data.json
+inventories/media.json
+inventories/manifest-media-map.json
 ```
 
-For production builds, set `VITE_MEDIA_BASE_URL` to the custom media domain.
+`media/new` is the complete upload allowlist. Nothing else in the working tree
+is an upload source. The media inventory separately records existing legacy
+keys, existing versioned keys, rollback keys, and obsolete-but-retained keys.
+No category implies deletion.
 
-## Package-bound publication gate
+## Safe local planning
 
-The legacy canonical-tree uploader is disabled. These commands now always fail
-closed and must not be used as a publication route:
+The filesystem adapter is for disposable local verification only. Both paths
+must be isolated; do not point either path at a canonical tree or a report
+directory:
+
+```bash
+npm run media:publish:plan -- \
+  --package-root /absolute/isolated/promotion-package \
+  --object-root /absolute/disposable/object-store
+
+npm run media:publish:local -- \
+  --package-root /absolute/isolated/promotion-package \
+  --object-root /absolute/disposable/object-store \
+  --journal-root /absolute/disposable/publication-journal
+```
+
+The zero-write plan reports the exact keys, byte counts, SHA-256 checksums,
+matching existing objects, missing keys, conflicts, request estimates, and zero
+deletes. The local execution journal and receipt exercise the package contract;
+they are not production R2 evidence.
+
+## Production R2: read-only preflight
+
+The checked-in production destination pin records hashes of the expected
+account and endpoint, the exact bucket, and the managed media-key grammar. A
+runtime credential file must match the pin. Reports identify the account,
+bucket, endpoint, and namespace without printing secrets.
+
+For the currently published baseline, use the read-only inventory mode. Output
+goes to stdout; choose an isolated path yourself if it must be retained. Do not
+write it to `generated/reports`:
+
+```bash
+npm run media:r2:preflight -- \
+  --baseline \
+  --config config/r2-publication-readonly.json \
+  --credentials /absolute/private/production-readonly-credentials.json \
+  --canonical-media-root /absolute/pixilation.org/generated/library \
+  --sample-count 6 \
+  --max-readback-bytes 10485760
+```
+
+For a real completed package, replace `--baseline` and
+`--canonical-media-root` with:
+
+```text
+--package-root /absolute/isolated/promotion-package
+```
+
+Package preflight verifies the seal, completely paginates the managed
+namespace, and classifies required candidate keys, rollback-retained keys,
+other known archive keys, and unexpected keys. Readback is bounded by
+`--max-readback-bytes`. The result is a **read-only preflight report**, never a
+publication receipt and never proof that missing media was uploaded.
+
+The production adapter imports and permits only `HeadBucket`,
+`ListObjectsV2`, `HeadObject`, and `GetObject`. `--execute`, upload, copy,
+delete, metadata-mutation, and force flags fail before credentials are loaded
+or a client is created. Production upload remains disabled.
+
+R2 supports `ListObjectsV2` pagination and conditional `PutObject`, but its
+compatibility table does not provide a SHA-256 `FULL_OBJECT` checksum type.
+The preflight accepts checksum metadata only when it explicitly identifies
+full-object SHA-256; otherwise it performs a bounded GET and hashes all returned
+bytes. Size and ETag never prove equality here. See Cloudflare's
+[R2 S3 compatibility table](https://developers.cloudflare.com/r2/api/s3/api/),
+[AWS SDK v3 R2 example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/),
+and [R2 pricing categories](https://developers.cloudflare.com/r2/pricing/).
+AWS also documents that an
+[ETag may not be a full-object MD5](https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html).
+
+## Isolated test-bucket publisher
+
+This publisher is verification infrastructure, not a production command. It
+accepts only an `environment: isolated-write-test` destination pin, refuses the
+production bucket and public media endpoints, and validates the package's exact
+year/key set against the pinned Pixilation key grammar.
+
+Create short-lived package-bound credentials in an ignored, isolated location:
+
+```bash
+npm run media:r2:test:credentials -- \
+  --package-root /absolute/synthetic/promotion-package \
+  --config config/r2-publication-isolated-test.json \
+  --parent-credentials /absolute/private/isolated-parent-credentials.json \
+  --output /absolute/private/package-r2-credentials.json \
+  --ttl-seconds 900
+```
+
+Then plan without a journal:
+
+```bash
+npm run media:r2:test:plan -- \
+  --package-root /absolute/synthetic/promotion-package \
+  --config config/r2-publication-isolated-test.json \
+  --credentials /absolute/private/package-r2-credentials.json
+```
+
+Execution is allowed only against the pinned disposable bucket, with a durable
+journal outside canonical trees:
+
+```bash
+npm run media:r2:test:publish -- \
+  --package-root /absolute/synthetic/promotion-package \
+  --config config/r2-publication-isolated-test.json \
+  --credentials /absolute/private/package-r2-credentials.json \
+  --journal-root /absolute/disposable/r2-publication-journal
+```
+
+Every create uses `PutObject` with `If-None-Match: *`, a supplied payload
+SHA-256 checksum, `Content-Type: image/jpeg`, and the immutable cache header. A
+412 means only “already present”; the adapter then downloads and hashes the
+object. A successful PUT is also downloaded and hashed before the journal can
+record completion. An interrupted run cannot issue a `PASS` receipt.
+
+The short-lived publisher credential permits only `GetObject` and `PutObject`
+and binds `objectPaths` to the package's exact `media/new` set. A separate
+`ListObjectsV2` credential inventories the isolated bucket; a third
+`GetObject` role is used when a fixture retains existing media. Role actions,
+paths, expirations, and credential fingerprints enter the run binding and
+receipt without secrets.
+
+Cloudflare's local-signing example includes both `scope` and `actions`, but R2
+returned `400 InvalidArgument: X-Amz-Security-Token` for that form during the
+2026-10-02 isolated test. The action-only form from the same temporary-
+credential reference succeeded and was authorization-tested. The publisher
+credential received `403 AccessDenied` for delete, multi-delete, copy,
+multipart creation, listing, cross-bucket PUT, and PUT outside its exact object
+paths. Preserve this runtime/documentation discrepancy in any future release
+record. See Cloudflare's [R2 token guide](https://developers.cloudflare.com/r2/api/tokens/)
+and [temporary-credential guide](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/).
+
+`PutObject` permission is not intrinsically create-only: another client holding
+the publisher credential could issue an unconditional overwrite at an approved
+path. The adapter's conditional request and full readback remain mandatory.
+Credential scoping is defense in depth, not overwrite proof.
+
+After a test, remove only the run's recorded synthetic keys under the isolated
+bucket cleanup plan, list the bucket to prove it empty, and let the temporary
+credentials expire. Never aim cleanup at production.
+
+## Gate before manifest activation
+
+Do not activate candidate public data until all of the following are true:
+
+- the package is still publication-eligible and its closed-world seal verifies;
+- an exact publication plan has no conflicts or extra upload keys;
+- every approved new key has been conditionally created or proven identical;
+- every required new and retained key has passed full SHA-256 readback;
+- complete reconciliation reports zero missing or changed required objects;
+- the durable package-bound media receipt is `PASS`;
+- the previous manifests and all of their referenced keys remain available for
+  rollback.
+
+Production cannot reach this gate yet because production execution is disabled.
+Enabling it requires a separately reviewed production adapter and change plan.
+
+## Historical, non-operational instructions
+
+Older procedures published `generated/library/` directly with `rclone` and used
+short cache lifetimes because legacy keys could be reused. Those instructions
+are retained here only to explain prior state. They are **not authorized
+commands** and do not satisfy the package, journal, checksum, reconciliation, or
+rollback contracts.
+
+In particular, do not run the disabled legacy routes:
 
 ```bash
 npm run media:upload:dry-run
 npm run media:upload
 ```
 
-Media publication starts with a completed, publication-eligible promotion
-package. A zero-write plan and local execution against a disposable filesystem
-fixture are available as follows:
-
-```bash
-npm run media:publish:plan -- --package-root /path/to/package --object-root /path/to/disposable-store
-npm run media:publish:local -- --package-root /path/to/package --object-root /path/to/disposable-store --journal-root /path/to/journal
-```
-
-The gate binds the package ID, closed-world seal, manifest-reference map, media
-inventory, and exact `media/new` set. It accepts an existing object only after a
-full-byte SHA-256 readback, writes only absent approved new keys, and performs no
-deletes. Manifest activation is a separate later operation.
-
-## Read-only R2 preflight
-
-The checked-in R2 destination pin records hashes of the expected account and
-endpoint, the exact bucket name, and the managed year/derivative namespace. The
-runtime credential file must match every pin. Account, bucket, endpoint and
-namespace identities are reported, but access keys and secrets are never
-printed.
-
-Run a bounded read-only comparison of the existing R2 namespace with canonical
-local media using:
-
-```bash
-npm run media:r2:preflight -- \
-  --baseline \
-  --config config/r2-publication-readonly.json \
-  --credentials /absolute/path/to/insertcatchytitlehere-r2.json \
-  --canonical-media-root /absolute/path/to/generated/library \
-  --sample-count 6 \
-  --max-readback-bytes 10485760
-```
-
-When a real completed promotion package exists, replace `--baseline` and the
-canonical-media option with `--package-root /absolute/path/to/package`. The
-command validates the sealed package, lists the complete namespace with
-continuation tokens, and classifies candidate, rollback, other-known and
-unexpected objects. It prints JSON to stdout and never creates a publication
-receipt.
-
-R2 currently supports `ListObjectsV2` pagination and conditional operations on
-`PutObject`, but its compatibility table does not support a SHA-256
-`FULL_OBJECT` checksum type. The preflight therefore accepts checksum metadata
-only if it explicitly identifies full-object SHA-256; otherwise it performs a
-bounded GET and hashes every returned byte. Size and ETag alone never prove
-SHA-256 equality. See the current official
-[R2 S3 compatibility table](https://developers.cloudflare.com/r2/api/s3/api/)
-and [AWS SDK v3 R2 example](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/).
-AWS likewise documents that an
-[ETag may not be a full-object MD5](https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html),
-and it is never treated here as SHA-256 proof. Request reports separate Class A
-listing calls from Class B HEAD/GET calls using Cloudflare's current
-[R2 operation pricing categories](https://developers.cloudflare.com/r2/pricing/).
-
-The R2 adapter imports and permits only `HeadBucket`, `ListObjectsV2`,
-`HeadObject`, and `GetObject`. `--execute`, upload, copy, delete, metadata and
-force flags fail before credentials are loaded or a client is created.
-
-## Isolated conditional-write verification
-
-Production publication remains unavailable. The isolated-test adapter accepts
-only a verified promotion package and an `environment: isolated-write-test`
-destination pin. Its command surface contains only `ListObjectsV2`, `GetObject`,
-and `PutObject`; it has no copy, delete, metadata-replacement, or unconditional
-write operation. The package's exact `media/new` set is the upload allowlist.
-
-Run only against the pinned disposable bucket:
-
-```bash
-npm run media:r2:test:credentials -- \
-  --package-root /path/to/synthetic/package \
-  --config config/r2-publication-isolated-test.json \
-  --parent-credentials /absolute/path/to/parent-r2-credentials.json \
-  --output /absolute/ignored/path/package-r2-credentials.json \
-  --ttl-seconds 900
-
-npm run media:r2:test:plan -- \
-  --package-root /path/to/synthetic/package \
-  --config config/r2-publication-isolated-test.json \
-  --credentials /absolute/path/to/isolated-test-credentials.json
-
-npm run media:r2:test:publish -- \
-  --package-root /path/to/synthetic/package \
-  --config config/r2-publication-isolated-test.json \
-  --credentials /absolute/path/to/isolated-test-credentials.json \
-  --journal-root /path/to/durable/journal
-```
-
-Every create uses `PutObject` with `If-None-Match: *`, a supplied payload
-SHA-256 checksum, `Content-Type: image/jpeg`, and
-`Cache-Control: public, max-age=31536000, immutable`. A 412 response is treated
-only as “already present”; the object is then downloaded in full and hashed.
-A successful PUT is also downloaded and hashed before the journal can record it
-as complete. Service checksum metadata, size, and ETag are retained as evidence
-but never replace full-object SHA-256 readback.
-
-The publisher uses locally signed, short-lived, action-only credentials. Its
-credential permits only `GetObject` and `PutObject`, and its `objectPaths` claim
-must exactly equal the verified package's `media/new` key set. A separate
-`ListObjectsV2` credential supplies complete isolated-bucket inventory. When a
-package retains existing media, a third `GetObject` credential is bound exactly
-to that retained-key set. These roles, actions, paths, expiration times, and
-credential fingerprints are included in the publication run binding and
-receipt without including credential secrets.
-
-Cloudflare's current local-signing example includes both `scope` and `actions`,
-but R2 returned `400 InvalidArgument: X-Amz-Security-Token` for that form on
-2026-10-02. The action-only form described by the same temporary-credential
-reference succeeded and was authorization-tested. The `GetObject`/`PutObject`
-credential received `403 AccessDenied` for `DeleteObject`, `DeleteObjects`,
-`CopyObject`, `CreateMultipartUpload`, `ListObjectsV2`, cross-bucket PUT, and PUT
-outside its exact object paths. Sentinels remained byte-identical after every
-denial. Keep this runtime/documentation discrepancy in the release record.
-
-Action restriction does not turn `PutObject` into create-only permission. A
-different client holding the publisher credential could issue an unconditional
-PUT to one of its approved paths. The package adapter therefore still requires
-`If-None-Match: *`, rejects any command outside its three-command surface, and
-performs full-object SHA-256 readback. Do not treat the credential restriction
-alone as overwrite protection.
-
-The checked-in isolated destination pin names the test bucket and hashes its
-account and endpoint. Every runtime role must be a locally signed Cloudflare
-temporary credential for that exact bucket, must not be expired, and must match
-the package-bound action and path pin.
-The production bucket and public media hosts are explicit deny-list entries.
-Cloudflare documents bucket-scoped tokens and temporary credentials in its
-[R2 token guide](https://developers.cloudflare.com/r2/api/tokens/) and
-[temporary-credential guide](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/).
-
-The disposable bucket is retained empty for later isolated tests. Each test run
-must record its exact synthetic keys before creation, remove only that recorded
-set after verification, list the bucket to prove cleanup, and allow its temporary
-credential to expire. Never point this adapter at the production bucket.
-
-Do not substitute direct `rclone copy`, because that bypasses the package gate
-and its durable receipt. Never run `sync --delete` for this archive.
-
-The historical rclone environment mapping was:
-
-```text
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=<from R2_ACCESS_KEY_ID>
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<from R2_SECRET_ACCESS_KEY>
-RCLONE_CONFIG_R2_ENDPOINT=<from R2_ENDPOINT>
-```
+Both commands fail closed. Do not run `rclone copy`, and never run
+`sync --delete` for this archive. Historical environment mappings have been
+removed because leaving copy-ready commands in the operative runbook creates an
+unnecessary bypass risk.
