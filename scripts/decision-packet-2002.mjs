@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -51,7 +52,101 @@ function exactGroup(group) {
     : null;
 }
 
-export function build2002DecisionPacket(plan) {
+function sha256(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function uploadEstimate(measuredLegacyBytes, photoCount, publishedPhotoCount) {
+  return {
+    classification: "estimate",
+    bytes: measuredLegacyBytes === null ? null : Math.round((measuredLegacyBytes * photoCount) / publishedPhotoCount),
+    formula: `round(measured current 2002 legacy derivative bytes × ${photoCount} / ${publishedPhotoCount})`,
+    limitation: "No staged derivatives were generated. New encoding output may differ from legacy bytes because legacy assets do not carry verified source/recipe provenance."
+  };
+}
+
+function formatUpload(upload) {
+  if (upload.bytes === null) return `${upload.classification}; bytes unavailable`;
+  return `${upload.bytes.toLocaleString("en-US")} bytes (${(upload.bytes / (1024 * 1024)).toFixed(2)} MiB; ${upload.classification})`;
+}
+
+export async function measure2002PromotionEvidence(plan) {
+  const publicRoot = plan.configuration.canonicalOutputRoots.data;
+  const dataRoot = path.join(publicRoot, "data");
+  const mediaRoot = plan.configuration.canonicalOutputRoots.media;
+  const currentIndexPath = path.join(dataRoot, "2002", "index.json");
+  const currentIndexBytes = await fs.readFile(currentIndexPath);
+  const currentIndex = JSON.parse(currentIndexBytes);
+  const existingAlbums = plan.observedFacts.proposedAlbums.filter((album) => !album.name.startsWith("2002 New/"));
+  const existingPhotos = plan.observedFacts.photos.filter((photo) => !photo.relativePath.startsWith("2002 New/"));
+  const scannedExistingFiles = plan.sourcePolicy.inventory.fileCount - plan.sourcePolicy.findings.new2002.files.length;
+  const hypotheticalExistingIndex = {
+    year: "2002",
+    scannedCount: scannedExistingFiles,
+    albums: existingAlbums.map(({ id, name, count, manifestUrl }) => ({ id, name, count, manifestUrl })),
+    sequence: existingPhotos.map((photo) => ({ id: photo.proposedPhotoId }))
+  };
+  const hypotheticalIndexBytes = Buffer.from(`${JSON.stringify(hypotheticalExistingIndex, null, 2)}\n`);
+
+  const catalog = JSON.parse(await fs.readFile(path.join(dataRoot, "catalog.json"), "utf8"));
+  const archiveKeys = new Set();
+  const selectedYearKeys = new Set();
+  const selectedYearManifests = [];
+  for (const year of catalog.years) {
+    const yearIndex = JSON.parse(await fs.readFile(path.join(publicRoot, year.indexUrl), "utf8"));
+    for (const album of yearIndex.albums) {
+      const manifestPath = path.join(publicRoot, album.manifestUrl);
+      const manifestBytes = await fs.readFile(manifestPath);
+      const manifest = JSON.parse(manifestBytes);
+      if (year.year === "2002") {
+        selectedYearManifests.push({ path: album.manifestUrl, bytes: manifestBytes.length, sha256: sha256(manifestBytes), photos: manifest.photos.length });
+      }
+      for (const photo of manifest.photos) {
+        for (const key of [photo.thumbnailKey, photo.displayKey]) {
+          archiveKeys.add(key);
+          if (year.year === "2002") selectedYearKeys.add(key);
+        }
+      }
+    }
+  }
+
+  let selectedYearLegacyBytes = 0;
+  let thumbnailBytes = 0;
+  let displayBytes = 0;
+  for (const key of selectedYearKeys) {
+    const bytes = (await fs.stat(path.join(mediaRoot, key))).size;
+    selectedYearLegacyBytes += bytes;
+    if (key.includes("/thumbs/")) thumbnailBytes += bytes;
+    else displayBytes += bytes;
+  }
+  const sortedArchiveKeys = [...archiveKeys].sort();
+  const sortedSelectedKeys = [...selectedYearKeys].sort();
+  const archiveLegacyKeys = sortedArchiveKeys.filter((key) => !key.includes("-cv"));
+  return {
+    method: "Read-only inspection of current public manifests and every referenced 2002 legacy derivative; no derivative generation or staging.",
+    publishedIndex: {
+      path: "data/2002/index.json",
+      bytes: currentIndexBytes.length,
+      sha256: sha256(currentIndexBytes),
+      hypotheticalExisting479Sha256: sha256(hypotheticalIndexBytes),
+      byteIdenticalForExisting479: currentIndexBytes.equals(hypotheticalIndexBytes),
+      scannedExistingFiles
+    },
+    publishedAlbumManifests: selectedYearManifests.sort((left, right) => left.path.localeCompare(right.path)),
+    legacyMedia: {
+      selected2002: { keys: sortedSelectedKeys, count: sortedSelectedKeys.length, bytes: selectedYearLegacyBytes, thumbnailBytes, displayBytes },
+      completePublishedArchive: {
+        count: archiveLegacyKeys.length,
+        totalReferencedKeyCount: sortedArchiveKeys.length,
+        versionedReferencedKeyCount: sortedArchiveKeys.length - archiveLegacyKeys.length,
+        keySetSha256: sha256(JSON.stringify(archiveLegacyKeys)),
+        unaffectedBy2002Count: archiveLegacyKeys.length - sortedSelectedKeys.length
+      }
+    }
+  };
+}
+
+export function build2002DecisionPacket(plan, promotionEvidence = null) {
   if (plan.configuration.year !== "2002" || plan.mode !== "plan" || plan.zeroWrite !== true) {
     throw new Error("The 2002 decision packet requires a zero-write 2002 plan");
   }
@@ -103,6 +198,13 @@ export function build2002DecisionPacket(plan) {
   const exactGroups = decisionGroups.map(exactGroup);
   const labelDecisions = plan.sourcePolicy.policyTemplate.decisions.filter((decision) => decision.category === "album-label");
   const folderYearDecisions = plan.sourcePolicy.policyTemplate.decisions.filter((decision) => decision.category === "folder-year");
+  const measuredLegacy = promotionEvidence?.legacyMedia?.selected2002 || null;
+  if (measuredLegacy && JSON.stringify(measuredLegacy.keys) !== JSON.stringify(currentLegacyKeys)) {
+    throw new Error("Measured published 2002 media keys do not match the plan's legacy transitions");
+  }
+  const completeArchiveLegacy = promotionEvidence?.legacyMedia?.completePublishedArchive || null;
+  const existing479UploadEstimate = uploadEstimate(measuredLegacy?.bytes ?? null, publishedPhotos.length, publishedPhotos.length);
+  const all758UploadEstimate = uploadEstimate(measuredLegacy?.bytes ?? null, facts.importablePhotos, publishedPhotos.length);
   const packet = {
     schemaVersion: 2,
     kind: "pixilation-2002-decision-packet",
@@ -188,12 +290,40 @@ export function build2002DecisionPacket(plan) {
     offYearExifDates: offYearFiles,
     unsupportedFiles,
     ignoredNoiseFiles: noiseFiles,
-    scenarios: {
-      include2002New: {
+    promotionEvidence,
+    outcomes: {
+      defer2002Entirely: {
+        label: "Defer 2002 entirely",
+        publicationApproved: false,
+        photoCount: publishedPhotos.length,
+        albumCount: existingAlbums.length,
+        albumOrder: existingAlbums.map((album) => album.currentLabel),
+        currentCodeCanExecute: true,
+        executionStatus: "available-as-no-action",
+        explanation: "This is the only outcome with no staged run, promotion package, upload, or manifest activation. It is deferral, not an exclusion-stage workflow.",
+        manifestDifference: {
+          changedPaths: [],
+          addedPaths: [],
+          removedPaths: []
+        },
+        mediaDifference: {
+          newVersionedKeys: [],
+          selected2002LegacyKeysStillReferenced: currentLegacyKeys,
+          completePublishedArchiveLegacyKeyCount: completeArchiveLegacy?.count ?? null,
+          deleteKeys: []
+        },
+        upload: { classification: "exact", bytes: 0, requests: 0 }
+      },
+      stageAndPromoteAll758: {
+        label: "Stage and promote all 758 photos, including 2002 New",
         publicationApproved: false,
         photoCount: facts.importablePhotos,
         albumCount: albums.length,
         albumOrder: albums.map((album) => album.currentLabel),
+        currentCodeCanExecute: false,
+        executionStatus: "mechanically-supported-but-policy-blocked",
+        blockedReasons: ["The fresh real source policy has unresolved decisions and is publication-ineligible."],
+        futureCapability: "After exact policy resolution, the current default year selector, staging workflow, and promotion package support this full three-folder selection.",
         existingUrlEffect: "All 479 existing photo IDs and direct-photo URL parameters remain unchanged; their candidate manifests reference 958 new versioned derivative keys while the 958 legacy keys remain available for rollback.",
         newUrlEffect: `${newPhotos.length} new photo IDs, ${newPhotos.length * 2} new derivative keys, and ${newAlbums.length} new album manifests would be proposed.`,
         manifestDifference: {
@@ -205,38 +335,52 @@ export function build2002DecisionPacket(plan) {
         },
         mediaDifference: {
           candidateReferences: mediaByPhoto,
-          candidateKeys: candidateMediaKeys,
+          newVersionedKeys: candidateMediaKeys,
           keysFor279NewPhotos: new2002MediaKeys,
           replacementVersionedKeysFor479PublishedPhotos: publishedPhotoVersionedKeys,
-          obsoleteButRetainedLegacyKeys: stale.mediaKeys,
-          rollbackLegacyKeys: currentLegacyKeys,
+          selected2002LegacyKeysRetainedForRollback: currentLegacyKeys,
+          completePublishedArchiveLegacyKeyCount: completeArchiveLegacy?.count ?? null,
+          unaffectedYearLegacyKeyCount: completeArchiveLegacy?.unaffectedBy2002Count ?? null,
           deleteKeys: []
         },
+        upload: { ...all758UploadEstimate, requests: candidateMediaKeys.length },
         staleMediaKeys: stale.mediaKeys,
         staleAlbumManifests: stale.albumManifestPaths
       },
-      exclude2002New: {
+      stageAndPromoteExisting479Only: {
+        label: "Stage and promote only the existing 479 photos",
         publicationApproved: false,
         photoCount: publishedPhotos.length,
         albumCount: existingAlbums.length,
         albumOrder: existingAlbums.map((album) => album.currentLabel),
-        existingUrlEffect: "The published 2002 URL and ID set remains unchanged; no proposed 2002 New URLs are created.",
-        newUrlEffect: "No new photo IDs, derivative keys, or album manifests.",
+        currentCodeCanExecute: false,
+        executionStatus: "blocked-exact-source-selection-not-implemented",
+        blockedReasons: [
+          "The default 2002 selector includes all three 2002-prefixed folders.",
+          "The explicit --source option accepts only one root, so it cannot express the two-folder complete 479-photo year.",
+          "The fresh real source policy remains unresolved and publication-ineligible."
+        ],
+        existingUrlEffect: "The 479 photo IDs and direct-photo URL parameters remain stable, but both album manifests must change to reference 958 new content-versioned derivatives.",
+        newUrlEffect: "No new photo IDs or album manifests, but 958 new immutable media keys are required.",
         manifestDifference: {
           selectedYearCandidatePaths: ["data/2002/index.json", ...currentManifestPaths],
-          changedPaths: [],
+          changedPaths: currentManifestPaths,
           addedPaths: [],
-          removedPaths: []
+          removedPaths: [],
+          unchangedPaths: promotionEvidence?.publishedIndex?.byteIdenticalForExisting479 ? ["data/2002/index.json"] : [],
+          yearIndexVerification: promotionEvidence?.publishedIndex || null
         },
         mediaDifference: {
-          candidateKeys: currentLegacyKeys,
-          addedKeys: [],
-          obsoleteButRetainedKeys: [],
+          newVersionedKeys: publishedPhotoVersionedKeys,
+          selected2002LegacyKeysRetainedForRollback: currentLegacyKeys,
+          completePublishedArchiveLegacyKeyCount: completeArchiveLegacy?.count ?? null,
+          unaffectedYearLegacyKeyCount: completeArchiveLegacy?.unaffectedBy2002Count ?? null,
           deleteKeys: []
         },
-        staleMediaKeys: [],
+        upload: { ...existing479UploadEstimate, requests: publishedPhotoVersionedKeys.length },
+        staleMediaKeys: currentLegacyKeys,
         staleAlbumManifests: [],
-        implementationConstraint: "The default 2002 source selection includes 2002 New. Exclusion requires a separately reviewed exact source-selection mechanism; policy must not be used as an implicit filter."
+        implementationConstraint: "This is a hypothetical staged-promotion outcome, not deferral. It requires a separately reviewed exact multi-root source-selection implementation; policy must not be used as an implicit filter."
       }
     },
     decisionsForJared: [
@@ -252,6 +396,9 @@ export function build2002DecisionPacket(plan) {
 }
 
 export function render2002DecisionPacket(packet) {
+  const defer = packet.outcomes.defer2002Entirely;
+  const all = packet.outcomes.stageAndPromoteAll758;
+  const existing = packet.outcomes.stageAndPromoteExisting479Only;
   const lines = [
     "# Pixilation 2002 decision packet",
     "",
@@ -297,17 +444,43 @@ export function render2002DecisionPacket(packet) {
     `- Ignored noise: ${packet.ignoredNoiseFiles.length}`,
     ...packet.ignoredNoiseFiles.map((file) => `- \`${file.path}\` (${file.bytes} bytes, \`${file.sha256}\`)`),
     "",
-    "## Include/exclude effects",
+    "## Three distinct outcomes",
     "",
-    `- Include: ${packet.scenarios.include2002New.photoCount} photos, ${packet.scenarios.include2002New.albumCount} albums, order ${packet.scenarios.include2002New.albumOrder.map((item) => `\`${item}\``).join(" → ")}.`,
-    `- Include URL effect: ${packet.scenarios.include2002New.existingUrlEffect} ${packet.scenarios.include2002New.newUrlEffect}`,
-    `- Include manifest difference: ${packet.scenarios.include2002New.manifestDifference.changedPaths.length} changed, ${packet.scenarios.include2002New.manifestDifference.addedPaths.length} added, ${packet.scenarios.include2002New.manifestDifference.removedPaths.length} removed.`,
-    `- Include media difference: ${packet.scenarios.include2002New.mediaDifference.candidateKeys.length} candidate keys; ${packet.scenarios.include2002New.mediaDifference.keysFor279NewPhotos.length} for the 279 new photos; ${packet.scenarios.include2002New.mediaDifference.replacementVersionedKeysFor479PublishedPhotos.length} replacement versioned keys for currently published photos; ${packet.scenarios.include2002New.mediaDifference.obsoleteButRetainedLegacyKeys.length} legacy keys retained for rollback; zero deletes.`,
-    `- Include stale-output findings: ${packet.scenarios.include2002New.staleMediaKeys.length} media keys; ${packet.scenarios.include2002New.staleAlbumManifests.length} manifests.`,
-    `- Exclude: ${packet.scenarios.exclude2002New.photoCount} photos, ${packet.scenarios.exclude2002New.albumCount} albums, order ${packet.scenarios.exclude2002New.albumOrder.map((item) => `\`${item}\``).join(" → ")}.`,
-    `- Exclude URL effect: ${packet.scenarios.exclude2002New.existingUrlEffect}`,
-    `- Exclude manifest/media difference: ${packet.scenarios.exclude2002New.manifestDifference.changedPaths.length} changed manifests, ${packet.scenarios.exclude2002New.mediaDifference.addedKeys.length} added media keys, zero deletes.`,
-    `- Constraint: ${packet.scenarios.exclude2002New.implementationConstraint}`,
+    "Excluding `2002 New` from a staged promotion is **not** the same as deferring 2002. A staged 479-photo promotion still replaces its manifest media references with content-versioned keys.",
+    "",
+    "| Outcome | Photos / albums | Changed manifests | Added manifests | New versioned keys | Retained 2002 legacy keys | Upload bytes | Executable now? |",
+    "|---|---:|---:|---:|---:|---:|---:|---|",
+    `| Defer 2002 entirely | ${defer.photoCount} / ${defer.albumCount} | ${defer.manifestDifference.changedPaths.length} | ${defer.manifestDifference.addedPaths.length} | ${defer.mediaDifference.newVersionedKeys.length} | ${defer.mediaDifference.selected2002LegacyKeysStillReferenced.length} | ${formatUpload(defer.upload)} | Yes: take no action |`,
+    `| Stage/promote all 758 | ${all.photoCount} / ${all.albumCount} | ${all.manifestDifference.changedPaths.length} | ${all.manifestDifference.addedPaths.length} | ${all.mediaDifference.newVersionedKeys.length} | ${all.mediaDifference.selected2002LegacyKeysRetainedForRollback.length} | ${formatUpload(all.upload)} | No: unresolved policy |`,
+    `| Stage/promote existing 479 only | ${existing.photoCount} / ${existing.albumCount} | ${existing.manifestDifference.changedPaths.length} | ${existing.manifestDifference.addedPaths.length} | ${existing.mediaDifference.newVersionedKeys.length} | ${existing.mediaDifference.selected2002LegacyKeysRetainedForRollback.length} | ${formatUpload(existing.upload)} | No: exact multi-root selection is absent and policy is unresolved |`,
+    "",
+    "### 1. Defer 2002 entirely",
+    "",
+    `- Album order: ${defer.albumOrder.map((item) => `\`${item}\``).join(" → ")}.`,
+    "- Changed manifests: none. Added manifests: none.",
+    `- No stage, package, upload, or activation occurs. The current 958 2002 legacy keys remain referenced, as do all ${defer.mediaDifference.completePublishedArchiveLegacyKeyCount ?? "currently published"} archive legacy keys.`,
+    "",
+    "### 2. Stage and promote all 758 photos",
+    "",
+    `- Album order: ${all.albumOrder.map((item) => `\`${item}\``).join(" → ")}.`,
+    `- Changed manifests: ${all.manifestDifference.changedPaths.map((item) => `\`${item}\``).join(", ")}.`,
+    `- Added manifests: ${all.manifestDifference.addedPaths.map((item) => `\`${item}\``).join(", ")}.`,
+    `- Media: ${all.mediaDifference.newVersionedKeys.length} new keys (${all.mediaDifference.keysFor279NewPhotos.length} for 2002 New; ${all.mediaDifference.replacementVersionedKeysFor479PublishedPhotos.length} for published photos).`,
+    `- Rollback: all ${all.mediaDifference.selected2002LegacyKeysRetainedForRollback.length} selected-year legacy keys remain; the promotion inventory retains ${all.mediaDifference.completePublishedArchiveLegacyKeyCount ?? "an unmeasured number of"} legacy keys across the published archive.`,
+    `- Current status: ${all.executionStatus}. ${all.blockedReasons.join(" ")}`,
+    "",
+    "### 3. Stage and promote only the existing 479 photos",
+    "",
+    `- Album order: ${existing.albumOrder.map((item) => `\`${item}\``).join(" → ")}.`,
+    `- Changed manifests: ${existing.manifestDifference.changedPaths.map((item) => `\`${item}\``).join(", ")}.`,
+    "- Added manifests: none.",
+    `- Unchanged year index: ${existing.manifestDifference.yearIndexVerification?.byteIdenticalForExisting479 ? "verified byte-for-byte" : "not verified"}.`,
+    `- Media: ${existing.mediaDifference.newVersionedKeys.length} new content-versioned keys; all ${existing.mediaDifference.selected2002LegacyKeysRetainedForRollback.length} current 2002 legacy keys remain for rollback, and the promotion inventory retains ${existing.mediaDifference.completePublishedArchiveLegacyKeyCount ?? "all"} legacy keys across the archive.`,
+    `- Current status: ${existing.executionStatus}. ${existing.blockedReasons.join(" ")}`,
+    `- Constraint: ${existing.implementationConstraint}`,
+    "",
+    `Upload estimate basis: ${packet.promotionEvidence?.method || "No measurement supplied."}`,
+    `Estimate limitation: ${all.upload.limitation}`,
     "",
     "## Decisions for Jared",
     "",
@@ -394,7 +567,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const appRoot = args.appRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const plan = await runImporter(["--plan", "--year", "2002"], { appRoot, writeStdout: () => {} });
-  const packet = build2002DecisionPacket(plan);
+  const promotionEvidence = await measure2002PromotionEvidence(plan);
+  const packet = build2002DecisionPacket(plan, promotionEvidence);
   assertRecordedInventory(packet);
   if (args.outputDir) {
     const files = await writePacket(args.outputDir, appRoot, packet);
