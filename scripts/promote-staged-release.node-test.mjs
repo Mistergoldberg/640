@@ -71,13 +71,15 @@ async function createFixture() {
   const sourceRoot = path.join(appRoot, "original-photos");
   const sourceFolder = path.join(sourceRoot, `${SELECTED_YEAR} Source`);
   const firstRelative = `${SELECTED_YEAR} Source/Album A/a.jpg`;
-  const secondRelative = `${SELECTED_YEAR} Source/Album B/b.jpg`;
+  // These two stable IDs sort differently lexically and with numeric-aware collation.
+  const secondRelative = `${SELECTED_YEAR} Source/Album B/4.jpg`;
   const firstSource = path.join(sourceRoot, firstRelative);
   const secondSource = path.join(sourceRoot, secondRelative);
   await jpeg(firstSource);
   await jpeg(secondSource, { r: 180, g: 20, b: 60 });
 
   const selectedPhotoId = photoId(SELECTED_YEAR, firstRelative);
+  const secondPhotoId = photoId(SELECTED_YEAR, secondRelative);
   const selectedOldAlbumId = "old-selected-album-12345678";
   const selectedLegacy = {
     thumbnailKey: `${SELECTED_YEAR}/thumbs/${selectedPhotoId}.jpg`,
@@ -149,6 +151,7 @@ async function createFixture() {
     policyPath,
     staged,
     selectedPhotoId,
+    secondPhotoId,
     unaffectedPhotoId,
     unaffectedManifestPath,
     selectedLegacy,
@@ -193,6 +196,12 @@ test("promotion is reproducible, preserves unaffected years byte-for-byte, and r
   t.after(() => fs.rm(fixture.appRoot, { recursive: true, force: true }));
   const unaffectedBefore = await treeLedger(path.join(fixture.canonicalDataRoot, UNAFFECTED_YEAR));
   const canonicalBefore = await Promise.all([treeLedger(path.join(fixture.appRoot, "public")), treeLedger(fixture.canonicalMediaRoot), treeLedger(path.join(fixture.appRoot, "generated", "reports"))]);
+  const stableIds = [fixture.selectedPhotoId, fixture.secondPhotoId];
+  assert.notDeepEqual(
+    [...stableIds].sort(),
+    [...stableIds].sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+    "fixture must exercise staged lexical seal ordering"
+  );
   const first = await promote(fixture, "package-one");
   const second = await promote(fixture, "package-two");
   assert.equal(first.result.packageId, second.result.packageId);

@@ -17,6 +17,8 @@
     "test:video": "node --test scripts/video-to-source-photos.node-test.mjs",
     "test:video:stage2b": "node --test scripts/import-video.node-test.mjs",
     "test:video:integration": "PIXILATION_VIDEO_INTEGRATION=1 node --test scripts/video-to-source-photos.node-test.mjs",
+    "rehearse:video:publication": "node scripts/rehearse-video-publication.mjs",
+    "test:video:stage2c": "node --test scripts/rehearse-video-publication.node-test.mjs",
     "source:policy": "node scripts/source-policy.mjs",
     "source:eligibility": "node scripts/source-policy.mjs --require-eligible",
     "source:packet:2002": "node scripts/decision-packet-2002.mjs",

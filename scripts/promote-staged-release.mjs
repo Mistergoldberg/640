@@ -101,13 +101,15 @@ async function walkFiles(root) {
   return files;
 }
 
-async function treeInventory(root, excluded = new Set()) {
+async function treeInventory(root, excluded = new Set(), { numericSort = true } = {}) {
   const records = [];
   for (const absolutePath of await walkFiles(root)) {
     const relativePath = toPosix(path.relative(root, absolutePath));
     if (!excluded.has(relativePath)) records.push(await fileRecord(absolutePath, relativePath));
   }
-  records.sort((left, right) => left.path.localeCompare(right.path, undefined, { numeric: true }));
+  records.sort(numericSort
+    ? (left, right) => left.path.localeCompare(right.path, undefined, { numeric: true })
+    : (left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   return { files: records, sha256: sha256(stableJson(records)) };
 }
 
@@ -171,7 +173,8 @@ async function verifyStagedRun(stagingRoot) {
   const receiptRecord = await fileRecord(receiptPath);
   if (receiptRecord.sha256 !== completion.receiptSha256) throw new Error("Staged receipt changed after final sealing");
   const completeRelativePath = "generated/journal/complete.json";
-  const preSeal = await treeInventory(stagingRoot, new Set([completeRelativePath]));
+  // The staged importer seals its inventory in ordinary lexical path order.
+  const preSeal = await treeInventory(stagingRoot, new Set([completeRelativePath]), { numericSort: false });
   if (preSeal.sha256 !== completion.closedWorldSha256 || preSeal.files.length !== completion.expectedFileCountBeforeSeal) {
     throw new Error("Staged closed-world seal no longer matches its files");
   }
