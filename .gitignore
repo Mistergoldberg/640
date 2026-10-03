@@ -5,6 +5,7 @@ test-results/
 playwright-report/
 generated/
 original-photos/
+video-jobs/
 dev-01/
 20[0-9][0-9]/
 20[0-9][0-9]-*/
