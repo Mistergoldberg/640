@@ -148,7 +148,7 @@ force flags fail before credentials are loaded or a client is created.
 
 ## Isolated conditional-write verification
 
-Production publication remains unavailable. The isolated-test adapter accepts
+The isolated-test adapter accepts
 only a verified promotion package and an `environment: isolated-write-test`
 destination pin. Its command surface contains only `ListObjectsV2`, `GetObject`,
 and `PutObject`; it has no copy, delete, metadata-replacement, or unconditional
@@ -221,7 +221,15 @@ Cloudflare documents bucket-scoped tokens and temporary credentials in its
 The disposable bucket is retained empty for later isolated tests. Each test run
 must record its exact synthetic keys before creation, remove only that recorded
 set after verification, list the bucket to prove cleanup, and allow its temporary
-credential to expire. Never point this adapter at the production bucket.
+credential to expire. Never point this isolated profile at the production
+bucket.
+
+The generic production profile reuses the same adapter surface against the
+pinned production bucket. It additionally requires an exact, expiring QA
+authority record and production-profile temporary credentials before even a
+plan can run. Its dry run must report zero conflicts, overwrites and deletes.
+See `docs/package-bound-release.md`; production manifest/frontend activation is
+still unavailable and out of scope.
 
 Do not substitute direct `rclone copy`, because that bypasses the package gate
 and its durable receipt. Never run `sync --delete` for this archive.

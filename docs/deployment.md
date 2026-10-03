@@ -210,6 +210,13 @@ the approved new-key set, writes with no-overwrite semantics, never deletes, and
 does not activate manifests. The durable receipt is PASS only after every media
 key required by the candidate manifests independently reconciles.
 
+A production-bucket package adapter and sealed QA activation path are available
+behind an exact, expiring operator authority record. They reuse the same package
+verifier, conditional writer, full-object SHA-256 reconciliation, journal and
+receipt. They do not provide production manifest/frontend activation. See
+`docs/package-bound-release.md` for the mandatory dry run, credential boundary,
+immutable release construction and QA rollback workflow.
+
 A read-only R2 adapter and preflight are available through
 `npm run media:r2:preflight`. They pin the expected account endpoint and bucket,
 enumerate the full managed namespace with pagination, and use only `HeadBucket`,
@@ -217,9 +224,9 @@ enumerate the full managed namespace with pagination, and use only `HeadBucket`,
 not expose PUT, COPY, DELETE, metadata mutation or a publication receipt. See
 `docs/public-media-r2.md` for the exact command and checksum limitations.
 
-Before an R2 pilot, prove conditional `PutObject` with `If-None-Match: *`,
-checksum handling, retry behavior and metadata in a new isolated bucket. Never
-use a broader directory or `sync --delete`.
+The isolated-bucket proof remains the regression baseline for conditional
+`PutObject`, checksum handling, retry behavior and metadata. Never use a broader
+directory or `sync --delete`.
 
 ## Server release and rollback
 

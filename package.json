@@ -35,6 +35,12 @@
     "media:r2:test:credentials": "node scripts/r2-package-credentials.mjs",
     "media:r2:test:plan": "node scripts/r2-package-upload.mjs --plan",
     "media:r2:test:publish": "node scripts/r2-package-upload.mjs --execute",
+    "media:r2:credentials": "node scripts/r2-package-credentials.mjs",
+    "media:r2:plan": "node scripts/r2-package-upload.mjs --plan",
+    "media:r2:publish": "node scripts/r2-package-upload.mjs --execute",
+    "release:candidate": "node scripts/package-release-activation.mjs",
+    "release:qa": "node scripts/qa-release-deployment.mjs",
+    "test:release": "node --test scripts/package-release-activation.node-test.mjs",
     "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
     "media:upload": "node scripts/media-upload-r2.mjs --execute"
   },
