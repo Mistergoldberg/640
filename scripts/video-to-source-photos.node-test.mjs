@@ -239,6 +239,28 @@ test("corrupt mid-stream input cannot promote a partial JPEG sequence", async ()
   }
 });
 
+test("a source changed during extraction cannot produce a completed job", async () => {
+  const input = path.join(fixtureRoot, "mutable.mp4");
+  await fs.copyFile(landscapePath, input);
+  const mutatingRunner = async (command, args, options) => {
+    const result = await runProcess(command, args, options);
+    if (command === "ffmpeg" && args.includes("-xerror")) {
+      await fs.appendFile(input, Buffer.from("changed-after-decode"));
+    }
+    return result;
+  };
+  const jobRoot = await makeJobRoot("mutable");
+  await assert.rejects(
+    runVideoImport({ inputPath: input, jobRoot, processRunner: mutatingRunner, writeStdout: () => {} }),
+    /Source video changed during extraction/
+  );
+  const jobDirectory = path.join(jobRoot, "mutable-video-job");
+  const job = JSON.parse(await fs.readFile(path.join(jobDirectory, "job.json"), "utf8"));
+  assert.equal(job.completed, false);
+  assert.equal(job.state, "failed");
+  assert.equal(await fs.stat(path.join(jobDirectory, "extracted")).then(() => true).catch(() => false), false);
+});
+
 test("reruns distinguish complete, incomplete, conflicting, and damaged jobs", async () => {
   const completeRoot = await makeJobRoot("rerun-complete");
   const complete = await runVideoImport({ inputPath: landscapePath, jobRoot: completeRoot, writeStdout: () => {} });

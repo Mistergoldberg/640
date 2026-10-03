@@ -462,6 +462,13 @@ export async function runVideoImport({
     writeStdout("Extracting...\n");
     await updateState({ state: "extracting" });
     await processRunner(ffmpegPath, ffmpegArguments);
+    const [postExtractionSha256, postExtractionStat] = await Promise.all([
+      sha256File(resolvedInput),
+      fs.stat(resolvedInput)
+    ]);
+    if (postExtractionSha256 !== source.sha256 || postExtractionStat.size !== source.bytes) {
+      throw new Error("Source video changed during extraction; refusing to validate or promote the frame sequence");
+    }
     writeStdout("Validating...\n");
     await updateState({ state: "validating" });
     const validation = await validateFrameDirectory(extractingPath, {
