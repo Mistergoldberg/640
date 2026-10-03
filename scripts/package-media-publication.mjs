@@ -130,6 +130,49 @@ export async function verifyPublicationPackage(packageRoot) {
   return { packageRoot: resolvedRoot, ...verified, manifestMap: map, expectedByKey, newByKey, binding, publicationId: sha256(stableJson(binding)) };
 }
 
+export async function verifyPublicationReceipt({ packageRoot, receiptPath, requiredAdapterType = null }) {
+  const pkg = await verifyPublicationPackage(packageRoot);
+  const resolvedReceiptPath = path.resolve(receiptPath);
+  const receipt = await readJson(resolvedReceiptPath, "Media publication receipt");
+  const run = await readJson(path.join(path.dirname(resolvedReceiptPath), "run.json"), "Media publication run descriptor");
+  const { receiptSha256, ...unsealed } = receipt;
+  if (receipt.schemaVersion !== SCHEMA_VERSION || receipt.status !== "PASS" || receiptSha256 !== sha256(stableJson(unsealed))) {
+    throw new Error("Media publication receipt seal is invalid");
+  }
+  const expectedBinding = { ...pkg.binding, publicationId: pkg.publicationId };
+  const actualBinding = { ...receipt.binding };
+  const adapter = actualBinding.adapter;
+  delete actualBinding.adapter;
+  if (stableJson(actualBinding) !== stableJson(expectedBinding)) throw new Error("Media publication receipt belongs to a different package or seal");
+  if (!adapter?.type || (requiredAdapterType && adapter.type !== requiredAdapterType)) throw new Error("Media publication receipt destination type is not accepted");
+  const expectedRunId = sha256(stableJson({ ...expectedBinding, adapter: stableValue(adapter) }));
+  if (receipt.packageId !== pkg.receipt.packageId || receipt.publicationId !== pkg.publicationId || receipt.runId !== expectedRunId) {
+    throw new Error("Media publication receipt identity does not match the package");
+  }
+  if (run.status !== "complete" || run.runId !== receipt.runId || run.receiptSha256 !== receiptSha256 || stableJson(run.binding) !== stableJson(receipt.binding)) {
+    throw new Error("Media publication run is incomplete or does not match its receipt");
+  }
+  if (
+    receipt.counts?.required !== pkg.expectedByKey.size || receipt.counts?.missing !== 0 || receipt.counts?.changed !== 0 ||
+    receipt.counts?.unexpected !== 0 || receipt.counts?.deletes !== 0 ||
+    (receipt.conflicts || []).length || (receipt.missing || []).length || (receipt.unexpected || []).length || (receipt.deletes || []).length
+  ) throw new Error("Media publication receipt does not prove a complete non-destructive reconciliation");
+  const objects = new Map();
+  for (const object of receipt.objects || []) {
+    if (objects.has(object.key)) throw new Error(`Media publication receipt contains a duplicate object: ${object.key}`);
+    const expected = pkg.expectedByKey.get(object.key);
+    if (
+      !expected || object.expectedBytes !== expected.bytes || object.verifiedBytes !== expected.bytes ||
+      object.expectedSha256 !== expected.sha256 || object.verifiedSha256 !== expected.sha256 ||
+      object.verificationMethod !== TRUSTED_METHOD
+    ) throw new Error(`Media publication receipt object does not match the package: ${object.key}`);
+    objects.set(object.key, object);
+  }
+  exactSet(new Set(objects.keys()), new Set(pkg.expectedByKey.keys()), "Publication receipt objects and package media");
+  const receiptRecord = await fileRecord(resolvedReceiptPath);
+  return { pkg, receipt, run, adapter, objects, receiptPath: resolvedReceiptPath, receiptFileSha256: receiptRecord.sha256 };
+}
+
 async function assertNoSymlinkAncestors(root) {
   let current = path.resolve(root);
   while (true) {
@@ -216,7 +259,7 @@ export async function createPublicationPlan({ packageRoot, adapter }) {
   return {
     schemaVersion: SCHEMA_VERSION, mode: "zero-write-publication-plan", status: executable ? "ready" : "blocked", executable,
     packageId: pkg.receipt.packageId, publicationId: pkg.publicationId, binding: pkg.binding, adapter: adapterIdentity(adapter),
-    counts: { requiredKeys: pkg.expectedByKey.size, approvedNewKeys: pkg.newByKey.size, matchingExistingKeys: matchingExistingKeys.length, missingApprovedNewKeys: missingKeys.length, missingRequiredUnavailable: missingRequiredUnavailable.length, byteConflicts: byteConflicts.length, unexpectedRemoteKeys: unexpectedRemoteKeys.length },
+    counts: { requiredKeys: pkg.expectedByKey.size, approvedNewKeys: pkg.newByKey.size, matchingExistingKeys: matchingExistingKeys.length, missingApprovedNewKeys: missingKeys.length, missingRequiredUnavailable: missingRequiredUnavailable.length, byteConflicts: byteConflicts.length, unexpectedRemoteKeys: unexpectedRemoteKeys.length, objectsToCreate: missingKeys.length, objectsToOverwrite: 0, objectsToDelete: 0 },
     requiredKeys: [...pkg.expectedByKey.values()].map(publicEntry),
     approvedNewKeys: [...pkg.newByKey.values()].map(publicEntry),
     matchingExistingKeys, missingKeys, missingRequiredUnavailable, byteConflicts, unexpectedRemoteKeys,

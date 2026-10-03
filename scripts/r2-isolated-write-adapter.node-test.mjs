@@ -9,8 +9,10 @@ import { executePublication, verifyPublicationPackage } from "./package-media-pu
 import { mintPackageBoundR2Credentials } from "./r2-package-credentials.mjs";
 import { createR2LocalTemporaryCredentials } from "./r2-local-temporary-credentials.mjs";
 import {
+  createPackageBoundR2WriteAdapter,
   createIsolatedR2WriteAdapter,
   isolatedR2WriteContract,
+  loadPackageBoundR2WriteConfiguration,
   loadIsolatedR2WriteConfiguration
 } from "./r2-isolated-write-adapter.mjs";
 
@@ -88,7 +90,7 @@ async function packageFixture({ retainedLast = false } = {}) {
 
 function base64url(value) { return Buffer.from(JSON.stringify(value)).toString("base64url"); }
 
-async function configurationFixture(verifiedPackage, overrides = {}) {
+async function configurationFixture(verifiedPackage, overrides = {}, environment = "isolated-write-test") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pixilation-r2-config-"));
   const accessKeyId = "fixture-access-key";
   const now = Math.floor(Date.now() / 1000);
@@ -104,11 +106,14 @@ async function configurationFixture(verifiedPackage, overrides = {}) {
   };
   const newKeys = [...verifiedPackage.newByKey.keys()].sort();
   const retainedKeys = [...verifiedPackage.expectedByKey.keys()].filter((key) => !verifiedPackage.newByKey.has(key)).sort();
-  const bundle = { schemaVersion: 2, environment: "isolated-write-test-action-scoped", identity: { accountId: ACCOUNT, bucket: BUCKET, endpoint: ENDPOINT, ...overrides.identity }, packageId: verifiedPackage.receipt.packageId, publicationId: verifiedPackage.publicationId, roles: { publisher: role("publisher", ROLE_ACTIONS.publisher, newKeys, overrides.publisherClaims), inventory: role("inventory", ROLE_ACTIONS.inventory, [], overrides.inventoryClaims), ...(retainedKeys.length ? { verifier: role("verifier", ["GetObject"], retainedKeys, overrides.verifierClaims) } : {}) } };
-  const pin = { schemaVersion: 1, provider: "cloudflare-r2", environment: "isolated-write-test", accountIdSha256: digest(ACCOUNT), bucket: BUCKET, endpointSha256: digest(ENDPOINT), forbiddenBuckets: ["production-media"], forbiddenPublicEndpoints: ["https://media.example.com"], credentialRoles: { publisher: { actions: ROLE_ACTIONS.publisher }, verifier: { actions: ["GetObject"] }, inventory: { actions: ROLE_ACTIONS.inventory }, actionClaimStatus: "proven-action-only-2026-10-02" }, namespace: { id: "pixilation-isolated-publication-test-v1", remotePrefix: "", keyFormat: "pixilation-media-key-v1" }, ...overrides.pin };
+  const bundle = { schemaVersion: 2, environment: `${environment}-action-scoped`, identity: { accountId: ACCOUNT, bucket: BUCKET, endpoint: ENDPOINT, ...overrides.identity }, packageId: verifiedPackage.receipt.packageId, publicationId: verifiedPackage.publicationId, roles: { publisher: role("publisher", ROLE_ACTIONS.publisher, newKeys, overrides.publisherClaims), inventory: role("inventory", ROLE_ACTIONS.inventory, [], overrides.inventoryClaims), ...(retainedKeys.length ? { verifier: role("verifier", ["GetObject"], retainedKeys, overrides.verifierClaims) } : {}) } };
+  const pin = { schemaVersion: 1, provider: "cloudflare-r2", environment, accountIdSha256: digest(ACCOUNT), bucket: BUCKET, endpointSha256: digest(ENDPOINT), forbiddenBuckets: ["production-media"], forbiddenPublicEndpoints: ["https://media.example.com"], credentialRoles: { publisher: { actions: ROLE_ACTIONS.publisher }, verifier: { actions: ["GetObject"] }, inventory: { actions: ROLE_ACTIONS.inventory }, actionClaimStatus: "proven-action-only-2026-10-02" }, namespace: { id: environment === "production-package-bound" ? "pixilation-generated-media-v1" : "pixilation-isolated-publication-test-v1", remotePrefix: "", ...(environment === "production-package-bound" ? { allowedYears: ["2092"], derivativeDirectories: ["thumbs", "display"] } : {}), keyFormat: "pixilation-media-key-v1" }, ...overrides.pin };
   const configPath = path.join(root, "config.json"), credentialsPath = path.join(root, "credentials.json");
   await write(configPath, jsonBytes(pin)); await write(credentialsPath, jsonBytes(bundle));
-  return { root, configPath, credentialsPath, configuration: await loadIsolatedR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage }) };
+  const configuration = environment === "isolated-write-test"
+    ? await loadIsolatedR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage })
+    : await loadPackageBoundR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage, expectedEnvironment: environment });
+  return { root, configPath, credentialsPath, configuration };
 }
 
 class MemoryR2Client {
@@ -278,4 +283,51 @@ test("corrupt readback, unexpected keys, foreign keys, and CLI bypass flags fail
   }
   assert.deepEqual(isolatedR2WriteContract.credentialRoles.publisher, ["GetObject", "PutObject"]);
   assert.equal(isolatedR2WriteContract.deletes, false); assert.equal(isolatedR2WriteContract.overwrites, false);
+});
+
+test("production profile remains package-bound, conditional, readback-verified, and non-destructive", async (t) => {
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage, { pin: { forbiddenBuckets: [] } }, "production-package-bound");
+  t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
+  assert.equal(cfg.configuration.identity.type, "cloudflare-r2-production-package-bound");
+  assert.equal(cfg.configuration.identity.productionExecutionEnabled, true);
+  const client = new MemoryR2Client({ loseFirstPutResponse: true, pageSize: 2 });
+  const adapter = createPackageBoundR2WriteAdapter({ configuration: cfg.configuration, verifiedPackage: pkg.verifiedPackage, clients: { publisher: client, inventory: client }, pageSize: 2 });
+  const result = await executePublication({ packageRoot: pkg.packageRoot, adapter, journalRoot: pkg.journalRoot, concurrency: 1, maxAttempts: 3 });
+  assert.equal(result.receipt.status, "PASS");
+  assert.equal(result.receipt.binding.adapter.type, "cloudflare-r2-production-package-bound");
+  assert.equal(result.receipt.objects.every((item) => item.verificationMethod === "full-object-sha256-readback"), true);
+  assert.equal(client.requests.filter((item) => item.name === "PutObjectCommand").every((item) => item.input.IfNoneMatch === "*"), true);
+  assert.equal(client.requests.some((item) => /Delete|Copy/.test(item.name)), false);
+});
+
+test("production credential mint requires an exact unexpired QA authority and never emits its parent secret", async (t) => {
+  const pkg = await packageFixture(), cfg = await configurationFixture(pkg.verifiedPackage, { pin: { forbiddenBuckets: [] } }, "production-package-bound");
+  t.after(() => Promise.all([fs.rm(pkg.root, { recursive: true, force: true }), fs.rm(cfg.root, { recursive: true, force: true })]));
+  const parentPath = path.join(pkg.root, "parent-production.json");
+  const authorityPath = path.join(pkg.root, "authority.json");
+  const outputPath = path.join(pkg.root, "production-bundle.json");
+  await write(parentPath, jsonBytes({ R2_ACCOUNT_ID: ACCOUNT, R2_ENDPOINT: ENDPOINT, R2_BUCKET: BUCKET, R2_ACCESS_KEY_ID: "parent-access", R2_SECRET_ACCESS_KEY: "parent-secret" }));
+  await write(authorityPath, jsonBytes({
+    schemaVersion: 1,
+    status: "approved",
+    environment: "qa",
+    packageId: pkg.verifiedPackage.receipt.packageId,
+    packageClosedWorldSha256: pkg.verifiedPackage.completion.closedWorldSha256,
+    sourcePolicySha256: pkg.verifiedPackage.receipt.binding.sourcePolicySha256,
+    immutableMediaPublicationApproved: true,
+    qaCandidateActivationApproved: true,
+    productionManifestActivationApproved: false,
+    productionFrontendActivationApproved: false,
+    approvedBy: "fixture-operator",
+    approvedAt: new Date(Date.now() - 60_000).toISOString(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString()
+  }));
+  await assert.rejects(mintPackageBoundR2Credentials({ packageRoot: pkg.packageRoot, configPath: cfg.configPath, parentCredentialsPath: parentPath, outputPath }), /authority/);
+  const report = await mintPackageBoundR2Credentials({ packageRoot: pkg.packageRoot, configPath: cfg.configPath, parentCredentialsPath: parentPath, outputPath, authorityPath, ttlSeconds: 300 });
+  assert.equal(report.identity.bucket, BUCKET);
+  assert.equal(typeof report.authority.sha256, "string");
+  assert.equal(JSON.stringify(report).includes("parent-secret"), false);
+  const bundle = JSON.parse(await fs.readFile(outputPath, "utf8"));
+  assert.equal(bundle.environment, "production-package-bound-action-scoped");
+  assert.equal(bundle.authority.sha256, report.authority.sha256);
 });

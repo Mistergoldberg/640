@@ -103,6 +103,9 @@ test("zero-write plan reports exact missing, matching, conflicts, requests, byte
   assert.equal(plan.counts.matchingExistingKeys, 3);
   assert.equal(plan.counts.missingApprovedNewKeys, 1);
   assert.equal(plan.expectedRequests.uploads, 1);
+  assert.equal(plan.counts.objectsToCreate, 1);
+  assert.equal(plan.counts.objectsToOverwrite, 0);
+  assert.equal(plan.counts.objectsToDelete, 0);
   assert.equal(plan.expectedUploadBytes, fx.entries[1].bytes);
   assert.deepEqual(plan.deletes, []);
   assert.deepEqual(await treeInventory(fx.packageRoot), beforePackage);

@@ -13,6 +13,18 @@ const ACCOUNT_PATTERN = /^[a-f0-9]{32}$/;
 const ALLOWED_COMMANDS = new Set(["ListObjectsV2Command", "GetObjectCommand", "PutObjectCommand"]);
 const ROLE_ACTIONS = Object.freeze({ publisher: ["GetObject", "PutObject"], verifier: ["GetObject"], inventory: ["ListObjectsV2"] });
 const TRUSTED_METHOD = "full-object-sha256-readback";
+const ENVIRONMENTS = Object.freeze({
+  "isolated-write-test": {
+    identityType: "cloudflare-r2-isolated-test",
+    namespaceId: "pixilation-isolated-publication-test-v1",
+    productionExecutionEnabled: false
+  },
+  "production-package-bound": {
+    identityType: "cloudflare-r2-production-package-bound",
+    namespaceId: "pixilation-generated-media-v1",
+    productionExecutionEnabled: true
+  }
+});
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -100,35 +112,36 @@ function validateTemporaryCredential(role, roleValue, identity, expectedActions,
   };
 }
 
-export async function loadIsolatedR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage }) {
+export async function loadPackageBoundR2WriteConfiguration({ configPath, credentialsPath, verifiedPackage, expectedEnvironment = null }) {
   const pin = JSON.parse(await fs.readFile(configPath, "utf8"));
   const bundle = JSON.parse(await fs.readFile(credentialsPath, "utf8"));
   if (!verifiedPackage?.receipt?.packageId || !verifiedPackage?.publicationId || !verifiedPackage?.expectedByKey || !verifiedPackage?.newByKey) throw new Error("A verified package is required to validate R2 credential paths");
-  if (pin.schemaVersion !== CONFIG_SCHEMA_VERSION || pin.provider !== "cloudflare-r2" || pin.environment !== "isolated-write-test") {
-    throw new Error("Only a pinned isolated-write-test R2 configuration is accepted");
-  }
-  if (bundle.schemaVersion !== 2 || bundle.environment !== "isolated-write-test-action-scoped") throw new Error("R2 credential bundle is not action-scoped isolated-test format");
+  const profile = ENVIRONMENTS[pin.environment];
+  if (pin.schemaVersion !== CONFIG_SCHEMA_VERSION || pin.provider !== "cloudflare-r2" || !profile) throw new Error("Unsupported package-bound R2 configuration");
+  if (expectedEnvironment && pin.environment !== expectedEnvironment) throw new Error(`R2 configuration must use ${expectedEnvironment}`);
+  if (bundle.schemaVersion !== 2 || bundle.environment !== `${pin.environment}-action-scoped`) throw new Error("R2 credential bundle environment does not match the destination pin");
   if (bundle.packageId !== verifiedPackage.receipt.packageId || bundle.publicationId !== verifiedPackage.publicationId) throw new Error("R2 credential bundle belongs to a different promotion package");
   const accountId = requiredString(bundle.identity?.accountId, "R2 account ID").toLowerCase();
   const bucket = requiredString(bundle.identity?.bucket, "R2 bucket");
   const endpoint = normalizeEndpoint(bundle.identity?.endpoint);
   if (!ACCOUNT_PATTERN.test(accountId) || sha256(accountId) !== pin.accountIdSha256) throw new Error("R2 account does not match the isolated-test pin");
-  if (bucket !== pin.bucket || (pin.forbiddenBuckets || []).includes(bucket)) throw new Error("R2 bucket is not the pinned isolated test bucket");
+  if (bucket !== pin.bucket || (pin.forbiddenBuckets || []).includes(bucket)) throw new Error("R2 bucket does not match the package-bound destination pin");
   if (sha256(endpoint) !== pin.endpointSha256 || endpoint !== `https://${accountId}.r2.cloudflarestorage.com`) throw new Error("R2 endpoint does not match the pinned account endpoint");
   const forbiddenEndpoints = (pin.forbiddenPublicEndpoints || []).map(normalizeEndpoint);
   if (forbiddenEndpoints.includes(endpoint)) throw new Error("A public media endpoint cannot be used for R2 writes");
-  if (!pin.namespace || pin.namespace.id !== "pixilation-isolated-publication-test-v1" || pin.namespace.remotePrefix !== "" || pin.namespace.keyFormat !== "pixilation-media-key-v1") {
-    throw new Error("Unexpected isolated R2 namespace pin");
+  if (!pin.namespace || pin.namespace.id !== profile.namespaceId || pin.namespace.remotePrefix !== "" || pin.namespace.keyFormat !== "pixilation-media-key-v1") {
+    throw new Error("Unexpected package-bound R2 namespace pin");
   }
   const identity = {
-    type: "cloudflare-r2-isolated-test",
+    type: profile.identityType,
     provider: pin.provider,
+    environment: pin.environment,
     accountId,
     bucket,
     endpoint,
     namespace: pin.namespace,
     checksumMethod: TRUSTED_METHOD,
-    productionExecutionEnabled: false
+    productionExecutionEnabled: profile.productionExecutionEnabled
   };
   const pinnedRoles = pin.credentialRoles || {};
   if (pinnedRoles.actionClaimStatus !== "proven-action-only-2026-10-02") throw new Error("Pinned R2 action-claim status is incompatible");
@@ -140,6 +153,11 @@ export async function loadIsolatedR2WriteConfiguration({ configPath, credentials
   }
   const newKeys = [...verifiedPackage.newByKey.keys()].sort();
   const retainedKeys = [...verifiedPackage.expectedByKey.keys()].filter((key) => !verifiedPackage.newByKey.has(key)).sort();
+  const packageYears = [...new Set([...verifiedPackage.expectedByKey.keys()].map((key) => key.split("/", 1)[0]))].sort();
+  if (pin.environment === "production-package-bound") {
+    const allowedYears = new Set(pin.namespace.allowedYears || []);
+    for (const year of packageYears) if (!allowedYears.has(year)) throw new Error(`Package year is not approved by the production destination pin: ${year}`);
+  }
   const publisher = validateTemporaryCredential("publisher", bundle.roles?.publisher, identity, ROLE_ACTIONS.publisher, { prefixPaths: [], objectPaths: newKeys });
   const inventory = validateTemporaryCredential("inventory", bundle.roles?.inventory, identity, ROLE_ACTIONS.inventory, { prefixPaths: [], objectPaths: [] });
   const verifier = retainedKeys.length ? validateTemporaryCredential("verifier", bundle.roles?.verifier, identity, ROLE_ACTIONS.verifier, { prefixPaths: [], objectPaths: retainedKeys }) : null;
@@ -152,6 +170,10 @@ export async function loadIsolatedR2WriteConfiguration({ configPath, credentials
       ...(verifier ? { verifier: { accessKeyId: verifier.accessKeyId, secretAccessKey: verifier.secretAccessKey, sessionToken: verifier.sessionToken } } : {})
     }
   };
+}
+
+export function loadIsolatedR2WriteConfiguration(options) {
+  return loadPackageBoundR2WriteConfiguration({ ...options, expectedEnvironment: "isolated-write-test" });
 }
 
 async function hashBody(body) {
@@ -196,8 +218,11 @@ function createClient(configuration, role) {
   });
 }
 
-export function createIsolatedR2WriteAdapter({ configuration, verifiedPackage, clients = null, pageSize = 1000, maxPages = 1000, hooks = {} }) {
-  if (configuration?.identity?.type !== "cloudflare-r2-isolated-test" || configuration.identity.productionExecutionEnabled !== false) throw new Error("The R2 write adapter requires an isolated-test destination");
+export function createPackageBoundR2WriteAdapter({ configuration, verifiedPackage, clients = null, pageSize = 1000, maxPages = 1000, hooks = {} }) {
+  const expectedProfile = ENVIRONMENTS[configuration?.identity?.environment];
+  if (!expectedProfile || configuration.identity.type !== expectedProfile.identityType || configuration.identity.productionExecutionEnabled !== expectedProfile.productionExecutionEnabled) {
+    throw new Error("The R2 write adapter requires a validated package-bound destination");
+  }
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isInteger(maxPages) || maxPages < 1) throw new Error("Invalid R2 pagination bounds");
   const sets = packageKeySets(verifiedPackage);
   const roleClients = clients || {
@@ -321,8 +346,17 @@ export function createIsolatedR2WriteAdapter({ configuration, verifiedPackage, c
   };
 }
 
+export function createIsolatedR2WriteAdapter(options) {
+  if (options?.configuration?.identity?.environment !== "isolated-write-test") throw new Error("The isolated R2 adapter requires an isolated-write-test destination");
+  return createPackageBoundR2WriteAdapter(options);
+}
+
 export function createAuthenticatedIsolatedR2WriteAdapter(options) {
   return createIsolatedR2WriteAdapter(options);
+}
+
+export function createAuthenticatedPackageBoundR2WriteAdapter(options) {
+  return createPackageBoundR2WriteAdapter(options);
 }
 
 export const isolatedR2WriteContract = Object.freeze({
@@ -336,4 +370,17 @@ export const isolatedR2WriteContract = Object.freeze({
   copies: false,
   overwrites: false,
   productionExecutionEnabled: false
+});
+
+export const packageBoundR2WriteContract = Object.freeze({
+  checksumMethod: TRUSTED_METHOD,
+  allowedCommands: [...ALLOWED_COMMANDS].sort(),
+  environments: Object.keys(ENVIRONMENTS).sort(),
+  credentialPermission: null,
+  credentialActionClaimStatus: "proven-action-only-2026-10-02",
+  credentialRoles: ROLE_ACTIONS,
+  putCondition: "If-None-Match: *",
+  deletes: false,
+  copies: false,
+  overwrites: false
 });

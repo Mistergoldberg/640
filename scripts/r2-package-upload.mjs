@@ -1,13 +1,15 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { createPublicationPlan, executePublication, verifyPublicationPackage } from "./package-media-publication.mjs";
-import { createAuthenticatedIsolatedR2WriteAdapter, loadIsolatedR2WriteConfiguration } from "./r2-isolated-write-adapter.mjs";
+import { verifyPackagePublicationAuthority } from "./package-publication-authority.mjs";
+import { createAuthenticatedPackageBoundR2WriteAdapter, loadPackageBoundR2WriteConfiguration } from "./r2-isolated-write-adapter.mjs";
 
 const runtimeSecrets = [];
 
 function parseArgs(argv) {
-  const args = { mode: null, packageRoot: null, configPath: null, credentialsPath: null, journalRoot: null, concurrency: 4, maxAttempts: 3, pageSize: 1000 };
+  const args = { mode: null, packageRoot: null, configPath: null, credentialsPath: null, authorityPath: null, journalRoot: null, concurrency: 4, maxAttempts: 3, pageSize: 1000 };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--plan" || token === "--execute") {
@@ -22,6 +24,7 @@ function parseArgs(argv) {
     if (token === "--package-root") args.packageRoot = value;
     else if (token === "--config") args.configPath = value;
     else if (token === "--credentials") args.credentialsPath = value;
+    else if (token === "--authority") args.authorityPath = value;
     else if (token === "--journal-root") args.journalRoot = value;
     else if (token === "--concurrency") args.concurrency = Number(value);
     else if (token === "--max-attempts") args.maxAttempts = Number(value);
@@ -37,9 +40,20 @@ function parseArgs(argv) {
 export async function runIsolatedR2PackageUpload(args) {
   const packageRoot = path.resolve(args.packageRoot);
   const verifiedPackage = await verifyPublicationPackage(packageRoot);
-  const configuration = await loadIsolatedR2WriteConfiguration({ configPath: path.resolve(args.configPath), credentialsPath: path.resolve(args.credentialsPath), verifiedPackage });
+  const configPath = path.resolve(args.configPath);
+  const pin = JSON.parse(await fs.readFile(configPath, "utf8"));
+  const authority = pin.environment === "production-package-bound"
+    ? await verifyPackagePublicationAuthority({ authorityPath: args.authorityPath, verifiedPackage })
+    : null;
+  const configuration = await loadPackageBoundR2WriteConfiguration({ configPath, credentialsPath: path.resolve(args.credentialsPath), verifiedPackage });
+  if (authority) {
+    const credentials = JSON.parse(await fs.readFile(path.resolve(args.credentialsPath), "utf8"));
+    if (credentials.authority?.sha256 !== authority.sha256 || credentials.authority?.semanticSha256 !== authority.semanticSha256) {
+      throw new Error("Production credential bundle is not bound to the reviewed package authority");
+    }
+  }
   for (const credential of Object.values(configuration.credentials)) runtimeSecrets.push(credential.accessKeyId, credential.secretAccessKey, credential.sessionToken);
-  const adapter = createAuthenticatedIsolatedR2WriteAdapter({ configuration, verifiedPackage, pageSize: args.pageSize });
+  const adapter = createAuthenticatedPackageBoundR2WriteAdapter({ configuration, verifiedPackage, pageSize: args.pageSize });
   if (args.mode === "plan") return createPublicationPlan({ packageRoot, adapter });
   return executePublication({ packageRoot, adapter, journalRoot: path.resolve(args.journalRoot), concurrency: args.concurrency, maxAttempts: args.maxAttempts });
 }
