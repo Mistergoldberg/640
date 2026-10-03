@@ -28,6 +28,14 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
     { path: "2002-WHEN-CANADA/IMG_1267.WAV", bytes: 2, sha256: "b".repeat(64) },
     ...Array.from({ length: 5 }, (_, index) => ({ path: `2002 New/noise-${index}`, bytes: index, sha256: "c".repeat(64) }))
   ];
+  const existingPhotos = photos.filter((photo) => !photo.relativePath.startsWith("2002 New/"));
+  const legacyTransitions = existingPhotos.map((photo) => ({
+    legacy: {
+      thumbnailKey: `2002/thumbs/${photo.proposedPhotoId}.jpg`,
+      displayKey: `2002/display/${photo.proposedPhotoId}.jpg`
+    }
+  }));
+  const legacyKeys = legacyTransitions.flatMap((transition) => [transition.legacy.thumbnailKey, transition.legacy.displayKey]).sort();
   const plan = {
     mode: "plan",
     zeroWrite: true,
@@ -42,8 +50,8 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
       ],
       skippedNoiseFiles: Array.from({ length: 5 }, (_, index) => ({ relativePath: `2002 New/noise-${index}`, bytes: index })),
       offYearDates: Array.from({ length: 31 }, (_, index) => ({ relativePath: `off-year-${index}.jpg`, exifYear: 2001, exifTime: "2001-01-01T00:00:00.000Z", field: "DateTimeOriginal" })),
-      outputsThatWouldBecomeStale: { mediaKeys: [], albumManifestPaths: [] },
-      legacyCompatibility: { transitions: [] }
+      outputsThatWouldBecomeStale: { mediaKeys: legacyKeys, albumManifestPaths: [] },
+      legacyCompatibility: { transitions: legacyTransitions }
     },
     sourcePolicy: {
       inventory: {
@@ -64,7 +72,15 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
     }
   };
 
-  const packet = build2002DecisionPacket(plan);
+  const promotionEvidence = {
+    method: "fixture read-only evidence",
+    publishedIndex: { path: "data/2002/index.json", byteIdenticalForExisting479: true },
+    legacyMedia: {
+      selected2002: { keys: legacyKeys, count: legacyKeys.length, bytes: 29_512_187 },
+      completePublishedArchive: { count: 22_722, unaffectedBy2002Count: 21_764, keySetSha256: "f".repeat(64) }
+    }
+  };
+  const packet = build2002DecisionPacket(plan, promotionEvidence);
   assert.equal(packet.schemaVersion, 2);
   assert.throws(() => assertRecordedInventory(packet), /2002 inventory drift/);
   packet.sourceInventory.fileCount = 765;
@@ -81,9 +97,18 @@ test("2002 decision packet separates observations, suggestions, and unresolved c
   assert.equal(packet.unsupportedFiles.length, 2);
   assert.equal(packet.ignoredNoiseFiles.length, 5);
   assert.equal(packet.policyEligibility.reviewUnits, 0);
-  assert.equal(packet.scenarios.include2002New.photoCount, 758);
-  assert.equal(packet.scenarios.include2002New.mediaDifference.candidateKeys.length, 1516);
-  assert.equal(packet.scenarios.exclude2002New.photoCount, 479);
+  assert.equal(packet.policyEligibility.publicationEligible, false);
+  assert.equal(packet.outcomes.defer2002Entirely.upload.bytes, 0);
+  assert.equal(packet.outcomes.defer2002Entirely.mediaDifference.newVersionedKeys.length, 0);
+  assert.equal(packet.outcomes.stageAndPromoteAll758.photoCount, 758);
+  assert.equal(packet.outcomes.stageAndPromoteAll758.mediaDifference.newVersionedKeys.length, 1516);
+  assert.equal(packet.outcomes.stageAndPromoteAll758.upload.bytes, 46_701_958);
+  assert.equal(packet.outcomes.stageAndPromoteExisting479Only.photoCount, 479);
+  assert.equal(packet.outcomes.stageAndPromoteExisting479Only.mediaDifference.newVersionedKeys.length, 958);
+  assert.equal(packet.outcomes.stageAndPromoteExisting479Only.manifestDifference.changedPaths.length, 2);
+  assert.equal(packet.outcomes.stageAndPromoteExisting479Only.manifestDifference.unchangedPaths[0], "data/2002/index.json");
+  assert.equal(packet.outcomes.stageAndPromoteExisting479Only.currentCodeCanExecute, false);
   assert.match(render2002DecisionPacket(packet), /suggestion only; unapproved/);
   assert.match(render2002DecisionPacket(packet), /off-year-30\.jpg/);
+  assert.match(render2002DecisionPacket(packet), /Excluding `2002 New` from a staged promotion is \*\*not\*\* the same as deferring 2002/);
 });
