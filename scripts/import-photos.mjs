@@ -56,6 +56,7 @@ function workspacePaths(appRoot = APP_ROOT) {
 function parseArgs(argv) {
   const args = {
     source: null,
+    sourceRoot: null,
     sourcePolicy: null,
     year: null,
     limit: null,
@@ -91,6 +92,8 @@ function parseArgs(argv) {
     index += 1;
     if (key === "source") {
       args.source = value;
+    } else if (key === "source-root") {
+      args.sourceRoot = value;
     } else if (key === "source-policy") {
       args.sourcePolicy = value;
     } else if (key === "year") {
@@ -132,6 +135,10 @@ function parseArgs(argv) {
 
   if (args.output && args.dataRoot) {
     throw new Error("Use either legacy --output or --data-root, not both");
+  }
+
+  if (args.source && args.sourceRoot) {
+    throw new Error("Use either --source or --source-root, not both");
   }
 
   return args;
@@ -350,6 +357,9 @@ async function scanFiles(sourceScope, workspace) {
           target: target ? toPosixPath(path.relative(workspace.photoSourceRoot, target)) : null,
           escapesRoot
         });
+        if (sourceScope.requireNoSymlinks) {
+          throw new Error(`Explicit source root contains a symlink; refusing source selection: ${relativePath}`);
+        }
         continue;
       }
 
@@ -1063,7 +1073,76 @@ function publicUrlForYear(year) {
   return `data/${year}/index.json`;
 }
 
-async function resolveSourceScope(args, workspace) {
+async function resolveExplicitSourceRoot(args, runtime) {
+  if (!args.sourceRoot) {
+    if (runtime.requiredSourceRoot) {
+      throw new Error("This workflow requires an explicit --source-root");
+    }
+    return null;
+  }
+  if (!path.isAbsolute(args.sourceRoot)) {
+    throw new Error("--source-root must be an absolute path");
+  }
+
+  const selectedRoot = path.resolve(args.sourceRoot);
+  const selectedStat = await fs.lstat(selectedRoot).catch((error) => {
+    if (error?.code === "ENOENT") throw new Error(`Explicit source root does not exist: ${selectedRoot}`);
+    throw error;
+  });
+  if (selectedStat.isSymbolicLink()) {
+    throw new Error("--source-root must name a physical directory, not a symlink");
+  }
+  if (!selectedStat.isDirectory()) {
+    throw new Error("--source-root must name a directory");
+  }
+  const physicalRoot = await fs.realpath(selectedRoot);
+  if (physicalRoot !== selectedRoot) {
+    throw new Error(`--source-root resolves through a symlink or path alias: ${selectedRoot} -> ${physicalRoot}`);
+  }
+
+  if (runtime.requiredSourceRoot) {
+    if (!path.isAbsolute(runtime.requiredSourceRoot)) {
+      throw new Error("runtime.requiredSourceRoot must be an absolute path");
+    }
+    const requiredRoot = path.resolve(runtime.requiredSourceRoot);
+    const physicalRequiredRoot = await fs.realpath(requiredRoot).catch(() => null);
+    if (!physicalRequiredRoot || physicalRequiredRoot !== requiredRoot || physicalRoot !== physicalRequiredRoot) {
+      throw new Error(`Explicit source root does not match required physical root: ${requiredRoot}`);
+    }
+  }
+  return physicalRoot;
+}
+
+async function resolveSourceScope(args, workspace, runtime = {}) {
+  const explicitSourceRoot = await resolveExplicitSourceRoot(args, runtime);
+  if (explicitSourceRoot) {
+    const archiveEntries = await fs.readdir(explicitSourceRoot, { withFileTypes: true });
+    const scanRoots = [];
+    for (const entry of archiveEntries) {
+      const absolutePath = path.join(explicitSourceRoot, entry.name);
+      const stat = await fs.lstat(absolutePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Explicit source root contains a symlink; refusing source selection: ${entry.name}`);
+      }
+      if ((stat.isDirectory() || stat.isFile()) && leadingYear(entry.name) === args.year) {
+        scanRoots.push(absolutePath);
+      }
+    }
+    scanRoots.sort((left, right) =>
+      toPosixPath(path.relative(explicitSourceRoot, left)).localeCompare(toPosixPath(path.relative(explicitSourceRoot, right)), undefined, { numeric: true })
+    );
+    if (!scanRoots.length) {
+      throw new Error(`No source folders found for ${args.year} under explicit source root ${explicitSourceRoot}`);
+    }
+    return {
+      mode: "original-archive-year",
+      sourceRoot: explicitSourceRoot,
+      scanRoots,
+      sourceFolders: scanRoots.map((folder) => toPosixPath(path.relative(explicitSourceRoot, folder))),
+      requireNoSymlinks: true
+    };
+  }
+
   if (args.source) {
     const sourceRoot = resolveMaybeRelative(args.source, workspace.appRoot);
     if (!isInsideOrEqual(sourceRoot, workspace.photoSourceRoot)) {
@@ -2363,6 +2442,11 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     sourcePolicy: {
       policyPath: sourceGate.policyPath,
       policySha256: sourceGate.eligibility.policySha256,
+      physicalSourceRoot: sourceGate.inspection.inventory.sourceRoot,
+      physicalScanRoots: sourceGate.inspection.inventory.scanRoots,
+      selectedYear: sourceGate.inspection.inventory.selectedYear,
+      inventoryFileCount: sourceGate.inspection.inventory.fileCount,
+      inventoryTotalBytes: sourceGate.inspection.inventory.totalBytes,
       freshInventorySha256: sourceGate.eligibility.freshInventorySha256,
       inventoryMatches: sourceGate.eligibility.inventoryMatches,
       resolvedDecisions: sourceGate.eligibility.counts.resolved,
@@ -2643,7 +2727,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
   const workspace = workspacePaths(runtime.appRoot || APP_ROOT);
   const args = parseArgs(argv);
   const outputConfig = await resolveOutputConfiguration(args, workspace);
-  const sourceScope = await resolveSourceScope(args, workspace);
+  const sourceScope = await resolveSourceScope(args, workspace, runtime);
   await validateOutputConfiguration(args, outputConfig, sourceScope);
   const dataOutputRoot = outputConfig.roots.data;
   const mediaOutputRoot = outputConfig.roots.media;

@@ -312,6 +312,17 @@ input problems, conflicts, and stale-output candidates as JSON on stdout. Planni
 does not create directories, reports, caches, temporary files, derivatives, or
 manifests.
 
+When the authoritative archive is outside the application checkout, pass its
+absolute physical directory with `--source-root` on every plan or isolated
+stage. The explicit-root resolver rejects relative paths, symlink aliases,
+symlinks anywhere in the selected source, and overlap with any output root. It
+selects the top-level entries whose names begin with the requested year without
+changing the path-derived photo- or album-ID algorithms. Automated callers can
+also set `requiredSourceRoot` on the exported `runImporter()` runtime so an
+omitted or mismatched `--source-root` fails closed. The physical root, physical
+scan roots, exact inventory, and inventory digest are bound into the run
+identity, journal descriptor, source policy, and staged receipt.
+
 Before treating a staged receipt as publication-eligible, create and review an
 exact source policy. This command reads and decodes the selected sources and
 prints a JSON policy template to stdout; redirect it only to a disposable or

@@ -21,6 +21,7 @@ async function makeWorkspace(year = "2099") {
 }
 
 async function writeJpeg(filePath, color = { r: 40, g: 80, b: 120 }) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await sharp({ create: { width: 32, height: 24, channels: 3, background: color } }).jpeg().toFile(filePath);
 }
 
@@ -203,5 +204,103 @@ test("non-plan custom output refuses partial isolation and canonical aliases", a
       { appRoot, writeStdout: () => {} }
     ),
     /must use --staging-root/
+  );
+});
+
+test("explicit physical source root is bound to plans and required selection fails closed", async (t) => {
+  const { appRoot } = await makeWorkspace("2094");
+  const externalParent = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "pixilation-external-source-"));
+  const sourceRoot = path.join(externalParent, "original-photos");
+  const sourcePath = path.join(sourceRoot, "2094-Chronological", "photo.jpg");
+  await writeJpeg(sourcePath);
+  t.after(() => Promise.all([fs.rm(appRoot, { recursive: true, force: true }), fs.rm(externalParent, { recursive: true, force: true })]));
+
+  const plan = await runImporter(["--plan", "--year", "2094", "--source-root", sourceRoot], {
+    appRoot,
+    requiredSourceRoot: sourceRoot,
+    writeStdout: () => {}
+  });
+  assert.equal(plan.configuration.sourceRoot, sourceRoot);
+  assert.equal(plan.configuration.physicalSourceRoot, sourceRoot);
+  assert.equal(plan.sourcePolicy.inventory.sourceRoot, sourceRoot);
+  assert.deepEqual(plan.sourcePolicy.inventory.scanRoots, [path.join(sourceRoot, "2094-Chronological")]);
+  assert.equal(plan.observedFacts.importablePhotos, 1);
+
+  await assert.rejects(
+    runImporter(["--plan", "--year", "2094"], { appRoot, requiredSourceRoot: sourceRoot, writeStdout: () => {} }),
+    /requires an explicit --source-root/
+  );
+  await assert.rejects(
+    runImporter(["--plan", "--year", "2094", "--source-root", await fs.realpath(path.join(appRoot, "original-photos"))], {
+      appRoot,
+      requiredSourceRoot: sourceRoot,
+      writeStdout: () => {}
+    }),
+    /does not match required physical root/
+  );
+});
+
+test("explicit source root rejects aliases, source-output overlap, and source symlinks", async (t) => {
+  const { appRoot } = await makeWorkspace("2093");
+  const externalParent = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "pixilation-external-isolation-"));
+  const sourceRoot = path.join(externalParent, "original-photos");
+  await writeJpeg(path.join(sourceRoot, "2093 Source", "photo.jpg"));
+  const aliasRoot = path.join(externalParent, "source-alias");
+  await fs.symlink(sourceRoot, aliasRoot);
+  t.after(() => Promise.all([fs.rm(appRoot, { recursive: true, force: true }), fs.rm(externalParent, { recursive: true, force: true })]));
+
+  await assert.rejects(
+    runImporter(["--plan", "--year", "2093", "--source-root", aliasRoot], { appRoot, writeStdout: () => {} }),
+    /physical directory, not a symlink/
+  );
+  await assert.rejects(
+    runImporter(["--plan", "--year", "2093", "--source-root", sourceRoot, "--data-root", path.join(sourceRoot, "plan-output")], {
+      appRoot,
+      writeStdout: () => {}
+    }),
+    /output root must not overlap the read-only source root/
+  );
+  await fs.symlink(path.join(appRoot, "original-photos"), path.join(sourceRoot, "2092 Escape"));
+  await assert.rejects(
+    runImporter(["--plan", "--year", "2093", "--source-root", sourceRoot], { appRoot, writeStdout: () => {} }),
+    /contains a symlink/
+  );
+});
+
+test("same-path byte changes alter physical inventory binding and wrong-root resume is refused", async (t) => {
+  const { appRoot } = await makeWorkspace("2092");
+  const externalParent = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "pixilation-external-binding-"));
+  const firstRoot = path.join(externalParent, "first", "original-photos");
+  const secondRoot = path.join(externalParent, "second", "original-photos");
+  const relativePath = path.join("2092 Source", "photo.jpg");
+  await writeJpeg(path.join(firstRoot, relativePath), { r: 1, g: 2, b: 3 });
+  await writeJpeg(path.join(secondRoot, relativePath), { r: 3, g: 2, b: 1 });
+  const stagingRoot = path.join(appRoot, "external-stage");
+  t.after(() => Promise.all([fs.rm(appRoot, { recursive: true, force: true }), fs.rm(externalParent, { recursive: true, force: true })]));
+
+  const firstPlan = await runImporter(["--plan", "--year", "2092", "--source-root", firstRoot], { appRoot, writeStdout: () => {} });
+  const secondPlan = await runImporter(["--plan", "--year", "2092", "--source-root", secondRoot], { appRoot, writeStdout: () => {} });
+  assert.notEqual(firstPlan.sourcePolicy.inventory.inventorySha256, secondPlan.sourcePolicy.inventory.inventorySha256);
+  assert.notEqual(firstPlan.observedFacts.photos[0].sourceSha256, secondPlan.observedFacts.photos[0].sourceSha256);
+
+  const staged = await runImporter(["--year", "2092", "--source-root", firstRoot, "--staging-root", stagingRoot], {
+    appRoot,
+    importerCommit: "physical-root-binding-test",
+    writeStdout: () => {}
+  });
+  assert.equal(staged.receipt.sourcePolicy.physicalSourceRoot, firstRoot);
+  assert.deepEqual(staged.receipt.sourcePolicy.physicalScanRoots, [path.join(firstRoot, "2092 Source")]);
+  assert.equal(staged.receipt.sourcePolicy.freshInventorySha256, firstPlan.sourcePolicy.inventory.inventorySha256);
+  const runDescriptor = JSON.parse(await fs.readFile(path.join(stagingRoot, "generated", "journal", "run.json"), "utf8"));
+  assert.equal(runDescriptor.binding.sourceSelection.sourceRoot, firstRoot);
+  assert.equal(runDescriptor.binding.sourcePolicy.freshInventory.sourceRoot, firstRoot);
+  assert.equal(runDescriptor.binding.sourcePolicy.freshInventory.inventorySha256, firstPlan.sourcePolicy.inventory.inventorySha256);
+  await assert.rejects(
+    runImporter(["--year", "2092", "--source-root", secondRoot, "--staging-root", stagingRoot], {
+      appRoot,
+      importerCommit: "physical-root-binding-test",
+      writeStdout: () => {}
+    }),
+    /Staged run identity changed; refusing to resume/
   );
 });
