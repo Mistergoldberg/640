@@ -172,6 +172,7 @@ export async function classifySourceImage(filePath) {
       decodable: false,
       metadata: null,
       decodeError: null,
+      failureCode: "unsupported-extension",
       evidence: "unsupported-extension"
     };
   }
@@ -191,17 +192,24 @@ export async function classifySourceImage(filePath) {
       decodable: true,
       metadata,
       decodeError: null,
+      failureCode: null,
       evidence: extensionless ? "extensionless-full-decode" : "supported-extension-decode"
     };
   } catch (error) {
     const classification = extensionless ? await extensionlessFailureClassification(filePath) : "unreadable-image";
+    const failureCode = extensionless
+      ? classification === "unreadable-image"
+        ? "supported-signature-decode-failed"
+        : "unsupported-content"
+      : "supported-extension-decode-failed";
     return {
       classification,
       extension,
       decodable: false,
       metadata: null,
       decodeError: error instanceof Error ? error.message : String(error),
-      evidence: extensionless ? (classification === "unreadable-image" ? "supported-signature-decode-failed" : "unsupported-content") : "supported-extension-decode-failed"
+      failureCode,
+      evidence: failureCode
     };
   }
 }
@@ -220,6 +228,7 @@ async function inspectPhysicalFile(file) {
   let decodeError = null;
   let captureDate = null;
   let classificationEvidence = null;
+  let failureCode = null;
   let imageClassification = null;
   let decodedFormat = null;
   if (!isNoise(filename) && (supportedImage || extensionless)) {
@@ -228,6 +237,7 @@ async function inspectPhysicalFile(file) {
     decodable = image.decodable;
     decodeError = image.decodeError;
     classificationEvidence = image.evidence;
+    failureCode = image.failureCode;
     if (image.metadata) {
       decodedFormat = image.metadata.format || null;
       dimensions = { width: image.metadata.width, height: image.metadata.height, orientation: image.metadata.orientation || 1 };
@@ -248,6 +258,7 @@ async function inspectPhysicalFile(file) {
     } catch (error) {
       decodeError = error instanceof Error ? error.message : String(error);
       classificationEvidence = "unsupported-extension-decode-failed";
+      failureCode = "unsupported-extension-decode-failed";
     }
   }
   const classification = isNoise(filename)
@@ -270,6 +281,7 @@ async function inspectPhysicalFile(file) {
     dimensions,
     captureDate,
     decodeError,
+    failureCode,
     classificationEvidence,
     decodedFormat
   };
@@ -428,7 +440,7 @@ function buildDecisions(files, publishedPhotoIds, selectedYear = null) {
       unresolvedDecision(
         "unreadable-file",
         file.path,
-        { path: file.path, extension: file.extension, decodeError: file.decodeError },
+        { path: file.path, extension: file.extension, failureCode: file.failureCode || "supported-image-decode-failed" },
         [file]
       )
     );
@@ -515,10 +527,10 @@ function summarizeSpecialFindings(files, decisions, symlinks, missingPublishedPh
     .map(fileSignature);
   const corrupt2010Jpegs = files
     .filter((file) => /^2010(?:[-/]|$)/.test(file.path) && [".jpg", ".jpeg"].includes(file.extension) && file.classification === "unreadable-image")
-    .map((file) => ({ ...fileSignature(file), decodeError: file.decodeError }));
+    .map((file) => ({ ...fileSignature(file), failureCode: file.failureCode, decodeError: file.decodeError }));
   const unsupported2012Jpegs = files
     .filter((file) => /^2012(?:[-/]|$)/.test(file.path) && [".jpg", ".jpeg"].includes(file.extension) && file.classification === "unreadable-image")
-    .map((file) => ({ ...fileSignature(file), decodeError: file.decodeError }));
+    .map((file) => ({ ...fileSignature(file), failureCode: file.failureCode, decodeError: file.decodeError }));
   const sourceMoves = (decisionsByCategory.get("source-move") || []).map((decision) => ({
     photoId: decision.subject.photoId,
     currentPath: decision.subject.currentPath,

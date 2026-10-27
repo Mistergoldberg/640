@@ -1957,6 +1957,27 @@ async function assertNewStagingRootIsEmpty(stagingRoot) {
   }
 }
 
+function stableOmissionIdentity(file, fallbackFailureCode) {
+  return {
+    relativePath: file.relativePath,
+    bytes: file.bytes,
+    sha256: file.sha256,
+    failureCode: file.failureCode || fallbackFailureCode
+  };
+}
+
+function humanFacingOmissionDiagnostics(report) {
+  const diagnostic = (file) => ({
+    relativePath: file.relativePath,
+    failureCode: file.failureCode,
+    diagnostic: file.reason || null
+  });
+  return {
+    unsupported: report.unsupportedFiles.map(diagnostic),
+    unreadable: report.unreadableFiles.map(diagnostic)
+  };
+}
+
 function buildStagedModel({
   args,
   outputConfig,
@@ -2042,8 +2063,8 @@ function buildStagedModel({
       sortSource: photo.sortSource
     })),
     omissions: {
-      unsupported: report.unsupportedFiles,
-      unreadable: report.unreadableFiles,
+      unsupported: report.unsupportedFiles.map((file) => stableOmissionIdentity(file, "unsupported-source")),
+      unreadable: report.unreadableFiles.map((file) => stableOmissionIdentity(file, "source-image-inspection-failed")),
       skippedNoise: scanned.skippedNoiseFiles,
       skippedSymlinks: scanned.skippedSymlinks
     }
@@ -2183,6 +2204,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
   const runPath = path.join(journalRoot, "run.json");
   const journalPath = path.join(journalRoot, "progress.ndjson");
   const completePath = path.join(journalRoot, "complete.json");
+  const currentDiagnostics = humanFacingOmissionDiagnostics(report);
   await assertNoSymlinks(stagingRoot);
   let descriptor = await readRunDescriptor(runPath);
   if (descriptor) {
@@ -2199,6 +2221,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
       runId,
       createdAt: new Date().toISOString(),
       binding: model.binding,
+      diagnostics: currentDiagnostics,
       stagingRoot,
       stagedPaths: outputConfig.roots,
       publicationApproved: false,
@@ -2206,6 +2229,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     };
     await createInitialRunFiles({ runPath, journalPath, journalRoot, descriptor, runId });
   }
+  const diagnostics = descriptor.diagnostics || currentDiagnostics;
   const loadedJournal = await loadProgressJournal(journalPath);
   if (loadedJournal.create) {
     const handle = await fs.open(journalPath, "wx");
@@ -2335,7 +2359,8 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     schemaVersion: STAGED_RUN_SCHEMA_VERSION,
     runId,
     sourceSelectionSha256: model.binding.sourceSelectionSha256,
-    sourceSelection: model.sourceSelection
+    sourceSelection: model.sourceSelection,
+    diagnostics
   };
   await ensureJsonArtifact({
     value: sourceReport,
@@ -2359,6 +2384,7 @@ async function runStagedImport({ args, runtime, outputConfig, sourceScope, scann
     albumCount: model.albumModels.length,
     derivativeCount: selectedPhotos.length * 2,
     omissions: model.sourceSelection.omissions,
+    diagnostics,
     outputLayout: model.binding.outputLayout,
     publicationEligibility: {
       eligible: sourceGate.eligibility.publicationEligible,
@@ -2787,6 +2813,12 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     unreadableFiles: [],
     duplicateFiles: []
   };
+  const inspectedSourceFiles = new Map(sourceGate.inspection.files.map((file) => [file.path, file]));
+  const omissionIdentity = (relativePath, failureCode) => {
+    const inspected = inspectedSourceFiles.get(relativePath);
+    if (!inspected) throw new Error(`Source-policy inspection did not record omission identity: ${relativePath}`);
+    return { relativePath, bytes: inspected.bytes, sha256: inspected.sha256, failureCode };
+  };
 
   let inspectedCount = 0;
   const inspectedResults = await mapWithConcurrency(scannedFiles, args.concurrency, async (filePath) => {
@@ -2795,7 +2827,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     if (image.classification === "unsupported-file") {
       report.unsupported += 1;
       report.unsupportedFiles.push({
-        relativePath,
+        ...omissionIdentity(relativePath, image.failureCode || "unsupported-source"),
         reason: image.decodeError ? `Unsupported source content: ${image.decodeError}` : "Unsupported file extension"
       });
       return null;
@@ -2803,7 +2835,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     if (image.classification === "unreadable-image") {
       report.unreadable += 1;
       report.unreadableFiles.push({
-        relativePath,
+        ...omissionIdentity(relativePath, image.failureCode || "supported-image-decode-failed"),
         reason: image.decodeError || "Unreadable image"
       });
       return null;
@@ -2819,7 +2851,7 @@ async function runImporter(argv = process.argv.slice(2), runtime = {}) {
     } catch (error) {
       report.unreadable += 1;
       report.unreadableFiles.push({
-        relativePath,
+        ...omissionIdentity(relativePath, "source-image-inspection-failed"),
         reason: error instanceof Error ? error.message : "Unreadable image"
       });
       return null;

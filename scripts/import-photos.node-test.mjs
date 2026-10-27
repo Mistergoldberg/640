@@ -304,3 +304,104 @@ test("same-path byte changes alter physical inventory binding and wrong-root res
     /Staged run identity changed; refusing to resume/
   );
 });
+
+test("corrupt JPEG omission identity and staged run identity stay stable across inspection and resume", async (t) => {
+  const { appRoot, sourceFolder } = await makeWorkspace("2091");
+  t.after(() => fs.rm(appRoot, { recursive: true, force: true }));
+  await writeJpeg(path.join(sourceFolder, "valid.jpg"), { r: 80, g: 20, b: 140 });
+  const corruptPath = path.join(sourceFolder, "corrupt.jpg");
+  const corruptBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0x9c, 0x00, 0x01]);
+  await fs.writeFile(corruptPath, corruptBytes);
+  const sourceRoot = await fs.realpath(path.join(appRoot, "original-photos"));
+  const commonRuntime = {
+    appRoot,
+    requiredSourceRoot: sourceRoot,
+    importerCommit: "stable-corrupt-jpeg-test",
+    importerScriptSha256: "stable-corrupt-jpeg-script",
+    writeStdout: () => {}
+  };
+
+  const plans = [];
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    plans.push(
+      await runImporter(["--plan", "--year", "2091", "--source-root", sourceRoot, "--concurrency", "8"], commonRuntime)
+    );
+  }
+  const firstPlan = plans[0];
+  const expectedCorruptSha256 = crypto.createHash("sha256").update(corruptBytes).digest("hex");
+  for (const plan of plans) {
+    assert.deepEqual(
+      plan.observedFacts.photos.map(({ relativePath, sourceBytes, sourceSha256, proposedPhotoId }) => ({ relativePath, sourceBytes, sourceSha256, proposedPhotoId })),
+      firstPlan.observedFacts.photos.map(({ relativePath, sourceBytes, sourceSha256, proposedPhotoId }) => ({ relativePath, sourceBytes, sourceSha256, proposedPhotoId }))
+    );
+    assert.equal(plan.sourcePolicy.eligibility.decisionSetSha256, firstPlan.sourcePolicy.eligibility.decisionSetSha256);
+    assert.equal(plan.sourcePolicy.eligibility.policySha256, firstPlan.sourcePolicy.eligibility.policySha256);
+    assert.deepEqual(
+      plan.observedFacts.unreadableFiles.map(({ relativePath, bytes, sha256, failureCode }) => ({ relativePath, bytes, sha256, failureCode })),
+      [
+        {
+          relativePath: "2091 New/corrupt.jpg",
+          bytes: corruptBytes.length,
+          sha256: expectedCorruptSha256,
+          failureCode: "supported-extension-decode-failed"
+        }
+      ]
+    );
+  }
+
+  const firstStageRoot = path.join(appRoot, "stable-corrupt-stage-a");
+  let interrupted = false;
+  await assert.rejects(
+    runImporter(["--year", "2091", "--source-root", sourceRoot, "--staging-root", firstStageRoot, "--concurrency", "8"], {
+      ...commonRuntime,
+      injectFault: async (point) => {
+        if (!interrupted && point === "thumbnail-generation") {
+          interrupted = true;
+          throw new Error("intentional-corrupt-jpeg-interruption");
+        }
+      }
+    }),
+    /intentional-corrupt-jpeg-interruption/
+  );
+  const interruptedRun = JSON.parse(await fs.readFile(path.join(firstStageRoot, "generated", "journal", "run.json"), "utf8"));
+  const stableUnreadable = interruptedRun.binding.sourceSelection.omissions.unreadable;
+  assert.deepEqual(stableUnreadable, [
+    {
+      relativePath: "2091 New/corrupt.jpg",
+      bytes: corruptBytes.length,
+      sha256: expectedCorruptSha256,
+      failureCode: "supported-extension-decode-failed"
+    }
+  ]);
+  assert(!("diagnostic" in stableUnreadable[0]));
+  assert(interruptedRun.diagnostics.unreadable[0].diagnostic);
+
+  const resumedInterrupted = await runImporter(
+    ["--year", "2091", "--source-root", sourceRoot, "--staging-root", firstStageRoot, "--concurrency", "8"],
+    commonRuntime
+  );
+  assert.equal(resumedInterrupted.receipt.runId, interruptedRun.runId);
+  assert.equal(resumedInterrupted.generatedDerivatives, 1);
+  assert.equal(resumedInterrupted.reusedDerivatives, 1);
+  assert.equal(resumedInterrupted.resumed, true);
+
+  const completedResume = await runImporter(
+    ["--year", "2091", "--source-root", sourceRoot, "--staging-root", firstStageRoot, "--concurrency", "8"],
+    commonRuntime
+  );
+  assert.equal(completedResume.receipt.runId, interruptedRun.runId);
+  assert.equal(completedResume.generatedDerivatives, 0);
+  assert.equal(completedResume.reusedDerivatives, 2);
+  assert.equal(completedResume.resumed, true);
+
+  const secondStageRoot = path.join(appRoot, "stable-corrupt-stage-b");
+  const independentStage = await runImporter(
+    ["--year", "2091", "--source-root", sourceRoot, "--staging-root", secondStageRoot, "--concurrency", "8"],
+    commonRuntime
+  );
+  const independentRun = JSON.parse(await fs.readFile(path.join(secondStageRoot, "generated", "journal", "run.json"), "utf8"));
+  assert.equal(independentStage.receipt.runId, interruptedRun.runId);
+  assert.equal(independentRun.binding.sourceSelectionSha256, interruptedRun.binding.sourceSelectionSha256);
+  assert.deepEqual(independentRun.binding.sourceSelection.files, interruptedRun.binding.sourceSelection.files);
+  assert.deepEqual(independentRun.binding.sourceSelection.omissions, interruptedRun.binding.sourceSelection.omissions);
+});

@@ -187,7 +187,7 @@ test("exact grouped decisions and exact-file exceptions resolve members and fail
 
   const tamperedCoveredDecision = structuredClone(policy);
   const coveredDecision = tamperedCoveredDecision.decisions.find((decision) => unreadableGroup.decisionIds.includes(decision.id));
-  coveredDecision.subject.decodeError = "silently changed while group remained exact";
+  coveredDecision.subject.failureCode = "silently-changed-while-group-remained-exact";
   const tamperedResult = evaluateSourcePolicy(inspection, tamperedCoveredDecision);
   assert.equal(tamperedResult.publicationEligible, false);
   assert(tamperedResult.schemaErrors.some((error) => error.includes("Policy decision identity changed")));
