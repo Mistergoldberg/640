@@ -29,6 +29,7 @@
     "canonical:inventory": "node scripts/canonical-inventory.mjs",
     "release:audit": "node scripts/release-audit.mjs",
     "release:package": "node scripts/promote-staged-release.mjs",
+    "release:package:aggregate": "node scripts/aggregate-staged-release.mjs",
     "media:publish:plan": "node scripts/package-media-publication.mjs --plan",
     "media:publish:local": "node scripts/package-media-publication.mjs --execute",
     "media:r2:preflight": "node scripts/r2-preflight.mjs",
@@ -40,6 +41,7 @@
     "media:r2:publish": "node scripts/r2-package-upload.mjs --execute",
     "release:candidate": "node scripts/package-release-activation.mjs",
     "release:qa": "node scripts/qa-release-deployment.mjs",
+    "review:archive-replacement": "node scripts/all-year-review-packet.mjs",
     "test:release": "node --test scripts/package-release-activation.node-test.mjs",
     "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
     "media:upload": "node scripts/media-upload-r2.mjs --execute"

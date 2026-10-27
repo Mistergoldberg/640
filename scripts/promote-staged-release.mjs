@@ -137,7 +137,7 @@ function publicPathFromUrl(url) {
   return url.slice("data/".length);
 }
 
-async function verifyStagedRun(stagingRoot) {
+export async function verifyStagedRun(stagingRoot) {
   const runPath = path.join(stagingRoot, "generated", "journal", "run.json");
   const completePath = path.join(stagingRoot, "generated", "journal", "complete.json");
   const descriptor = await readJson(runPath, "Staged run descriptor");
@@ -293,7 +293,7 @@ function parseAndValidateYear(files, year) {
   return { index, manifestMap, ids, expectedFiles };
 }
 
-async function loadCanonicalData(canonicalDataRoot) {
+export async function loadCanonicalData(canonicalDataRoot) {
   const files = new Map();
   for (const absolutePath of await walkFiles(canonicalDataRoot)) {
     const relativePath = toPosix(path.relative(canonicalDataRoot, absolutePath));
@@ -385,7 +385,7 @@ function mediaReferencesByYear(dataModel) {
   return byYear;
 }
 
-async function canonicalMediaInventory(canonicalMediaRoot) {
+export async function canonicalMediaInventory(canonicalMediaRoot) {
   const records = new Map();
   for (const absolutePath of await walkFiles(canonicalMediaRoot)) {
     const key = toPosix(path.relative(canonicalMediaRoot, absolutePath));
