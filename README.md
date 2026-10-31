@@ -14,7 +14,7 @@ npm run test:browser
 npm run dev
 ```
 
-Use the committed lockfile and record the Node/npm versions used. A supported runtime version still needs to be established in repeatable CI.
+Use the committed lockfile and the Node/npm versions pinned by `.nvmrc`, `package.json` and CI.
 
 Production builds default to the public media host https://media.pixilation.org/. Development without VITE_MEDIA_BASE_URL expects an existing local generated/library directory; a fresh clone does not contain original photos or generated derivatives. To inspect the application against public media, set VITE_MEDIA_BASE_URL=https://media.pixilation.org/ for the local dev process. This makes read-only public media requests.
 
@@ -37,6 +37,10 @@ Builds use the runtime pinned in `.nvmrc` and write `dist/build-identity.json` w
 The current catalogue uses content-versioned cv1 media keys. The release auditor now validates that exact contract. The legacy importer and broad uploader are retired fail-closed; their npm commands cannot import, plan or publish. Publication authority belongs to the sealed, package-bound workflow documented in [publication authority](docs/publication-authority.md).
 
 `npm run test:browser` is the deterministic current-catalogue gate. Historical feature suites with former three-year assumptions remain outside that default gate until supplied with their explicit fixture or migrated.
+
+Runtime loading enforces canonical catalogue/manifest paths, exact cv1 keys, bounded integer dimensions/counts/order, unique IDs, album membership and sequence consistency. Malformed catalogue data presents a public retry action; album failures remain isolated and retryable. Diagnostics remain available with `debug=1`, but copied/downloaded reports minimize browser information and redact URL values and error details. Whether production diagnostics remain a public support mode or become QA-only is still an owner decision.
+
+SoundCloud API loading is bounded and concurrent calls are deduplicated. Failures clear retryable state, owned timers/listeners are cleaned up, and pressing Play music again makes one deliberate retry without a background retry loop.
 
 ## Documentation
 

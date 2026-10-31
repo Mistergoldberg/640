@@ -47,7 +47,11 @@ async function inventory(root, excluded = new Set()) {
 }
 
 const sourceCommit = command("git", ["rev-parse", "HEAD"]);
-const dirtyPaths = command("git", ["status", "--porcelain=v1"]).split("\n").filter(Boolean).map((line) => line.slice(3));
+const dirtyPaths = execFileSync("git", ["status", "--porcelain=v1"], { cwd: APP_ROOT, encoding: "utf8" })
+  .trimEnd()
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => line.slice(3));
 const suppliedBuildCommit = process.env.VITE_BUILD_COMMIT?.trim();
 if (suppliedBuildCommit && suppliedBuildCommit !== sourceCommit) {
   throw new Error(`VITE_BUILD_COMMIT ${suppliedBuildCommit} does not match source HEAD ${sourceCommit}`);

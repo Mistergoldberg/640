@@ -1,6 +1,6 @@
 # Browser acceptance contracts
 
-`npm run test:browser` is the deterministic current-catalogue gate. It builds and starts its own strict-port server, rejects an unrelated process already using the port, verifies `dist/build-identity.json`, derives years and representative photos from `public/data`, and stubs public media with a synthetic JPEG. It covers newest-year selection, bounded rendering, adjacent navigation, Back/Forward, oldest-year restoration, photo deep links, player open/close, and portrait/landscape decoding.
+`npm run test:browser` is the deterministic current-catalogue gate. It builds and starts its own strict-port server, rejects an unrelated process already using the port, verifies `dist/build-identity.json`, derives years and representative photos from `public/data`, and stubs public media with a synthetic JPEG. It covers newest-year selection, bounded rendering, adjacent navigation, Back/Forward, oldest-year restoration, photo deep links, player open/close, portrait/landscape decoding, normal/debug diagnostic visibility, redacted clipboard export and malformed-catalogue retry recovery.
 
 The synthetic image boundary makes this gate deterministic. It does not verify real R2 bytes, caching, metadata privacy, live SoundCloud, native WebKit/fullscreen, or physical iPhone behavior.
 
