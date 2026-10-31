@@ -1,3 +1,5 @@
+> Historical evidence: this document describes earlier commits and datasets. Start with [the current source audit and baseline](audit-baseline-2026-10-31.md); verify current release identity, catalogue and tooling before following operational commands below.
+
 # Continuous archive iOS QA audit
 
 ## Scope and evidence status

@@ -50,31 +50,6 @@ export type HomepageWarmupPhase =
   | "paused"
   | "error";
 
-export interface HomepageWarmupState {
-  phase: HomepageWarmupPhase;
-  firstFive: number[];
-  nextTen: number[];
-  firstFiveSettled: boolean;
-  nextTenSettled: boolean;
-  steadyReady: boolean;
-}
-
-export function createHomepageWarmupState(total: number): HomepageWarmupState {
-  return {
-    phase: total ? "loading-first-five" : "error",
-    firstFive: [],
-    nextTen: [],
-    firstFiveSettled: false,
-    nextTenSettled: total <= 5,
-    steadyReady: total <= 15
-  };
-}
-
-export function pingPongOrder(indices: readonly number[]) {
-  if (indices.length < 2) return [...indices];
-  return [...indices, ...indices.slice(0, -1).reverse()];
-}
-
 export function settledRange(statuses: ReadonlyMap<number, "ready" | "failed">, start: number, end: number) {
   for (let index = start; index < end; index += 1) {
     if (!statuses.has(index)) return false;
