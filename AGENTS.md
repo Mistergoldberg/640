@@ -18,15 +18,17 @@ Original photographs and private inventories, EXIF/GPS, credentials and import r
 
 The baseline contains 24 catalogue years, 137 albums, 66,170 photos and 132,340 distinct derivative keys. These are snapshot assertions, not permanent year allowlists. Derive navigation and acceptance fixtures from the relevant catalogue.
 
-Current keys contain -cv1- followed by a SHA-256 digest. The legacy release-audit, uploader and importer use a conflicting older contract. Until the publication owner and supported replacement are reconciled, do not run imports against public/data, use sample imports to update canonical output, or use the legacy uploader as an approved release path. Prove new tooling with isolated fixtures and output directories first. Do not weaken validation merely to make a gate pass.
+Current keys contain -cv1- followed by a SHA-256 digest. `scripts/media-contract.mjs` is shared by exhaustive release auditing and runtime manifest validation. The package-bound workflow in the separately controlled `pixilation-import-plan` repository is publication authority. The legacy importer, sample/limited entry points and broad uploader are retired fail-closed. Do not bypass those guards, recreate package approval locally, or weaken validation merely to make a gate pass.
 
 ## Validation and reporting
 
 Use npm ci in a clean environment with the committed lockfile. Record Node/npm versions and any installation limitation. npm test and npm run build are the existing unit/build commands. TypeScript's strict mode is enabled; an additional unused-local/parameter check is useful.
 
-The existing browser suite contains stale three-year assumptions. Discovery is not execution. Separate deterministic fixture coverage from current-catalogue acceptance, report skips and build flags, and ensure the tested server has the expected SHA and compiled settings. Do not reuse an unidentified server as release evidence.
+`npm run test:browser` is the deterministic current-catalogue gate. It derives years/photos from committed data, builds its own strict-port server and verifies the build identity. Historical feature suites still contain three-year assumptions and remain outside the default gate until explicitly fixture-backed or migrated. Report actual pass/fail/skip totals and build flags; do not reuse an unidentified server as release evidence.
 
 Use synthetic media for isolated interaction checks and identify that limitation. It does not establish remote availability, image privacy, checksums, physical Safari behaviour or real-media geometry. Retain accessible keyboard/touch navigation, reduced-motion behaviour, bounded DOM/cache work, stable history and cleanup of timers/listeners.
+
+Runtime manifest validation must preserve canonical path, cv1 key, year/photo/album membership, ordering and count constraints while allowing pending or failed albums to remain independently retryable. Visitor-facing errors must remain generic and recoverable. Diagnostics remain available through `debug=1` pending an owner policy decision; all display/export paths must use minimized redacted data. SoundCloud loading must remain bounded, deduplicated, retryable and independent of the live service in tests.
 
 ## Release and operational instructions
 

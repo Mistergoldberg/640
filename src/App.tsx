@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { assetUrl, mediaUrl } from "./lib/assets";
 import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
-import { validateCatalog } from "./data/manifestValidation";
+import { ManifestValidationError, validateCatalog } from "./data/manifestValidation";
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveLoadReason, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
@@ -107,7 +107,7 @@ interface PendingVisualCorrection {
 
 type CatalogLoadState =
   | { status: "loading"; message: string }
-  | { status: "error"; message: string }
+  | { status: "error"; message: string; retry: () => void }
   | { status: "ready"; catalog: Catalog };
 
 function yearExists(catalog: Catalog, year: string | null) {
@@ -216,6 +216,7 @@ async function fetchJson(url: string): Promise<unknown> {
 
 function useCatalog(): CatalogLoadState {
   const [state, setState] = useState<CatalogLoadState>({ status: "loading", message: "Loading catalogue" });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -242,10 +243,17 @@ function useCatalog(): CatalogLoadState {
 
     loadCatalog().catch((error: unknown) => {
       if (isMounted) {
-        recordDiagnostic("catalogue-load-error", { message: error instanceof Error ? error.message : "Catalogue could not be loaded" });
+        recordDiagnostic("catalogue-load-error", {
+          name: error instanceof Error ? error.name : "UnknownError",
+          code: error instanceof ManifestValidationError ? error.code : "request-failed"
+        });
         setState({
           status: "error",
-          message: error instanceof Error ? error.message : "Catalogue could not be loaded"
+          message: "Catalogue data could not be loaded",
+          retry: () => {
+            setState({ status: "loading", message: "Loading catalogue" });
+            setAttempt((current) => current + 1);
+          }
         });
       }
     });
@@ -253,7 +261,7 @@ function useCatalog(): CatalogLoadState {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [attempt]);
 
   return state;
 }
@@ -650,7 +658,7 @@ function App() {
   const archiveView = catalogState.status === "loading"
     ? <SystemState title="640×480" message={catalogState.message} />
     : catalogState.status === "error"
-      ? <SystemState title="640×480" message={catalogState.message} />
+      ? <SystemState title="640×480" message={catalogState.message} actionLabel="Retry catalogue" onAction={catalogState.retry} />
       : !activeYear || !states.size
         ? <SystemState title="640×480" message="Building archive index" />
         : (

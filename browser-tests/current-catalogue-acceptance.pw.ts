@@ -41,11 +41,48 @@ test("served artifact identity matches this source, runtime contract, flags, and
 test("root derives the newest year and keeps rendering bounded", async ({ page }) => {
   await page.goto("/");
   await waitForYear(page, fixture.newest);
+  await expect(page.getByLabel("Archive diagnostics")).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`year=${fixture.newest}`));
   await expect(page.getByRole("heading", { name: fixture.newest, exact: true })).toBeVisible();
   expect(await page.locator(".photo-tile").count()).toBeLessThanOrEqual(100);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight / 2));
   await expect.poll(() => page.locator(".photo-tile").count()).toBeLessThanOrEqual(100);
+});
+
+test("debug visit preserves support mode and copies only the redacted minimized export", async ({ context, page }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/?debug=1&token=super-secret&email=person%40example.com");
+  await waitForYear(page, fixture.newest);
+  const panel = page.getByLabel("Archive diagnostics");
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: /Expand/ }).click();
+  await panel.getByRole("button", { name: "Copy diagnostics" }).click();
+  await expect(panel.getByRole("status")).toContainText("Copied");
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).not.toContain("super-secret");
+  expect(copied).not.toContain("person@example.com");
+  expect(copied).not.toContain("userAgent");
+  expect(copied).not.toContain('"platform"');
+  expect(copied).toContain("%5Bredacted%5D");
+});
+
+test("malformed catalogue shows public recovery and succeeds on retry", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/data/catalog.json", async (route) => {
+    attempts += 1;
+    if (attempts === 1) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ years: [{ year: "2026", indexUrl: "../private/catalog.json" }] }) });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.goto("/");
+  await expect(page.getByText("Catalogue data could not be loaded")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry catalogue" })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("../private");
+  await page.getByRole("button", { name: "Retry catalogue" }).click();
+  await waitForYear(page, fixture.newest);
+  expect(attempts).toBe(2);
 });
 
 test("catalogue-derived adjacent year navigation preserves Back and Forward history", async ({ page }) => {
@@ -65,6 +102,7 @@ test("catalogue-derived oldest-year deep link restores a stable anchor after rel
   await waitForYear(page, fixture.oldest);
   await page.evaluate(() => window.scrollBy(0, 1800));
   await expect.poll(() => page.evaluate(() => history.state?.restoration?.photoId || null)).not.toBeNull();
+  await page.waitForTimeout(350);
   const before = await page.evaluate(() => history.state.restoration.photoId);
   await page.reload();
   await waitForYear(page, fixture.oldest);

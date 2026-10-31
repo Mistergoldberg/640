@@ -140,8 +140,8 @@ npm ci
 npm run dev
 npm test
 npm run build
+npm run test:browser
 npm run release:audit
-npm run media:upload:dry-run
 ```
 
 Development currently uses `/`; Vite serves the local generated library at
@@ -168,51 +168,13 @@ with public R2 media before switching the server.
 
 ## R2 publication
 
-Cloudflare's official Wrangler OAuth login has completed. Credentials use the
-local keychain-backed Wrangler storage. Do not place credentials in chat,
-Git, build artifacts or this document. The existing uploader requires locally
-configured R2 account, bucket, endpoint and bucket-scoped S3 credentials; it does
-not automatically obtain those credentials from a Wrangler login.
-
-The ignored local `generated/reports/configure-r2.command` helper collects
-the Access Key ID and Secret Access Key through hidden Terminal input. It writes
-only to `generated/.credentials/insertcatchytitlehere-r2.json` with mode 0600
-in a mode 0700 directory. It refuses to overwrite existing credentials and does
-not upload anything. That directory is outside the public-media upload source.
-
-Before creating the bucket, inspect whether it exists and list its contents using
-authenticated access. Stop before overwriting unexpected objects in a non-empty
-bucket. Confirm R2 Standard storage, attach the media custom domain, and configure
-public HTTPS GET/HEAD access without public listing or mutation.
-
-Use the audited uploader:
-
-```sh
-npm run media:upload:dry-run
-npm run media:upload
-```
-
-Execution requires `rclone`. Version 1.75.1 was downloaded from the official
-release and its SHA-256 checksum verified; the binary is kept in ignored local
-tooling. The script uses `rclone copy` with overwrite protection, explicit ordered
-allowlist filters and zero deletes.
-The overwrite guard is separate from HTTP caching: images are not served with
-an immutable cache directive. The uploader sets:
-
-```text
-Content-Type: image/jpeg
-Cache-Control: public, max-age=14400, must-revalidate
-```
-
-A local endpoint-only CONNECT tunnel was needed because one DNS address of the
-S3 endpoint timed out from this Mac. The tunnel retries the endpoint addresses;
-TLS verification and signing remain in rclone. It runs only for the child upload
-process, binds to loopback and makes no global network changes. Credentials are
-passed in the child environment and never sent through a third-party proxy.
-
-Compare the authenticated remote count and bytes against the local audit. Check
-representative checksums and public thumbnail/display URLs from every year.
-Never upload a broader directory and never use `sync --delete`.
+The broad uploader and its `media:upload` npm entry points are retired fail-closed.
+They are historical evidence and are not a supported planning or publication
+path. Current media publication must use the exact sealed package, owner authority,
+package-bound credentials, durable receipt and candidate activation controls in
+[publication-authority.md](publication-authority.md). This repository does not
+mint those records or write R2. Never place credentials in Git or build artifacts,
+upload a broader directory, or use a destructive sync.
 
 ## Server release and rollback
 

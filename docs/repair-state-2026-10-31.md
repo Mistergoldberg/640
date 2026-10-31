@@ -1,6 +1,6 @@
 # Repair state — 2026-10-31
 
-Branch: `repair/640-first-package-2026-10-31`, based on audit PR #2 commit `27b80a52c8ff7b0a5ba5603142a5a68fe6cdaa3b`. GitHub `main` remained `d519413e6c676e93a4538ef0814f063b4f091606`; PR #2 remained open, draft and clean when verified. This repair continues that audit rather than duplicating it.
+The repair remains a stacked sequence on audit PR #2. The first package branch was based on audit commit `27b80a52c8ff7b0a5ba5603142a5a68fe6cdaa3b`; the second package branch `repair/640-second-package-2026-10-31` is based on first-package commit `c51492f9f78bf1978fe95ca80f695ec9d29e4b63`. GitHub `main` remained `d519413e6c676e93a4538ef0814f063b4f091606`; PRs #2 and #3 remained open, draft and clean when verified. These repairs continue the audit rather than duplicating it.
 
 ## First package
 
@@ -22,6 +22,18 @@ Implementation commit `460684718bf6d849f0f6ce2a7587292f642a8739` validated on No
 
 No import, derivative generation, R2 write, deployment, DNS change, production mutation or original-photo edit is authorized or performed by this package.
 
+## Second package
+
+- AUD-06: hardened while preserving the pending owner policy. `debug=1` remains available, but every in-memory, displayed, copied and downloaded diagnostic path now minimizes browser information, redacts URL values and sensitive/error fields, bounds nested data and keeps the existing 200-event cap. Listener/timer setup is idempotent and cleanable. The public error boundary exposes only generic Reload/Return recovery controls.
+- AUD-07: repaired. Runtime loading now enforces canonical catalogue, year-index and album paths; exact shared cv1 media keys; year/album/photo identity and uniqueness; bounded counts, dimensions and integer positions; album and sequence membership; and complete sequence consistency. Album failures remain isolated and retryable, while a malformed catalogue presents a generic retry action.
+- AUD-09: repaired without contacting the live service. SoundCloud API loading now has an eight-second bound, deduplicates concurrent requests, clears pending state after either outcome, cleans up owned scripts/listeners/timers, and permits one deliberate retry when the visitor presses Play music again. Widget event handlers are unbound during player cleanup when the API supports it.
+- AUD-04: advanced but not closed. Default browser acceptance now covers diagnostic visibility/redaction and malformed-catalogue recovery. All retained optional flag combinations build successfully, but enabled-feature browser migration and a CI flag matrix remain open.
+- Build identity: dirty-path capture preserves the first status entry rather than trimming its first character.
+
+Acceptance for this package: `npm ci`; `npm test`; `npx tsc --noEmit --noUnusedLocals --noUnusedParameters`; default and optional-flag `npm run build`; `npm run test:browser`; and `npm run release:audit` showing no unsafe cv1 keys (a missing approved media tree may remain a blocker). Exact clean-commit evidence is recorded after the implementation commit exists.
+
+No import, derivative generation, R2 write, deployment, DNS change, production mutation, live SoundCloud request or original-photo edit is authorized or performed by this package.
+
 ## Next executable package
 
-Unify runtime catalogue validation with the cv1 contract (AUD-07), harden public error recovery/diagnostic export policy (AUD-06), and add retryable bounded SoundCloud loading tests (AUD-09). Then migrate retained optional-feature browser suites and add their flag matrix to CI. Owner input is needed only for whether production `debug=1` remains a supported public support mode.
+Migrate retained optional-feature browser suites and add their flag matrix to CI (AUD-04), reconcile the remaining historical runbooks/branch controls (AUD-05), then make only test-backed focused decompositions of the coupled archive/player modules (AUD-08). Owner input is still needed only for whether production `debug=1` remains a supported public support mode.
