@@ -1,8 +1,92 @@
 {
   "years": [
     {
+      "year": "2026",
+      "indexUrl": "data/2026/index.json"
+    },
+    {
+      "year": "2025",
+      "indexUrl": "data/2025/index.json"
+    },
+    {
+      "year": "2023",
+      "indexUrl": "data/2023/index.json"
+    },
+    {
+      "year": "2022",
+      "indexUrl": "data/2022/index.json"
+    },
+    {
+      "year": "2021",
+      "indexUrl": "data/2021/index.json"
+    },
+    {
+      "year": "2020",
+      "indexUrl": "data/2020/index.json"
+    },
+    {
+      "year": "2019",
+      "indexUrl": "data/2019/index.json"
+    },
+    {
+      "year": "2017",
+      "indexUrl": "data/2017/index.json"
+    },
+    {
+      "year": "2016",
+      "indexUrl": "data/2016/index.json"
+    },
+    {
+      "year": "2015",
+      "indexUrl": "data/2015/index.json"
+    },
+    {
+      "year": "2014",
+      "indexUrl": "data/2014/index.json"
+    },
+    {
       "year": "2013",
       "indexUrl": "data/2013/index.json"
+    },
+    {
+      "year": "2012",
+      "indexUrl": "data/2012/index.json"
+    },
+    {
+      "year": "2011",
+      "indexUrl": "data/2011/index.json"
+    },
+    {
+      "year": "2010",
+      "indexUrl": "data/2010/index.json"
+    },
+    {
+      "year": "2009",
+      "indexUrl": "data/2009/index.json"
+    },
+    {
+      "year": "2008",
+      "indexUrl": "data/2008/index.json"
+    },
+    {
+      "year": "2007",
+      "indexUrl": "data/2007/index.json"
+    },
+    {
+      "year": "2006",
+      "indexUrl": "data/2006/index.json"
+    },
+    {
+      "year": "2005",
+      "indexUrl": "data/2005/index.json"
+    },
+    {
+      "year": "2004",
+      "indexUrl": "data/2004/index.json"
+    },
+    {
+      "year": "2003",
+      "indexUrl": "data/2003/index.json"
     },
     {
       "year": "2002",
