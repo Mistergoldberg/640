@@ -1,4 +1,6 @@
 > Historical evidence: this document describes earlier commits and datasets. Start with [the current source audit and baseline](audit-baseline-2026-10-31.md); verify current release identity, catalogue and tooling before following operational commands below.
+>
+> Current repair note: legacy import and broad-upload commands below are retired fail-closed. Use [publication authority](publication-authority.md), [repair state](repair-state-2026-10-31.md), and [browser acceptance](browser-acceptance.md) for current operational boundaries. No production action is authorized by those local repair documents.
 
 # 640×480 deployment
 
