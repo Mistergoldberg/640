@@ -1,7 +1,9 @@
+import { publicFlagEnabled } from "../lib/publicFlag";
+
 export const HOMEPAGE_AUTOPLAYER_ENV = "VITE_HOMEPAGE_AUTOPLAYER";
 
 export function homepageAutoplayerEnabled(value = import.meta.env.VITE_HOMEPAGE_AUTOPLAYER) {
-  return value === "1" || value?.toLowerCase() === "true";
+  return publicFlagEnabled(value);
 }
 
 export const HOMEPAGE_AUTOPLAYER_ENABLED = homepageAutoplayerEnabled();

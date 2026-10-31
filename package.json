@@ -3,20 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.6.2",
+  "engines": {
+    "node": ">=24.12.0 <25",
+    "npm": ">=11.6.2 <12"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:contracts",
+    "test:contracts": "node --test scripts/*.node-test.mjs",
     "test:browser": "playwright test",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/build.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "import:year": "node scripts/import-photos.mjs",
-    "import:2013:sample": "npm run import:year -- --year 2013 --limit 300",
-    "import:2013": "npm run import:year -- --year 2013",
-    "import": "npm run import:year --",
+    "import:year": "node scripts/retired-publication-command.mjs import",
+    "import:2013:sample": "node scripts/retired-publication-command.mjs sample-import",
+    "import:2013": "node scripts/retired-publication-command.mjs import",
+    "import": "node scripts/retired-publication-command.mjs import",
     "archive:inventory": "node scripts/archive-inventory.mjs",
     "release:audit": "node scripts/release-audit.mjs",
-    "media:upload:dry-run": "node scripts/media-upload-r2.mjs --dry-run",
-    "media:upload": "node scripts/media-upload-r2.mjs --execute"
+    "media:upload:dry-run": "node scripts/retired-publication-command.mjs upload",
+    "media:upload": "node scripts/retired-publication-command.mjs upload"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

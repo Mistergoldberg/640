@@ -10,6 +10,7 @@ Start with [the 2026-10-31 audit and source baseline](docs/audit-baseline-2026-1
 npm ci
 npm test
 npm run build
+npm run test:browser
 npm run dev
 ```
 
@@ -29,12 +30,14 @@ Production builds default to the public media host https://media.pixilation.org/
 
 Feature switches accept 1 or case-insensitive true in application code. Query parameter debug=1 enables local diagnostic UI even in production builds. These public values must never contain credentials.
 
+Builds use the runtime pinned in `.nvmrc` and write `dist/build-identity.json` with source, dirty state, runtime, lockfile, flags, catalogue and artifact identities. Browser acceptance starts its own strict-port build and verifies that manifest. See [browser acceptance contracts](docs/browser-acceptance.md).
+
 ## Release tooling status
 
-The current catalogue uses content-versioned cv1 media keys. The legacy importer, release auditor and uploader use an incompatible key contract. Treat their npm commands as unverified legacy tooling until the authoritative package/publication workflow has been reconciled. In particular, import:2013:sample defaults to canonical public output and must not be used as a harmless preview command.
+The current catalogue uses content-versioned cv1 media keys. The release auditor now validates that exact contract. The legacy importer and broad uploader are retired fail-closed; their npm commands cannot import, plan or publish. Publication authority belongs to the sealed, package-bound workflow documented in [publication authority](docs/publication-authority.md).
 
-The existing browser suite also contains earlier three-year assumptions. npm run test:browser is not yet a reliable all-year release gate. The audit lists the required repairs and distinguishes the successful local smoke checks from the unexecuted full suite.
+`npm run test:browser` is the deterministic current-catalogue gate. Historical feature suites with former three-year assumptions remain outside that default gate until supplied with their explicit fixture or migrated.
 
 ## Documentation
 
-[Audit and feature register](docs/audit-baseline-2026-10-31.md) records current verified source facts, findings, validation limits and the execution sequence. [deployment.md](docs/deployment.md), phase reports and the iOS audit contain historical material; reconcile their stated commits, counts and paths before using them operationally.
+[Audit and feature register](docs/audit-baseline-2026-10-31.md) records the source baseline. [Repair state](docs/repair-state-2026-10-31.md) and the [findings register](docs/findings-register.md) track subsequent work. [deployment.md](docs/deployment.md), phase reports and the iOS audit contain historical material; do not use them as current publication authority.
