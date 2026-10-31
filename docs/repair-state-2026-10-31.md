@@ -30,7 +30,15 @@ No import, derivative generation, R2 write, deployment, DNS change, production m
 - AUD-04: advanced but not closed. Default browser acceptance now covers diagnostic visibility/redaction and malformed-catalogue recovery. All retained optional flag combinations build successfully, but enabled-feature browser migration and a CI flag matrix remain open.
 - Build identity: dirty-path capture preserves the first status entry rather than trimming its first character.
 
-Acceptance for this package: `npm ci`; `npm test`; `npx tsc --noEmit --noUnusedLocals --noUnusedParameters`; default and optional-flag `npm run build`; `npm run test:browser`; and `npm run release:audit` showing no unsafe cv1 keys (a missing approved media tree may remain a blocker). Exact clean-commit evidence is recorded after the implementation commit exists.
+Implementation commit `9fa5e0988d663f6b27165184447ed3ba30fe5963` validated on Node 24.12.0/npm 11.6.2:
+
+- `npm ci`: passed from the committed lockfile; 123 packages installed.
+- `npm test`: 168 Vitest cases in 27 files plus 3 Node contract cases passed; 0 failed, 0 skipped.
+- TypeScript and the additional unused-local/parameter check: passed.
+- Default production build: passed with clean source identity; 167 artifact files, artifact tree `44eaa9f5e7e1e2ef9887befd78e2d9311102f99eff94ff82e9b09e2601353a41`, catalogue tree `0ca202b9c692d442b343d0f7073e4ed36304fe93402be305ca79be470726044e`, lockfile `06855c41b52a3dc372a1f9e1dd003a51b7344450ecbc35e608ab4cdff237d2ee`.
+- Optional builds: homepage autoplay only passed (`bf306b6887228483398dfae1e7cf780fc933f6bcf2758412852bbd241a24ed8e`); seamless year segments only passed (`25b8ed79f15b56b6c1c2094116491a2e6335645752eb9018b6f0a47e1a25f36b`); both passed (`9cedc04e1e4a5496073aeb0cb5ddbe347d5641424550aba9bdcf24232afafcc6`). A final default rebuild reproduced the default artifact tree. These are build checks, not enabled-feature browser acceptance.
+- Current-catalogue Playwright: 8 passed, 0 failed, 0 skipped using synthetic JPEG media and installed Chrome.
+- Release audit: all 132,340 references accepted with 0 unsafe keys; expected nonzero exit because the isolated repair worktree has no approved `generated/library` derivative set.
 
 No import, derivative generation, R2 write, deployment, DNS change, production mutation, live SoundCloud request or original-photo edit is authorized or performed by this package.
 
