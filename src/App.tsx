@@ -790,6 +790,7 @@ function YearWindowGrid({
   const activeWarningsRef = useRef(new Set<string>());
   const requestedSegmentYearsRef = useRef(new Set<string>());
   const passiveHandoffTargetRef = useRef<string | null>(null);
+  const passiveHandoffArmedRef = useRef(false);
   const lastPassiveHandoffRef = useRef("");
   const compensatedPrependedYearsRef = useRef(new Set<string>());
   const restoredFromSpacerYearsRef = useRef(new Set<string>());
@@ -1193,6 +1194,12 @@ function YearWindowGrid({
   }, [restoration]);
 
   useEffect(() => {
+    if (!segmentedMode || restoration.phase !== "settled" || restoration.settledYear !== activeYear) return;
+    scrollDirectionRef.current = null;
+    previousScrollYRef.current = window.scrollY;
+  }, [activeYear, restoration.phase, restoration.settledYear, segmentedMode]);
+
+  useEffect(() => {
     if (!segmentedMode) return;
     if (passiveHandoffTargetRef.current === activeYear) {
       passiveHandoffTargetRef.current = null;
@@ -1206,6 +1213,7 @@ function YearWindowGrid({
       return;
     }
     requestedSegmentYearsRef.current.clear();
+    passiveHandoffArmedRef.current = false;
     compensatedPrependedYearsRef.current.clear();
     restoredFromSpacerYearsRef.current.clear();
     scrollDirectionRef.current = null;
@@ -1214,6 +1222,24 @@ function YearWindowGrid({
     setMountedSegmentYears([activeYear]);
     lastPassiveHandoffRef.current = "";
   }, [activeYear, segmentedMode]);
+
+  useEffect(() => {
+    if (!segmentedMode) return;
+    const armPassiveHandoff = () => { passiveHandoffArmedRef.current = true; };
+    const armFromKey = (event: KeyboardEvent) => {
+      if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) armPassiveHandoff();
+    };
+    window.addEventListener("wheel", armPassiveHandoff, { passive: true });
+    window.addEventListener("touchstart", armPassiveHandoff, { passive: true });
+    window.addEventListener("pointerdown", armPassiveHandoff, { passive: true });
+    window.addEventListener("keydown", armFromKey);
+    return () => {
+      window.removeEventListener("wheel", armPassiveHandoff);
+      window.removeEventListener("touchstart", armPassiveHandoff);
+      window.removeEventListener("pointerdown", armPassiveHandoff);
+      window.removeEventListener("keydown", armFromKey);
+    };
+  }, [segmentedMode]);
 
   useEffect(() => {
     if (!segmentedMode || !pendingAdjacent) return;
@@ -1330,7 +1356,7 @@ function YearWindowGrid({
   ]);
 
   useEffect(() => {
-    if (!segmentedMode || mountedSegmentYears.length < 2) return;
+    if (!segmentedMode || mountedSegmentYears.length < 2 || restorationPending || !passiveHandoffArmedRef.current) return;
     const anchorY = window.scrollY + RESTORE_OFFSET_PX;
     for (const year of mountedSegmentYears) {
       if (year === activeYear) continue;
@@ -1342,11 +1368,12 @@ function YearWindowGrid({
       const signature = `${activeYear}->${year}`;
       if (lastPassiveHandoffRef.current === signature) return;
       lastPassiveHandoffRef.current = signature;
+      passiveHandoffArmedRef.current = false;
       passiveHandoffTargetRef.current = year;
       onPassiveHandoff(stableAnchorForSegment(year));
       return;
     }
-  }, [activeYear, mountedSegmentYears, onPassiveHandoff, sectionForSegment, segmentedMode, stableAnchorForSegment, viewport.scrollY]);
+  }, [activeYear, mountedSegmentYears, onPassiveHandoff, restorationPending, sectionForSegment, segmentedMode, stableAnchorForSegment, viewport.scrollY]);
 
   useLayoutEffect(() => {
     if (!segmentedMode || mountedSegmentYears.length < 2 || restorationPending) return;

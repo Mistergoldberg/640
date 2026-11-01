@@ -1,6 +1,6 @@
 # Repair state — 2026-10-31
 
-The repair remains a stacked sequence on audit PR #2. The first package branch was based on audit commit `27b80a52c8ff7b0a5ba5603142a5a68fe6cdaa3b`; the second package branch `repair/640-second-package-2026-10-31` is based on first-package commit `c51492f9f78bf1978fe95ca80f695ec9d29e4b63`. GitHub `main` remained `d519413e6c676e93a4538ef0814f063b4f091606`; PRs #2 and #3 remained open, draft and clean when verified. These repairs continue the audit rather than duplicating it.
+The repair remains a stacked sequence on audit PR #2. The first package branch was based on audit commit `27b80a52c8ff7b0a5ba5603142a5a68fe6cdaa3b`; the second-package implementation commit `9fa5e0988d663f6b27165184447ed3ba30fe5963` is based on the exact first-package tip `c51492f9a923e62c5f610d1410fefcc0f93d72f4`. The previously recorded `c51492f9f78bf1978fe95ca80f695ec9d29e4b63` does not exist in the local or GitHub graph and was a transcription error. GitHub `main` remained `d519413e6c676e93a4538ef0814f063b4f091606`; PRs #2, #3 and #4 remained open, draft and clean when verified. These repairs continue the audit rather than duplicating it.
 
 ## First package
 
@@ -42,6 +42,28 @@ Implementation commit `9fa5e0988d663f6b27165184447ed3ba30fe5963` validated on No
 
 No import, derivative generation, R2 write, deployment, DNS change, production mutation, live SoundCloud request or original-photo edit is authorized or performed by this package.
 
+## Third package — 2026-11-01
+
+- AUD-04: completes current-catalogue browser acceptance for all four retained flag combinations. Each profile builds its own strict-port artifact, verifies exact source/flags/catalogue identity, uses deterministic synthetic media, blocks SoundCloud, reports pass/fail/skip totals and fails on an empty or skipped selection.
+- The migrated feature contract covers autoplay eligibility, failed frames, warm-up ordering, normal playback, pause/manual/close/reload cleanup; segmented handoff/history, cancellation/retry, reclamation, stable resize/orientation correction and explicit resource bounds; and a dedicated combined autoplay/segment restoration path.
+- A demonstrated segmented-history regression was repaired: programmatic restoration could arm passive handoff and replace a Forward entry with the next year. Passive handoff now requires user wheel, touch, pointer or navigation-key intent; explicit Back/Forward restoration remains authoritative.
+- CI separates one quality job (install, unit/contract and strict TypeScript) from four browser jobs so expensive identical checks are not repeated. Every browser job supplies and verifies its intended flags and retains Playwright traces only on failure.
+- AUD-05: active README, instructions and runbooks now agree on commands, the matrix, diagnostics, publication authority and release conditions. Repository administration was inspected but not changed: `main` is unprotected, rulesets are empty, Actions permits all actions, and SHA pinning is not enforced.
+- AUD-08: no broad decomposition was justified. The only application change is the focused passive-handoff guard required by the reproduced regression; the current-catalogue suite is the durable test boundary.
+
+Implementation commit `3f448a8bf74b02560dcd629757b2b9c183451a4a` validated on Node 24.12.0/npm 11.6.2:
+
+- `npm ci`: passed from the committed lockfile; 123 packages installed.
+- `npm test`: 168 Vitest cases in 27 files plus 3 Node contract cases passed; 0 failed, 0 skipped.
+- TypeScript and the additional unused-local/parameter check: passed.
+- Four clean-source browser profiles passed with exact source, flags and catalogue identity and no skips: off/off 11 (`a1092a25004d606f6b570f694359ec5590a0f3cc80de143baa0be982692c9103`); on/off 12 (`10326face8b9d3ae75f4f6b8c2c4227690782a3e4da37a3edae59f07957354c0`); off/on 13 (`353043a066bc5023cfc817024751c54bfb28197ee9bfd68799d6c413eb680c37`); on/on 15 (`616138fa958ba35cce68f786a8f5722039930f989e937c088f93f40aec248ed2`). Each artifact contained 167 files; every profile had 0 failed and 0 skipped.
+- Catalogue file `6f16871644c4e8188177c7a91c093d356386d5e73ba67addd9852fb463ae2004`, catalogue tree `0ca202b9c692d442b343d0f7073e4ed36304fe93402be305ca79be470726044e` and lockfile `06855c41b52a3dc372a1f9e1dd003a51b7344450ecbc35e608ab4cdff237d2ee` remained unchanged.
+- Release audit accepted all 132,340 references with 0 unsafe keys; expected nonzero exit remains because the isolated repair worktree has no approved `generated/library` derivative set.
+
+Historical identities `76ae7305660fb3e66189266bb30a2248af819c93` and `6212af362da6d72d2cf31d6acfd067b98c1bfc22` are retained only inside dated historical reports; neither is reachable from the current local graph or GitHub commit API, so this package does not reinterpret or silently correct those owner-supplied historical claims. The audited source/tree pair `d519413e6c676e93a4538ef0814f063b4f091606` / `df32364c0cb80651e4fbe95bf9e441af5150fe5b` and earlier repair identities were reverified.
+
+No catalogue/media mutation, import, derivative generation, R2 write, deployment, DNS change, repository-administration change, live SoundCloud request or original-photo edit is authorized or performed by this package.
+
 ## Next executable package
 
-Migrate retained optional-feature browser suites and add their flag matrix to CI (AUD-04), reconcile the remaining historical runbooks/branch controls (AUD-05), then make only test-backed focused decompositions of the coupled archive/player modules (AUD-08). Owner input is still needed only for whether production `debug=1` remains a supported public support mode.
+Integrate the stacked repairs into one reviewed candidate branch without changing catalogue/media, run the clean four-profile CI matrix and exhaustive audit against the approved derivative tree, then validate the exact candidate against real media, production-equivalent headers and rollback in QA. Physical iPhone/WebKit acceptance remains required for the segmented scroll/history change. Owner input is still needed for production `debug=1` disposition and repository protection/ruleset policy.

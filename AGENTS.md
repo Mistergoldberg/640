@@ -24,7 +24,7 @@ Current keys contain -cv1- followed by a SHA-256 digest. `scripts/media-contract
 
 Use npm ci in a clean environment with the committed lockfile. Record Node/npm versions and any installation limitation. npm test and npm run build are the existing unit/build commands. TypeScript's strict mode is enabled; an additional unused-local/parameter check is useful.
 
-`npm run test:browser` is the deterministic current-catalogue gate. It derives years/photos from committed data, builds its own strict-port server and verifies the build identity. Historical feature suites still contain three-year assumptions and remain outside the default gate until explicitly fixture-backed or migrated. Report actual pass/fail/skip totals and build flags; do not reuse an unidentified server as release evidence.
+`npm run test:browser` is the deterministic default current-catalogue gate. `npm run test:browser:matrix` adds the migrated optional-feature contract for one explicitly supplied flag combination; CI runs all four off/off, on/off, off/on and on/on combinations. Every profile derives years/photos from committed data, builds its own strict-port server, verifies source/flags/catalogue identity and must contain at least one passing case with zero skips. Historical fixed-three-year suites remain outside these gates. Report actual pass/fail/skip totals and build flags; do not reuse an unidentified server as release evidence.
 
 Use synthetic media for isolated interaction checks and identify that limitation. It does not establish remote availability, image privacy, checksums, physical Safari behaviour or real-media geometry. Retain accessible keyboard/touch navigation, reduced-motion behaviour, bounded DOM/cache work, stable history and cleanup of timers/listeners.
 
@@ -37,3 +37,5 @@ Record source SHA, dirty state, lockfile/data hashes, build settings, runtime ve
 Production, DNS, R2 publication, deletion and promotion require authorization within the user's task and the applicable verified runbook. An audit request alone does not authorize deployment. Prepare and verify an exact candidate and rollback before promotion. Never broaden a media upload directory, use destructive sync, expose credentials or change unrelated shared hosting services.
 
 Historical deployment/phase/iOS reports describe their stated commits and dates. They must not override current code and fresh evidence. Update the current runbook and feature register when behaviour or tooling changes. Report what changed, validation performed and material remaining uncertainty.
+
+GitHub enforcement and written policy are separate evidence. As observed on 2026-11-01, `main` had no branch protection, the repository had no rulesets, and Actions allowed all actions without SHA-pinning enforcement. Do not describe review/CI requirements as administratively enforced until fresh repository inspection proves that state.

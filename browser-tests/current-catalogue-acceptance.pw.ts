@@ -1,16 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
-import { currentCatalogueFixture } from "./support/catalogue";
+import { publicFlagEnabled } from "../src/lib/publicFlag";
+import { committedCatalogueIdentity, currentCatalogueFixture, installSyntheticMedia } from "./support/catalogue";
 
 const fixture = currentCatalogueFixture();
-const JPEG = Buffer.from("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EB//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EB//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EB//2Q==", "base64");
-
-async function syntheticMedia(page: Page) {
-  await page.route("https://media.pixilation.org/**", (route) => route.fulfill({ status: 200, contentType: "image/jpeg", body: JPEG }));
-}
+const homepageAutoplayer = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
+const seamlessYearSegments = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS);
 
 async function waitForYear(page: Page, year: string) {
-  await expect(page.locator(`.collection-shell[data-active-year="${year}"][data-mounted-years="${year}"]`)).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(`.collection-shell[data-active-year="${year}"]`)).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await page.locator(".collection-shell").getAttribute("data-mounted-years"))?.split(",").includes(year)).toBe(true);
   await expect(page.locator(".photo-tile").first()).toBeVisible({ timeout: 20_000 });
 }
 
@@ -20,7 +19,7 @@ async function openPhoto(page: Page, photoId: string) {
   await expect.poll(() => page.locator(".player-image").last().evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
 }
 
-test.beforeEach(async ({ page }) => syntheticMedia(page));
+test.beforeEach(async ({ page }) => installSyntheticMedia(page));
 
 test("served artifact identity matches this source, runtime contract, flags, and catalogue", async ({ request, baseURL }) => {
   const response = await request.get(`${baseURL}/build-identity.json`);
@@ -31,18 +30,28 @@ test("served artifact identity matches this source, runtime contract, flags, and
   expect(identity.source.commit).toBe(expectedCommit);
   expect(identity.runtime.node).toMatch(/^v24\./);
   expect(identity.runtime.npm).toMatch(/^11\./);
-  expect(identity.settings).toEqual({ appBasePath: "/", mediaBaseUrl: "https://media.pixilation.org/", homepageAutoplayer: false, seamlessYearSegments: false });
-  expect(identity.catalogue.fileCount).toBeGreaterThan(100);
-  expect(identity.catalogue.treeSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(identity.settings).toEqual({ appBasePath: "/", mediaBaseUrl: "https://media.pixilation.org/", homepageAutoplayer, seamlessYearSegments });
+  expect(identity.catalogue).toEqual(committedCatalogueIdentity());
+  if (process.env.PIXILATION_EXPECT_CLEAN_BUILD === "1") expect(identity.source.dirty).toBe(false);
   expect(identity.artifacts.fileCount).toBeGreaterThan(100);
   expect(identity.artifacts.treeSha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
-test("root derives the newest year and keeps rendering bounded", async ({ page }) => {
+test("root follows the configured entry lifecycle and keeps rendering bounded", async ({ page }) => {
   await page.goto("/");
+  if (homepageAutoplayer) {
+    await expect(page.getByLabel("Photo player")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".player-image").last()).toHaveAttribute("data-player-photo-id", fixture.photos[0].id);
+    await expect(page).toHaveURL(/\/$/);
+  }
   await waitForYear(page, fixture.newest);
   await expect(page.getByLabel("Archive diagnostics")).toHaveCount(0);
-  await expect(page).toHaveURL(new RegExp(`year=${fixture.newest}`));
+  if (homepageAutoplayer) {
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(page.getByLabel("Photo player")).toHaveCount(0);
+  } else {
+    await expect(page).toHaveURL(new RegExp(`year=${fixture.newest}`));
+  }
   await expect(page.getByRole("heading", { name: fixture.newest, exact: true })).toBeVisible();
   expect(await page.locator(".photo-tile").count()).toBeLessThanOrEqual(100);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight / 2));
@@ -76,7 +85,7 @@ test("malformed catalogue shows public recovery and succeeds on retry", async ({
       await route.continue();
     }
   });
-  await page.goto("/");
+  await page.goto(`/?year=${fixture.newest}`);
   await expect(page.getByText("Catalogue data could not be loaded")).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry catalogue" })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("../private");
@@ -86,14 +95,18 @@ test("malformed catalogue shows public recovery and succeeds on retry", async ({
 });
 
 test("catalogue-derived adjacent year navigation preserves Back and Forward history", async ({ page }) => {
-  await page.goto("/");
+  await page.goto(`/?year=${fixture.newest}`);
   await waitForYear(page, fixture.newest);
   await page.getByRole("button", { name: `Older photos: ${fixture.adjacent}` }).click();
   await waitForYear(page, fixture.adjacent);
   await expect(page).toHaveURL(new RegExp(`year=${fixture.adjacent}`));
   await page.goBack();
   await waitForYear(page, fixture.newest);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(350);
+  await expect(page).toHaveURL(new RegExp(`year=${fixture.newest}`));
   await page.goForward();
+  await expect(page).toHaveURL(new RegExp(`year=${fixture.adjacent}`));
   await waitForYear(page, fixture.adjacent);
 });
 
