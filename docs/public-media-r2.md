@@ -1,107 +1,11 @@
-# 640x480 Public Media Release
+# Public media boundary
 
-This app publishes generated display and thumbnail derivatives only. Original source folders such as `2001`, `2013`, and future source-year folders stay local and must never be uploaded.
+This repository does not provide a supported R2 planning or publication command. The former broad uploader, dry-run command and legacy importer are retired fail-closed because they do not consume the current sealed package authority. Historical upload instructions must not be used as a current runbook.
 
-## Public Payload
+Public media consists only of approved display and thumbnail JPG derivatives referenced by the committed catalogue. Original photographs, private inventories, EXIF/GPS, credentials, import reports and caches remain outside Git, `dist`, public hosting and R2.
 
-Publish only:
+The authoritative workflow is the separately controlled `pixilation-import-plan` package process described in [publication-authority.md](publication-authority.md). Publication requires owner authority bound to an exact sealed package, package-bound credentials, a closed-world payload, a durable receipt and a sealed application candidate. This repository neither creates those records nor writes R2.
 
-```text
-generated/library/
-```
+`npm run release:audit` remains a supported read-only local verifier. It enforces the committed cv1 key contract and checks an available approved derivative tree. In an isolated checkout without that tree, the expected result is the explicit missing-media-root blocker. Zero unsafe catalogue keys does not prove remote existence, byte hashes, metadata privacy, cache headers or decodability.
 
-Do not publish:
-
-```text
-2001/
-2013/
-dev-01/
-generated/reports/
-```
-
-Run this before planning any upload:
-
-```bash
-npm run release:audit
-```
-
-The audit writes:
-
-```text
-generated/reports/public-release-audit.json
-```
-
-The report is ignored by Git and is not browser-accessible.
-
-## Cloudflare Setup
-
-Create these manually in Cloudflare before any real upload:
-
-1. Create a dedicated R2 Standard bucket for generated public media.
-2. Create a bucket-scoped API token with the minimum permissions needed for object listing, reading, and writing in that bucket.
-3. Configure a custom public media domain for the bucket.
-4. Do not use an `r2.dev` URL as the final production media URL.
-5. Configure public access only for generated derivatives in this bucket.
-6. Set conservative media caching because asset keys are stable and may be reused if a source photograph changes.
-
-Suggested response headers:
-
-```text
-Content-Type: image/jpeg
-Cache-Control: public, max-age=3600, stale-while-revalidate=86400
-```
-
-If the importer later changes to content-versioned asset keys, the cache policy can become longer-lived and immutable.
-
-CORS is not access control. These photographs are intentionally public. The current app uses normal browser image loading only, so start with the narrowest CORS rules needed by the custom site origin and methods `GET` and `HEAD`.
-
-## Environment
-
-Store real values only in your shell or ignored local env files. Do not commit credentials.
-
-```bash
-export R2_ACCOUNT_ID=""
-export R2_ACCESS_KEY_ID=""
-export R2_SECRET_ACCESS_KEY=""
-export R2_BUCKET=""
-export R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-export VITE_MEDIA_BASE_URL="https://media.example.com/"
-```
-
-For local development, leave `VITE_MEDIA_BASE_URL` blank so Vite serves:
-
-```text
-http://127.0.0.1:5173/media/
-```
-
-For production builds, set `VITE_MEDIA_BASE_URL` to the custom media domain.
-
-## Dry Run
-
-The dry run performs no upload and no deletion. It runs the release audit first and refuses to plan an upload unless the audit passes.
-
-```bash
-npm run media:upload:dry-run
-```
-
-## Future Upload
-
-Install `rclone`, export the environment variables above, run a fresh dry-run, then run:
-
-```bash
-npm run media:upload
-```
-
-The upload script uses `rclone copy` semantics. It does not delete remote objects and it does not print credentials.
-
-The equivalent remote configuration is provided to rclone through environment variables:
-
-```text
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=<from R2_ACCESS_KEY_ID>
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<from R2_SECRET_ACCESS_KEY>
-RCLONE_CONFIG_R2_ENDPOINT=<from R2_ENDPOINT>
-```
-
-Do not run `rclone sync` for this archive unless deletion behavior has been reviewed separately.
+Never place credentials in source, environment examples, logs or build artifacts; broaden an approved payload; use destructive synchronization; or infer publication authority from synthetic browser acceptance. Real-media and remote-delivery verification belongs to the exact QA candidate and does not clear until the approved package and receipt are available.

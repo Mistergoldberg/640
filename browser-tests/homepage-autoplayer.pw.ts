@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { publicFlagEnabled } from "../src/lib/publicFlag";
 
-const enabled = process.env.VITE_HOMEPAGE_AUTOPLAYER === "1";
+const enabled = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
 test.skip(!enabled, "homepage autoplay tests require VITE_HOMEPAGE_AUTOPLAYER=1");
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("pixilation-player-onboarding-v1", "1"));

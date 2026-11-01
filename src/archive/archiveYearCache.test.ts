@@ -6,7 +6,7 @@ import {
   YEAR_COLLECTION_CACHE_CAPACITY
 } from "./archiveYearCache";
 import { loadAlbumResults } from "./useArchiveYearCache";
-import type { AlbumSummary } from "../types";
+import type { AlbumSummary, YearIndex } from "../types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -56,13 +56,14 @@ describe("bounded archive year cache", () => {
       };
     });
     const albums: AlbumSummary[] = Array.from({ length: 8 }, (_, index) => ({
-      id: `album-${index}`,
+      id: `2013-album-${index}`,
       name: `Album ${index}`,
       count: 0,
-      manifestUrl: `data/test/album-${index}.json`
+      manifestUrl: `data/2013/albums/2013-album-${index}.json`
     }));
+    const sourceIndex: YearIndex = { year: "2013", scannedCount: 0, albums, sequence: [] };
 
-    const results = await loadAlbumResults(albums, new AbortController().signal, 3);
+    const results = await loadAlbumResults(sourceIndex, new AbortController().signal, 3);
 
     expect(maxActive).toBeLessThanOrEqual(3);
     expect(fetched).toHaveLength(8);

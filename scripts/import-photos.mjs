@@ -1099,6 +1099,11 @@ async function writeSourceSelectionReport(year, sourceSelection) {
 }
 
 async function main() {
+  throw new Error(
+    "Retired legacy importer: it emits the pre-cv1 media contract. " +
+    "Use the package-bound pixilation-import-plan workflow documented in docs/publication-authority.md."
+  );
+  /* c8 ignore next 2 -- retained only as historical implementation evidence */
   const startedAt = Date.now();
   const args = parseArgs(process.argv.slice(2));
   const sourceScope = await resolveSourceScope(args);
