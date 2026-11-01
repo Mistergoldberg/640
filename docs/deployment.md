@@ -2,6 +2,12 @@
 >
 > Current repair note: legacy import and broad-upload commands below are retired fail-closed. Use [publication authority](publication-authority.md), [repair state](repair-state-2026-10-31.md), and [browser acceptance](browser-acceptance.md) for current operational boundaries. No production action is authorized by those local repair documents.
 
+## Current release-candidate conditions
+
+The deployment narrative below is dated historical evidence for its stated 2026-09 release. It is not evidence for the current 24-year catalogue or stacked repair branches. A future candidate must first be integrated at one clean reviewed commit, record exact public flags and `dist/build-identity.json`, pass the quality job and all four current-catalogue browser profiles, and pass `npm run release:audit` against the approved derivative tree. It must then pass real-media, production-equivalent header/cache, rollback and physical iPhone/WebKit checks in QA. Synthetic media, a green draft-PR matrix, or the historical rollback path cannot independently authorize promotion.
+
+As observed on 2026-11-01, GitHub `main` had no branch protection and the repository had no rulesets. Actions was enabled for all actions without SHA-pinning enforcement. These are observations, not desired-policy enforcement; no administration setting was changed.
+
 # 640×480 deployment
 
 ## Status
@@ -139,8 +145,10 @@ Run from the repository root:
 npm ci
 npm run dev
 npm test
+npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 npm run build
 npm run test:browser
+npm run test:browser:matrix # one explicitly supplied flag profile; CI runs all four
 npm run release:audit
 ```
 
@@ -253,17 +261,11 @@ the long playback test was not repeated during the symlink-only promotion.
 
 ## Adding future years and curator corrections
 
-Keep each new source-year folder local and ignored. Review the importer options
-in `scripts/import-photos.mjs`, import the intended year with `npm run import:year
--- --year YYYY`, and inspect the private import report. The catalogue drives year
-navigation; do not hard-code a year list in components.
-
-Audit all public manifests and derivatives again, review labels, verify counts,
-publish only generated library keys, and make a new committed static release.
-Never publish import reports or caches. Adding a year changes expected release
-counts, so record the new audited totals before publication.
-
-Future permanent corrections remain a separate local curator workflow: edit
-correction instructions locally, regenerate approved derivatives without modifying
-originals, re-audit, republish affected media and update relevant caches. No public
-admin or write capability is authorized by this deployment.
+The import commands in this repository are retired fail-closed and are not a
+supported future-year or correction workflow. Use only the separately controlled,
+package-bound authority described in [publication-authority.md](publication-authority.md).
+That workflow must keep originals/private reports outside public output, seal and
+approve the exact package, publish through package-bound credentials, and return a
+durable receipt before an application candidate can be activated. The catalogue
+drives navigation; do not hard-code a year list. No public admin or write capability
+is authorized by this deployment.

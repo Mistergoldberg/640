@@ -13,6 +13,7 @@
     "test": "vitest run && npm run test:contracts",
     "test:contracts": "node --test scripts/*.node-test.mjs",
     "test:browser": "playwright test",
+    "test:browser:matrix": "PIXILATION_BROWSER_MATRIX=1 playwright test",
     "build": "node scripts/build.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "import:year": "node scripts/retired-publication-command.mjs import",

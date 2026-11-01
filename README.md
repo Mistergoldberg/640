@@ -9,6 +9,7 @@ Start with [the 2026-10-31 audit and source baseline](docs/audit-baseline-2026-1
 ```sh
 npm ci
 npm test
+npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 npm run build
 npm run test:browser
 npm run dev
@@ -36,7 +37,16 @@ Builds use the runtime pinned in `.nvmrc` and write `dist/build-identity.json` w
 
 The current catalogue uses content-versioned cv1 media keys. The release auditor now validates that exact contract. The legacy importer and broad uploader are retired fail-closed; their npm commands cannot import, plan or publish. Publication authority belongs to the sealed, package-bound workflow documented in [publication authority](docs/publication-authority.md).
 
-`npm run test:browser` is the deterministic current-catalogue gate. Historical feature suites with former three-year assumptions remain outside that default gate until supplied with their explicit fixture or migrated.
+`npm run test:browser` is the deterministic default current-catalogue gate. `npm run test:browser:matrix` adds current-catalogue-derived optional-feature acceptance for the feature settings supplied to that process. CI runs it once for each supported combination:
+
+| Homepage autoplay | Seamless year segments | Environment |
+| --- | --- | --- |
+| Off | Off | `VITE_HOMEPAGE_AUTOPLAYER=0 VITE_SEAMLESS_YEAR_SEGMENTS=0` |
+| On | Off | `VITE_HOMEPAGE_AUTOPLAYER=1 VITE_SEAMLESS_YEAR_SEGMENTS=0` |
+| Off | On | `VITE_HOMEPAGE_AUTOPLAYER=0 VITE_SEAMLESS_YEAR_SEGMENTS=1` |
+| On | On | `VITE_HOMEPAGE_AUTOPLAYER=1 VITE_SEAMLESS_YEAR_SEGMENTS=1` |
+
+Each profile builds its own strict-port artifact and verifies source, dirty state when required, exact flags and the committed catalogue digest before testing. The acceptance reporter fails an empty selection or any skipped case. Older fixed-2013/2002/2001 suites remain historical evidence and are not counted by these commands.
 
 Runtime loading enforces canonical catalogue/manifest paths, exact cv1 keys, bounded integer dimensions/counts/order, unique IDs, album membership and sequence consistency. Malformed catalogue data presents a public retry action; album failures remain isolated and retryable. Diagnostics remain available with `debug=1`, but copied/downloaded reports minimize browser information and redact URL values and error details. Whether production diagnostics remain a public support mode or become QA-only is still an owner decision.
 
