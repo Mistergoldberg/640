@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { inspectMediaKey, isSupportedMediaKey } from "./media-contract.mjs";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(SCRIPT_ROOT, "..");
@@ -163,10 +164,6 @@ function derivativeType(assetKey) {
   if (/\/thumbs\//.test(assetKey)) return "thumbs";
   if (/\/display\//.test(assetKey)) return "display";
   return "unknown";
-}
-
-function isSafeAssetKey(assetKey) {
-  return /^(?:19|20)\d{2}\/(?:thumbs|display)\/(?:19|20)\d{2}-[a-f0-9]{14}\.(?:jpg|jpeg|png|webp|gif|tif|tiff|heic|heif)$/i.test(assetKey);
 }
 
 function inspectJpegMarkers(buffer) {
@@ -352,9 +349,10 @@ async function auditPublicData(report) {
           addSample(report.manifests.photosMissingFromSequence, { year: yearEntry.year, id: photo.id });
         }
 
-        for (const key of [photo.thumbnailKey, photo.displayKey]) {
-          if (typeof key !== "string" || !isSafeAssetKey(key)) {
-            addSample(report.media.unsafeAssetKeys, { year: yearEntry.year, photoId: photo.id, key });
+        for (const [derivative, key] of [["thumbs", photo.thumbnailKey], ["display", photo.displayKey]]) {
+          const inspection = inspectMediaKey(key, { year: yearEntry.year, photoId: photo.id, derivative });
+          if (!inspection.valid) {
+            addSample(report.media.unsafeAssetKeys, { year: yearEntry.year, photoId: photo.id, key, reason: inspection.reason });
           } else {
             referencedKeys.add(key);
           }
@@ -426,7 +424,7 @@ async function auditMedia(report, referencedKeys, photoDimensionsByDisplayKey) {
     report.media.countsByDerivativeType[type] = (report.media.countsByDerivativeType[type] || 0) + 1;
     report.media.countsByFormat[formatBucket] = (report.media.countsByFormat[formatBucket] || 0) + 1;
 
-    if (!ALLOWED_EXTENSIONS.has(extension) || !isSafeAssetKey(key)) {
+    if (!ALLOWED_EXTENSIONS.has(extension) || !isSupportedMediaKey(key)) {
       addSample(report.media.unsafeAssetKeys, { key, reason: "unexpected generated media path" });
     }
 

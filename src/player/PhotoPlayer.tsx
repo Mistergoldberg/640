@@ -20,6 +20,7 @@ import { usePlaybackClock } from "./usePlaybackClock";
 import { playerRotationReducer, rotationForPhoto, type RotationDirection } from "./playerRotation";
 import { settledRange, usableRange } from "./homepageAutoplay";
 import { PlayerOnboardingTour } from "./PlayerOnboardingTour";
+import { soundCloudApiLoader, type SoundCloudWidget, type SoundCloudWidgetFactory } from "./soundCloudApi";
 import {
   createPlayerOnboardingState,
   isPlayerOnboardingInstructionPhase,
@@ -33,27 +34,10 @@ import {
 
 const PRELOAD_AHEAD = 30;
 const PRELOAD_BEHIND = 8;
-const SOUNDCLOUD_WIDGET_API_URL = "https://w.soundcloud.com/player/api.js";
 const SOUNDCLOUD_EMBED_URL =
   "https://w.soundcloud.com/player/?url=https%3A%2F%2Fapi.soundcloud.com%2Fplaylists%2F2293150329&auto_play=true&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=false&show_artwork=false";
 
 type ShareStatus = "idle" | "copied" | "failed";
-
-interface SoundCloudWidget {
-  bind(eventName: string, listener: () => void): void;
-  pause(): void;
-  play(): void;
-}
-
-interface SoundCloudWidgetFactory {
-  (iframe: HTMLIFrameElement): SoundCloudWidget;
-  Events: {
-    FINISH: string;
-    PAUSE: string;
-    PLAY: string;
-    READY: string;
-  };
-}
 
 declare global {
   interface Window {
@@ -78,8 +62,6 @@ interface PhotoPlayerProps {
   launchMode?: "standard" | "homepage-autoplay";
 }
 
-let soundCloudApiPromise: Promise<void> | null = null;
-
 function clampIndex(index: number, total: number) {
   if (total <= 0) {
     return 0;
@@ -90,38 +72,6 @@ function clampIndex(index: number, total: number) {
 
 function canPause(status: PlayerState["status"]) {
   return status === "playing" || status === "buffering" || status === "temporarily-paused";
-}
-
-function loadSoundCloudApi() {
-  if (typeof window === "undefined") {
-    return Promise.resolve();
-  }
-
-  if (window.SC?.Widget) {
-    return Promise.resolve();
-  }
-
-  if (soundCloudApiPromise) {
-    return soundCloudApiPromise;
-  }
-
-  soundCloudApiPromise = new Promise((resolve, reject) => {
-    const existingScript = document.querySelector<HTMLScriptElement>(`script[src="${SOUNDCLOUD_WIDGET_API_URL}"]`);
-    if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(), { once: true });
-      existingScript.addEventListener("error", () => reject(new Error("SoundCloud player failed to load")), { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = SOUNDCLOUD_WIDGET_API_URL;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("SoundCloud player failed to load"));
-    document.head.appendChild(script);
-  });
-
-  return soundCloudApiPromise;
 }
 
 function playerShareUrl(photo: Photo, scope: PlayerScope) {
@@ -250,6 +200,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const [photoRotations, rotationDispatch] = useReducer(playerRotationReducer, {});
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hasMusicLoaded, setHasMusicLoaded] = useState(false);
+  const [musicLoadAttempt, setMusicLoadAttempt] = useState(0);
   const [shouldPlayMusic, setShouldPlayMusic] = useState(false);
   const [isMusicWidgetReady, setIsMusicWidgetReady] = useState(false);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
@@ -274,6 +225,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const [cacheRevision, setCacheRevision] = useState(0);
   const musicIframeRef = useRef<HTMLIFrameElement | null>(null);
   const soundCloudWidgetRef = useRef<SoundCloudWidget | null>(null);
+  const soundCloudCleanupRef = useRef<(() => void) | null>(null);
   const stateRef = useRef<PlayerState>(playerState);
   const currentIndexRef = useRef(playerState.currentIndex);
   const currentImageRef = useRef<HTMLImageElement | null>(null);
@@ -821,6 +773,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     const nextValue = !shouldPlayMusic;
     if (nextValue) {
       setHasMusicLoaded(true);
+      if (!isMusicWidgetReady) setMusicLoadAttempt((current) => current + 1);
     }
 
     setShouldPlayMusic(nextValue);
@@ -829,7 +782,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     } else {
       soundCloudWidgetRef.current?.pause();
     }
-  }, [revealControls, shouldPlayMusic]);
+  }, [isMusicWidgetReady, revealControls, shouldPlayMusic]);
 
   const showShareStatus = useCallback((nextStatus: ShareStatus) => {
     setShareStatus(nextStatus);
@@ -1149,7 +1102,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     let isMounted = true;
     setIsMusicWidgetReady(false);
 
-    loadSoundCloudApi()
+    soundCloudApiLoader.load()
       .then(() => {
         if (!isMounted || !window.SC?.Widget || !musicIframeRef.current) {
           return;
@@ -1159,41 +1112,54 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         const events = window.SC.Widget.Events;
         soundCloudWidgetRef.current = widget;
 
-        widget.bind(events.READY, () => {
+        const ready = () => {
           if (isMounted) {
             setIsMusicWidgetReady(true);
           }
-        });
-        widget.bind(events.PLAY, () => {
+        };
+        const play = () => {
           if (isMounted) {
             setIsMusicPlaying(true);
           }
-        });
-        widget.bind(events.PAUSE, () => {
+        };
+        const pause = () => {
           if (isMounted) {
             setIsMusicPlaying(false);
           }
-        });
-        widget.bind(events.FINISH, () => {
+        };
+        const finish = () => {
           if (isMounted) {
             setShouldPlayMusic(false);
             setIsMusicPlaying(false);
           }
-        });
+        };
+        widget.bind(events.READY, ready);
+        widget.bind(events.PLAY, play);
+        widget.bind(events.PAUSE, pause);
+        widget.bind(events.FINISH, finish);
+        soundCloudCleanupRef.current = () => {
+          widget.unbind?.(events.READY, ready);
+          widget.unbind?.(events.PLAY, play);
+          widget.unbind?.(events.PAUSE, pause);
+          widget.unbind?.(events.FINISH, finish);
+        };
       })
       .catch(() => {
         if (isMounted) {
           setShouldPlayMusic(false);
           setIsMusicPlaying(false);
+          setIsMusicWidgetReady(false);
         }
       });
 
     return () => {
       isMounted = false;
+      soundCloudCleanupRef.current?.();
+      soundCloudCleanupRef.current = null;
       // Removing the iframe stops playback; its window is already gone during cleanup.
       soundCloudWidgetRef.current = null;
     };
-  }, [hasMusicLoaded]);
+  }, [hasMusicLoaded, musicLoadAttempt]);
 
   useEffect(() => {
     if (!isMusicWidgetReady) {

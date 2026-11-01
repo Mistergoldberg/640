@@ -1,14 +1,9 @@
 export const DIAGNOSTIC_EVENT_LIMIT = 200;
+const REDACTED = "[redacted]";
 
 export type DiagnosticOverlay =
-  | "year"
-  | "album"
-  | "rows"
-  | "anchor"
-  | "measurement"
-  | "scrubber-hit"
-  | "scrubber-target"
-  | "safe-area";
+  | "year" | "album" | "rows" | "anchor" | "measurement"
+  | "scrubber-hit" | "scrubber-target" | "safe-area";
 
 export interface DiagnosticEvent {
   sequence: number;
@@ -22,8 +17,7 @@ export interface DiagnosticSnapshot {
   schema: "640x480-year-window-qa-v1";
   sessionStartedAt: string;
   buildCommit: string;
-  userAgent: string;
-  platform: Record<string, unknown>;
+  capabilities: { maxTouchPoints: number; standalone: boolean; mobile: boolean };
   url: string;
   navigationType: string;
   scrollY: number;
@@ -64,13 +58,7 @@ const listeners = new Set<() => void>();
 const sessionStart = new Date();
 const sessionStartPerformance = typeof performance === "undefined" ? 0 : performance.now();
 let sequence = 0;
-let initialized = false;
 let scrollTimer = 0;
-
-function publishDiagnosticsSnapshot() {
-  if (typeof window === "undefined" || !enabled) return;
-  (window as typeof window & { __PIXILATION_ARCHIVE_DIAGNOSTICS__?: DiagnosticSnapshot }).__PIXILATION_ARCHIVE_DIAGNOSTICS__ = snapshot;
-}
 
 export function diagnosticModeEnabled(search = typeof window === "undefined" ? "" : window.location.search) {
   return new URLSearchParams(search).get("debug") === "1";
@@ -78,26 +66,61 @@ export function diagnosticModeEnabled(search = typeof window === "undefined" ? "
 
 const enabled = diagnosticModeEnabled();
 
+export function redactDiagnosticUrl(value: string) {
+  try {
+    const url = new URL(value, "https://pixilation.org");
+    const redacted = new URL(`${url.origin}${url.pathname}`);
+    for (const key of [...new Set(url.searchParams.keys())].sort()) redacted.searchParams.set(key, REDACTED);
+    return `${redacted.origin}${redacted.pathname}${redacted.search}`;
+  } catch {
+    return REDACTED;
+  }
+}
+
+const sensitiveKey = /(?:authorization|cookie|credential|email|error|exception|href|message|password|path|query|reason|secret|stack|token|url)/i;
+
+function sanitizedValue(value: unknown, key = "", depth = 0): unknown {
+  if (depth > 6) return "[truncated]";
+  if (sensitiveKey.test(key)) {
+    if (/(?:href|url)/i.test(key) && typeof value === "string") return redactDiagnosticUrl(value);
+    return REDACTED;
+  }
+  if (value instanceof Error) return { name: value.name, detail: REDACTED };
+  if (typeof value === "string") {
+    if (/^(?:https?:\/\/|file:\/\/)/i.test(value)) return redactDiagnosticUrl(value);
+    if (/(?:\/Users\/|\\Users\\|\/home\/)/i.test(value)) return REDACTED;
+    return value.slice(0, 240);
+  }
+  if (typeof value === "function" || typeof value === "symbol") return undefined;
+  if (Array.isArray(value)) return value.slice(0, 250).map((entry) => sanitizedValue(entry, "", depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entry]) => [entryKey, sanitizedValue(entry, entryKey, depth + 1)]));
+  }
+  return value;
+}
+
+export function sanitizeDiagnosticData(data: Record<string, unknown> | undefined) {
+  return data ? sanitizedValue(data) as Record<string, unknown> : undefined;
+}
+
 function navigationType() {
   const entry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
   return entry?.type || "unknown";
 }
 
-function platformInformation(): Record<string, unknown> {
+function browserCapabilities() {
   const nav = navigator as Navigator & { userAgentData?: { mobile?: boolean; platform?: string } };
   return {
-    platform: navigator.platform || "unknown",
     maxTouchPoints: navigator.maxTouchPoints || 0,
-    language: navigator.language || "unknown",
     standalone: Boolean((navigator as Navigator & { standalone?: boolean }).standalone),
-    userAgentData: nav.userAgentData ? { mobile: nav.userAgentData.mobile, platform: nav.userAgentData.platform } : null
+    mobile: Boolean(nav.userAgentData?.mobile)
   };
 }
 
 function readViewport() {
   const visual = window.visualViewport;
   return {
-    url: window.location.href,
+    url: redactDiagnosticUrl(window.location.href),
     scrollY: Math.round(window.scrollY * 100) / 100,
     documentHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0),
     layoutViewport: { width: window.innerWidth, height: window.innerHeight },
@@ -113,104 +136,34 @@ function readViewport() {
 }
 
 const initialOverlays: Record<DiagnosticOverlay, boolean> = {
-  year: false,
-  album: false,
-  rows: false,
-  anchor: false,
-  measurement: false,
-  "scrubber-hit": false,
-  "scrubber-target": false,
-  "safe-area": false
+  year: false, album: false, rows: false, anchor: false, measurement: false,
+  "scrubber-hit": false, "scrubber-target": false, "safe-area": false
+};
+
+const emptySnapshot = {
+  activeYear: null, activeAlbum: null, loadedYears: [], cachedYears: [], prefetchedYears: [], loadingYears: [], mountedYears: [],
+  yearStates: {}, virtualRange: null, mountedRows: 0, mountedPhotos: 0, loadedImages: 0, inactiveImageElements: 0,
+  yearCacheEntries: 0, retainedYearLayouts: [], stableAnchor: null, restoration: null, restorationTarget: null, scrubber: null,
+  pointerCapture: null, lastProgrammaticScroll: null, lastLayoutCorrection: null, lastResize: null, observerCount: 0,
+  lastStateTimestamp: sessionStart.toISOString(), overlays: initialOverlays, events: []
 };
 
 let snapshot: DiagnosticSnapshot = typeof window === "undefined" ? {
-  schema: "640x480-year-window-qa-v1",
-  sessionStartedAt: sessionStart.toISOString(),
-  buildCommit: "unknown",
-  userAgent: "unknown",
-  platform: {},
-  url: "",
-  navigationType: "unknown",
-  scrollY: 0,
-  documentHeight: 0,
-  layoutViewport: { width: 0, height: 0 },
-  visualViewport: null,
-  orientation: "unknown",
-  activeYear: null,
-  activeAlbum: null,
-  loadedYears: [],
-  cachedYears: [],
-  prefetchedYears: [],
-  loadingYears: [],
-  mountedYears: [],
-  yearStates: {},
-  virtualRange: null,
-  mountedRows: 0,
-  mountedPhotos: 0,
-  loadedImages: 0,
-  inactiveImageElements: 0,
-  yearCacheEntries: 0,
-  retainedYearLayouts: [],
-  stableAnchor: null,
-  restoration: null,
-  restorationTarget: null,
-  scrubber: null,
-  pointerCapture: null,
-  lastProgrammaticScroll: null,
-  lastLayoutCorrection: null,
-  lastResize: null,
-  observerCount: 0,
-  lastStateTimestamp: sessionStart.toISOString(),
-  overlays: initialOverlays,
-  events: []
+  schema: "640x480-year-window-qa-v1", sessionStartedAt: sessionStart.toISOString(), buildCommit: "unknown",
+  capabilities: { maxTouchPoints: 0, standalone: false, mobile: false }, url: "", navigationType: "unknown", scrollY: 0, documentHeight: 0, layoutViewport: { width: 0, height: 0 },
+  visualViewport: null, orientation: "unknown", ...emptySnapshot
 } : {
-  schema: "640x480-year-window-qa-v1",
-  sessionStartedAt: sessionStart.toISOString(),
-  buildCommit: import.meta.env.VITE_BUILD_COMMIT || "local-uncommitted",
-  userAgent: navigator.userAgent,
-  platform: platformInformation(),
-  ...readViewport(),
-  navigationType: navigationType(),
-  activeYear: null,
-  activeAlbum: null,
-  loadedYears: [],
-  cachedYears: [],
-  prefetchedYears: [],
-  loadingYears: [],
-  mountedYears: [],
-  yearStates: {},
-  virtualRange: null,
-  mountedRows: 0,
-  mountedPhotos: 0,
-  loadedImages: 0,
-  inactiveImageElements: 0,
-  yearCacheEntries: 0,
-  retainedYearLayouts: [],
-  stableAnchor: null,
-  restoration: null,
-  restorationTarget: null,
-  scrubber: null,
-  pointerCapture: null,
-  lastProgrammaticScroll: null,
-  lastLayoutCorrection: null,
-  lastResize: null,
-  observerCount: 0,
-  lastStateTimestamp: sessionStart.toISOString(),
-  overlays: initialOverlays,
-  events: []
+  schema: "640x480-year-window-qa-v1", sessionStartedAt: sessionStart.toISOString(), buildCommit: import.meta.env.VITE_BUILD_COMMIT || "local-uncommitted",
+  capabilities: browserCapabilities(), ...readViewport(), navigationType: navigationType(), ...emptySnapshot
 };
+
+function publishDiagnosticsSnapshot() {
+  if (typeof window === "undefined" || !enabled) return;
+  (window as typeof window & { __PIXILATION_ARCHIVE_DIAGNOSTICS__?: DiagnosticSnapshot }).__PIXILATION_ARCHIVE_DIAGNOSTICS__ = snapshot;
+}
 
 function emit() {
   for (const listener of listeners) listener();
-}
-
-function normalizeData(data: Record<string, unknown> | undefined) {
-  if (!data) return undefined;
-  return JSON.parse(JSON.stringify(data, (_key, value) => {
-    if (value instanceof Error) return { name: value.name, message: value.message };
-    if (typeof value === "function" || typeof value === "symbol") return undefined;
-    return value;
-  })) as Record<string, unknown>;
 }
 
 export function boundedDiagnosticEvents(events: DiagnosticEvent[], event: DiagnosticEvent, limit = DIAGNOSTIC_EVENT_LIMIT) {
@@ -227,10 +180,12 @@ export function updateDiagnostics(fields: Partial<Omit<DiagnosticSnapshot, "even
       type: eventType,
       at: timestamp,
       elapsedMs: Math.round((performance.now() - sessionStartPerformance) * 100) / 100,
-      data: normalizeData(data)
+      data: sanitizeDiagnosticData(data)
     });
   }
-  snapshot = { ...snapshot, ...(typeof window === "undefined" ? {} : readViewport()), ...fields, events, lastStateTimestamp: timestamp };
+  const viewport = typeof window === "undefined" ? {} : readViewport();
+  const safeFields = sanitizedValue(fields) as Partial<Omit<DiagnosticSnapshot, "events" | "overlays">>;
+  snapshot = { ...snapshot, ...viewport, ...safeFields, url: typeof window === "undefined" ? snapshot.url : (viewport as ReturnType<typeof readViewport>).url, events, lastStateTimestamp: timestamp };
   publishDiagnosticsSnapshot();
   emit();
 }
@@ -242,17 +197,11 @@ export function recordDiagnostic(type: string, data?: Record<string, unknown>) {
 export function setDiagnosticOverlay(name: DiagnosticOverlay, active: boolean) {
   if (!enabled) return;
   document.documentElement.toggleAttribute(`data-debug-${name}`, active);
-  snapshot = {
-    ...snapshot,
-    overlays: { ...snapshot.overlays, [name]: active },
-    lastStateTimestamp: new Date().toISOString()
-  };
+  snapshot = { ...snapshot, overlays: { ...snapshot.overlays, [name]: active }, lastStateTimestamp: new Date().toISOString() };
   recordDiagnostic("overlay-change", { name, active });
 }
 
-export function getDiagnostics() {
-  return snapshot;
-}
+export function getDiagnostics() { return snapshot; }
 
 export function subscribeDiagnostics(listener: () => void) {
   listeners.add(listener);
@@ -266,8 +215,46 @@ export function resetDiagnostics() {
   recordDiagnostic("diagnostics-reset");
 }
 
+export function diagnosticsExport(source: DiagnosticSnapshot = snapshot) {
+  return {
+    exportedAt: new Date().toISOString(),
+    schema: source.schema,
+    sessionStartedAt: source.sessionStartedAt,
+    buildCommit: source.buildCommit,
+    capabilities: source.capabilities,
+    url: redactDiagnosticUrl(source.url),
+    navigationType: source.navigationType,
+    scrollY: source.scrollY,
+    documentHeight: source.documentHeight,
+    layoutViewport: source.layoutViewport,
+    visualViewport: source.visualViewport,
+    orientation: source.orientation,
+    activeYear: source.activeYear,
+    activeAlbum: source.activeAlbum,
+    loadedYears: source.loadedYears,
+    cachedYears: source.cachedYears,
+    loadingYears: source.loadingYears,
+    mountedYears: source.mountedYears,
+    yearStates: source.yearStates,
+    virtualRange: sanitizeDiagnosticData(source.virtualRange || undefined) || null,
+    mountedRows: source.mountedRows,
+    mountedPhotos: source.mountedPhotos,
+    loadedImages: source.loadedImages,
+    inactiveImageElements: source.inactiveImageElements,
+    yearCacheEntries: source.yearCacheEntries,
+    retainedYearLayouts: source.retainedYearLayouts,
+    stableAnchor: sanitizeDiagnosticData(source.stableAnchor || undefined) || null,
+    restoration: sanitizeDiagnosticData(source.restoration || undefined) || null,
+    restorationTarget: sanitizeDiagnosticData(source.restorationTarget || undefined) || null,
+    observerCount: source.observerCount,
+    lastStateTimestamp: source.lastStateTimestamp,
+    overlays: source.overlays,
+    events: source.events.map((event) => ({ ...event, data: sanitizeDiagnosticData(event.data) }))
+  };
+}
+
 export function diagnosticsJson() {
-  return JSON.stringify({ exportedAt: new Date().toISOString(), ...snapshot }, null, 2);
+  return JSON.stringify(diagnosticsExport(), null, 2);
 }
 
 export function registerArchiveObserver(kind: string) {
@@ -282,15 +269,29 @@ export function registerArchiveObserver(kind: string) {
 }
 
 function errorDetails(reason: unknown) {
-  if (reason instanceof Error) return { name: reason.name, message: reason.message };
-  return { message: typeof reason === "string" ? reason.slice(0, 500) : "Non-Error rejection" };
+  return { name: reason instanceof Error ? reason.name : "NonErrorRejection", detail: REDACTED };
 }
 
-export function initializeDiagnostics() {
-  if (!enabled || initialized) return;
-  initialized = true;
-  recordDiagnostic("init", { buildCommit: snapshot.buildCommit, navigationType: snapshot.navigationType });
+export function createIdempotentSetup(setup: () => () => void) {
+  let active = false;
+  let cleanup: (() => void) | null = null;
+  const dispose = () => {
+    if (!active) return;
+    active = false;
+    const current = cleanup;
+    cleanup = null;
+    current?.();
+  };
+  return () => {
+    if (!active) {
+      active = true;
+      cleanup = setup();
+    }
+    return dispose;
+  };
+}
 
+const initializeDiagnosticListeners = createIdempotentSetup(() => {
   const sampleScroll = () => {
     if (scrollTimer) return;
     scrollTimer = window.setTimeout(() => {
@@ -308,15 +309,38 @@ export function initializeDiagnostics() {
     const resize = { at: new Date().toISOString(), source: "visual-viewport", visualViewport: fields.visualViewport };
     updateDiagnostics({ ...fields, lastResize: resize }, "visual-viewport-change", resize);
   };
+  const orientationChange = () => updateDiagnostics(readViewport(), "orientation-change", { orientation: readViewport().orientation });
+  const unhandledError = (event: ErrorEvent) => recordDiagnostic("unhandled-error", errorDetails(event.error || event.message));
+  const unhandledRejection = (event: PromiseRejectionEvent) => recordDiagnostic("unhandled-rejection", errorDetails(event.reason));
+
   window.addEventListener("scroll", sampleScroll, { passive: true });
   window.addEventListener("resize", viewportResize, { passive: true });
-  window.addEventListener("orientationchange", () => updateDiagnostics(readViewport(), "orientation-change", { orientation: readViewport().orientation }), { passive: true });
+  window.addEventListener("orientationchange", orientationChange, { passive: true });
   window.visualViewport?.addEventListener("resize", visualViewportChange, { passive: true });
   window.visualViewport?.addEventListener("scroll", visualViewportChange, { passive: true });
-  window.addEventListener("error", (event) => recordDiagnostic("unhandled-error", errorDetails(event.error || event.message)));
-  window.addEventListener("unhandledrejection", (event) => recordDiagnostic("unhandled-rejection", errorDetails(event.reason)));
+  window.addEventListener("error", unhandledError);
+  window.addEventListener("unhandledrejection", unhandledRejection);
+
+  return () => {
+    window.removeEventListener("scroll", sampleScroll);
+    window.removeEventListener("resize", viewportResize);
+    window.removeEventListener("orientationchange", orientationChange);
+    window.visualViewport?.removeEventListener("resize", visualViewportChange);
+    window.visualViewport?.removeEventListener("scroll", visualViewportChange);
+    window.removeEventListener("error", unhandledError);
+    window.removeEventListener("unhandledrejection", unhandledRejection);
+    if (scrollTimer) window.clearTimeout(scrollTimer);
+    scrollTimer = 0;
+  };
+});
+
+export function initializeDiagnostics() {
+  if (!enabled) return () => undefined;
+  const dispose = initializeDiagnosticListeners();
+  if (snapshot.events.every((event) => event.type !== "init")) {
+    recordDiagnostic("init", { buildCommit: snapshot.buildCommit, navigationType: snapshot.navigationType });
+  }
+  return dispose;
 }
 
-export function diagnosticsEnabled() {
-  return enabled;
-}
+export function diagnosticsEnabled() { return enabled; }

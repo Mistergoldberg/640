@@ -1,6 +1,6 @@
 import { assetUrl } from "../lib/assets";
 import type { AlbumManifest, AlbumSummary, Photo, YearIndex } from "../types";
-import { validateAlbumManifest } from "./manifestValidation";
+import { ManifestValidationError, validateAlbumManifest } from "./manifestValidation";
 
 export interface LoadedAlbumSummary extends AlbumSummary {
   year: string;
@@ -60,6 +60,9 @@ export function buildYearCollection(years: string[], sourceIndex: YearIndex, alb
 
   for (const album of albums) {
     for (const photo of album.photos) {
+      if (photosById.has(photo.id)) {
+        throw new ManifestValidationError("year", "duplicate-loaded-photo-id");
+      }
       photosById.set(photo.id, photo);
     }
   }
@@ -70,6 +73,12 @@ export function buildYearCollection(years: string[], sourceIndex: YearIndex, alb
   const failedAlbumIds = albumResults.flatMap((result) => (result.status === "error" ? [result.album.id] : []));
   const loadingAlbumIds = albumResults.flatMap((result) => (result.status === "loading" ? [result.album.id] : []));
   const albumStateById = new Map(albumResults.map((result) => [result.album.id, result]));
+  if (albumStateById.size !== albumResults.length || albumResults.some((result) => !sourceIndex.albums.some((album) => album.id === result.album.id))) {
+    throw new ManifestValidationError("year", "album-result-mismatch");
+  }
+  if (albumResults.length === sourceIndex.albums.length && albumResults.every((result) => result.status === "ready") && photos.length !== sourceIndex.sequence.length) {
+    throw new ManifestValidationError("year", "complete-sequence-mismatch");
+  }
 
   return {
     year: sourceIndex.year,
@@ -100,8 +109,12 @@ export function buildYearCollection(years: string[], sourceIndex: YearIndex, alb
   };
 }
 
-export async function loadAlbum(album: AlbumSummary, signal: AbortSignal): Promise<AlbumLoadResult> {
-  const manifest = validateAlbumManifest(await fetchJson(assetUrl(album.manifestUrl), signal));
+export async function loadAlbum(album: AlbumSummary, signal: AbortSignal, sourceIndex: YearIndex): Promise<AlbumLoadResult> {
+  const manifest = validateAlbumManifest(await fetchJson(assetUrl(album.manifestUrl), signal), {
+    year: sourceIndex.year,
+    album,
+    sequence: sourceIndex.sequence
+  });
   return {
     status: "ready",
     album,

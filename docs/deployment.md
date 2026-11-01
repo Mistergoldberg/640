@@ -1,3 +1,13 @@
+> Historical evidence: this document describes earlier commits and datasets. Start with [the current source audit and baseline](audit-baseline-2026-10-31.md); verify current release identity, catalogue and tooling before following operational commands below.
+>
+> Current repair note: legacy import and broad-upload commands below are retired fail-closed. Use [publication authority](publication-authority.md), [repair state](repair-state-2026-10-31.md), and [browser acceptance](browser-acceptance.md) for current operational boundaries. No production action is authorized by those local repair documents.
+
+## Current release-candidate conditions
+
+The deployment narrative below is dated historical evidence for its stated 2026-09 release. It is not evidence for the current 24-year catalogue or stacked repair branches. A future candidate must first be integrated at one clean reviewed commit, record exact public flags and `dist/build-identity.json`, pass the quality job and all four current-catalogue browser profiles, and pass `npm run release:audit` against the approved derivative tree. It must then pass real-media, production-equivalent header/cache, rollback and physical iPhone/WebKit checks in QA. Synthetic media, a green draft-PR matrix, or the historical rollback path cannot independently authorize promotion.
+
+As observed on 2026-11-01, GitHub `main` had no branch protection and the repository had no rulesets. Actions was enabled for all actions without SHA-pinning enforcement. These are observations, not desired-policy enforcement; no administration setting was changed.
+
 # 640×480 deployment
 
 ## Status
@@ -135,9 +145,11 @@ Run from the repository root:
 npm ci
 npm run dev
 npm test
+npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 npm run build
+npm run test:browser
+npm run test:browser:matrix # one explicitly supplied flag profile; CI runs all four
 npm run release:audit
-npm run media:upload:dry-run
 ```
 
 Development currently uses `/`; Vite serves the local generated library at
@@ -164,51 +176,13 @@ with public R2 media before switching the server.
 
 ## R2 publication
 
-Cloudflare's official Wrangler OAuth login has completed. Credentials use the
-local keychain-backed Wrangler storage. Do not place credentials in chat,
-Git, build artifacts or this document. The existing uploader requires locally
-configured R2 account, bucket, endpoint and bucket-scoped S3 credentials; it does
-not automatically obtain those credentials from a Wrangler login.
-
-The ignored local `generated/reports/configure-r2.command` helper collects
-the Access Key ID and Secret Access Key through hidden Terminal input. It writes
-only to `generated/.credentials/insertcatchytitlehere-r2.json` with mode 0600
-in a mode 0700 directory. It refuses to overwrite existing credentials and does
-not upload anything. That directory is outside the public-media upload source.
-
-Before creating the bucket, inspect whether it exists and list its contents using
-authenticated access. Stop before overwriting unexpected objects in a non-empty
-bucket. Confirm R2 Standard storage, attach the media custom domain, and configure
-public HTTPS GET/HEAD access without public listing or mutation.
-
-Use the audited uploader:
-
-```sh
-npm run media:upload:dry-run
-npm run media:upload
-```
-
-Execution requires `rclone`. Version 1.75.1 was downloaded from the official
-release and its SHA-256 checksum verified; the binary is kept in ignored local
-tooling. The script uses `rclone copy` with overwrite protection, explicit ordered
-allowlist filters and zero deletes.
-The overwrite guard is separate from HTTP caching: images are not served with
-an immutable cache directive. The uploader sets:
-
-```text
-Content-Type: image/jpeg
-Cache-Control: public, max-age=14400, must-revalidate
-```
-
-A local endpoint-only CONNECT tunnel was needed because one DNS address of the
-S3 endpoint timed out from this Mac. The tunnel retries the endpoint addresses;
-TLS verification and signing remain in rclone. It runs only for the child upload
-process, binds to loopback and makes no global network changes. Credentials are
-passed in the child environment and never sent through a third-party proxy.
-
-Compare the authenticated remote count and bytes against the local audit. Check
-representative checksums and public thumbnail/display URLs from every year.
-Never upload a broader directory and never use `sync --delete`.
+The broad uploader and its `media:upload` npm entry points are retired fail-closed.
+They are historical evidence and are not a supported planning or publication
+path. Current media publication must use the exact sealed package, owner authority,
+package-bound credentials, durable receipt and candidate activation controls in
+[publication-authority.md](publication-authority.md). This repository does not
+mint those records or write R2. Never place credentials in Git or build artifacts,
+upload a broader directory, or use a destructive sync.
 
 ## Server release and rollback
 
@@ -287,17 +261,11 @@ the long playback test was not repeated during the symlink-only promotion.
 
 ## Adding future years and curator corrections
 
-Keep each new source-year folder local and ignored. Review the importer options
-in `scripts/import-photos.mjs`, import the intended year with `npm run import:year
--- --year YYYY`, and inspect the private import report. The catalogue drives year
-navigation; do not hard-code a year list in components.
-
-Audit all public manifests and derivatives again, review labels, verify counts,
-publish only generated library keys, and make a new committed static release.
-Never publish import reports or caches. Adding a year changes expected release
-counts, so record the new audited totals before publication.
-
-Future permanent corrections remain a separate local curator workflow: edit
-correction instructions locally, regenerate approved derivatives without modifying
-originals, re-audit, republish affected media and update relevant caches. No public
-admin or write capability is authorized by this deployment.
+The import commands in this repository are retired fail-closed and are not a
+supported future-year or correction workflow. Use only the separately controlled,
+package-bound authority described in [publication-authority.md](publication-authority.md).
+That workflow must keep originals/private reports outside public output, seal and
+approve the exact package, publish through package-bound credentials, and return a
+durable receipt before an application candidate can be activated. The catalogue
+drives navigation; do not hard-code a year list. No public admin or write capability
+is authorized by this deployment.
