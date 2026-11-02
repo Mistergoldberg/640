@@ -3,6 +3,7 @@ import { assetUrl, mediaUrl } from "./lib/assets";
 import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
 import { ManifestValidationError, validateCatalog } from "./data/manifestValidation";
+import { resolvePhotoAlias, validatePhotoAliasMap, type PhotoAliasMap } from "./data/photoAliasResolution";
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveLoadReason, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
@@ -52,6 +53,7 @@ import {
 } from "./player/homepageAutoplay";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
+const PHOTO_ALIAS_URL = assetUrl("data/photo-id-aliases.json");
 const GRID_MIN_OVERSCAN_PX = 260;
 const GRID_SCROLL_AHEAD_PX = 720;
 const RESTORE_OFFSET_PX = 112;
@@ -108,7 +110,7 @@ interface PendingVisualCorrection {
 type CatalogLoadState =
   | { status: "loading"; message: string }
   | { status: "error"; message: string; retry: () => void }
-  | { status: "ready"; catalog: Catalog };
+  | { status: "ready"; catalog: Catalog; photoAliases: PhotoAliasMap | null };
 
 function yearExists(catalog: Catalog, year: string | null) {
   return Boolean(year && catalog.years.some((candidate) => candidate.year === year));
@@ -214,6 +216,14 @@ async function fetchJson(url: string): Promise<unknown> {
   return response.json();
 }
 
+async function fetchOptionalJson(url: string): Promise<unknown | null> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+  if (response.headers.get("content-type")?.toLowerCase().startsWith("text/html")) return null;
+  return response.json();
+}
+
 function useCatalog(): CatalogLoadState {
   const [state, setState] = useState<CatalogLoadState>({ status: "loading", message: "Loading catalogue" });
   const [attempt, setAttempt] = useState(0);
@@ -228,11 +238,14 @@ function useCatalog(): CatalogLoadState {
       if (!years.length) {
         throw new Error("No imported years are available in the catalogue");
       }
+      const aliasValue = await fetchOptionalJson(PHOTO_ALIAS_URL);
+      const photoAliases = aliasValue === null ? null : validatePhotoAliasMap(aliasValue, catalog);
 
       if (isMounted) {
-        recordDiagnostic("catalogue-load-complete", { yearCount: years.length });
+        recordDiagnostic("catalogue-load-complete", { yearCount: years.length, photoAliasCount: photoAliases?.aliases.size || 0 });
         setState({
           status: "ready",
+          photoAliases,
           catalog: {
             ...catalog,
             years
@@ -388,6 +401,7 @@ function leadInPlanForLayout(layout: GridLayout, maxRows = SEGMENT_LEAD_IN_ROW_C
 function App() {
   const catalogState = useCatalog();
   const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
+  const photoAliases = catalogState.status === "ready" ? catalogState.photoAliases : null;
   const catalogueId = useMemo(() => catalog ? archiveCatalogueIdentity(catalog) : "", [catalog]);
   const [activeYear, setActiveYear] = useState<string | null>(null);
   const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
@@ -534,6 +548,17 @@ function App() {
 
   useEffect(() => {
     if (!catalog || initializedRef.current) return;
+    const requestedUrl = new URL(window.location.href);
+    const requestedPhotoId = requestedUrl.searchParams.get("photo");
+    const requestedYear = requestedUrl.searchParams.get("year") || requestedPhotoId?.slice(0, 4) || "";
+    const aliasResolution = requestedPhotoId ? resolvePhotoAlias(photoAliases, requestedYear, requestedPhotoId) : { status: "unchanged" as const };
+    if (aliasResolution.status === "alias") {
+      recordDiagnostic("legacy-photo-alias-resolved", { oldYear: requestedYear, oldPhotoId: requestedPhotoId, newYear: aliasResolution.year, newPhotoId: aliasResolution.photoId });
+      updateUrlState(aliasResolution.year, aliasResolution.photoId, "replace", catalogueId, false, { photoId: aliasResolution.photoId });
+    } else if (aliasResolution.status === "retired") {
+      recordDiagnostic("legacy-photo-alias-retired", { oldYear: requestedYear, oldPhotoId: requestedPhotoId });
+      updateUrlState(requestedYear, null, "replace", catalogueId);
+    }
     const target = resolveNavigationRestoration({
       catalog,
       href: window.location.href,
@@ -551,7 +576,7 @@ function App() {
       setActivePhotoId(photoId);
       setActivePhotoYear(target.year);
     }
-  }, [catalog, navigateToArchiveTarget]);
+  }, [catalog, catalogueId, navigateToArchiveTarget, photoAliases]);
 
   useEffect(() => {
     if (!homepageAutoplayDocumentRef.current.eligible || homepageAutoplayDocumentRef.current.dismissed || activePhotoIdRef.current || !activeYear) return;
@@ -568,6 +593,17 @@ function App() {
     if (!catalog) return;
     const handlePopState = () => {
       fullscreenLaunchPhotoIdRef.current = null;
+      const requestedUrl = new URL(window.location.href);
+      const requestedPhotoId = requestedUrl.searchParams.get("photo");
+      const requestedYear = requestedUrl.searchParams.get("year") || requestedPhotoId?.slice(0, 4) || "";
+      const aliasResolution = requestedPhotoId ? resolvePhotoAlias(photoAliases, requestedYear, requestedPhotoId) : { status: "unchanged" as const };
+      if (aliasResolution.status === "alias") {
+        recordDiagnostic("legacy-photo-alias-resolved", { oldYear: requestedYear, oldPhotoId: requestedPhotoId, newYear: aliasResolution.year, newPhotoId: aliasResolution.photoId });
+        updateUrlState(aliasResolution.year, aliasResolution.photoId, "replace", catalogueId, false, { photoId: aliasResolution.photoId });
+      } else if (aliasResolution.status === "retired") {
+        recordDiagnostic("legacy-photo-alias-retired", { oldYear: requestedYear, oldPhotoId: requestedPhotoId });
+        updateUrlState(requestedYear, null, "replace", catalogueId);
+      }
       const photoId = readUrlPhotoId();
       let target = resolveNavigationRestoration({
         catalog,
@@ -596,7 +632,7 @@ function App() {
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [catalog, catalogueId, navigateToArchiveTarget]);
+  }, [catalog, catalogueId, navigateToArchiveTarget, photoAliases]);
 
   useEffect(() => {
     if (!activePhotoId || !activePhotoYear) return;

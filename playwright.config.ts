@@ -12,7 +12,7 @@ export default defineConfig({
   testDir: "./browser-tests",
   testMatch: matrix
     ? ["**/current-catalogue-acceptance.pw.ts", "**/optional-feature-acceptance.pw.ts"]
-    : "**/current-catalogue-acceptance.pw.ts",
+    : ["**/current-catalogue-acceptance.pw.ts", "**/legacy-photo-alias-resolution.pw.ts"],
   timeout: 60_000,
   fullyParallel: false,
   workers: 1,
