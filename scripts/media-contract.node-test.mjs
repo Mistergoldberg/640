@@ -30,21 +30,28 @@ async function publicDataDigest() {
   return createHash("sha256").update(JSON.stringify(records.sort())).digest("hex");
 }
 
-test("the committed catalogue uses only exact cv1 keys with matching year, photo, and derivative", async () => {
+test("the supplied catalogue uses only exact cv1 keys with matching year, photo, and derivative", async () => {
   const catalog = await readJson("data/catalog.json");
   let keyCount = 0;
+  let indexedPhotos = 0;
+  const mediaKeys = new Set();
   for (const yearEntry of catalog.years) {
     const index = await readJson(yearEntry.indexUrl);
+    indexedPhotos += index.sequence.length;
     for (const album of index.albums) {
       const manifest = await readJson(album.manifestUrl);
       for (const photo of manifest.photos) {
         assert.equal(isSupportedMediaKey(photo.thumbnailKey, { year: yearEntry.year, photoId: photo.id, derivative: "thumbs" }), true);
         assert.equal(isSupportedMediaKey(photo.displayKey, { year: yearEntry.year, photoId: photo.id, derivative: "display" }), true);
         keyCount += 2;
+        mediaKeys.add(photo.thumbnailKey);
+        mediaKeys.add(photo.displayKey);
       }
     }
   }
-  assert.equal(keyCount, 132_340);
+  assert.ok(indexedPhotos > 0);
+  assert.equal(keyCount, indexedPhotos * 2);
+  assert.equal(mediaKeys.size, keyCount);
 });
 
 test("the media contract rejects traversal, malformed, old, mixed, and wrong-year keys", () => {

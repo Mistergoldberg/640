@@ -35,22 +35,30 @@ const validPhoto = {
 };
 
 describe("semantic manifest validation", () => {
-  it("accepts the complete committed catalogue without mutation", () => {
+  it("accepts the supplied catalogue with complete, unique frame coverage and no mutation", () => {
     const rawCatalog = read("data/catalog.json");
     const catalog = validateCatalog(rawCatalog);
     let albums = 0;
     let photos = 0;
+    let indexedPhotos = 0;
+    const photoIds = new Set<string>();
     for (const year of catalog.years) {
       const index = validateYearIndex(read(year.indexUrl), year.year);
+      indexedPhotos += index.sequence.length;
       for (const summary of index.albums) {
         const manifest = validateAlbumManifest(read(summary.manifestUrl), { year: year.year, album: summary, sequence: index.sequence });
         albums += 1;
         photos += manifest.photos.length;
+        for (const photo of manifest.photos) {
+          expect(photoIds.has(photo.id)).toBe(false);
+          photoIds.add(photo.id);
+        }
       }
     }
-    expect(catalog.years).toHaveLength(24);
-    expect(albums).toBe(137);
-    expect(photos).toBe(66_170);
+    expect(catalog.years.length).toBeGreaterThan(0);
+    expect(albums).toBeGreaterThan(0);
+    expect(photos).toBe(indexedPhotos);
+    expect(photoIds.size).toBe(indexedPhotos);
     expect(rawCatalog).toEqual(catalog);
   });
 
