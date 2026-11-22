@@ -1522,6 +1522,10 @@ function YearWindowGrid({
   ]);
 
   const capturePendingResizeAnchor = useCallback(() => {
+    // A viewport change supersedes segment corrections measured in the old layout.
+    // Cancel their queued animation frames before resize restoration takes over.
+    visualCorrectionSequenceRef.current += 1;
+    pendingVisualCorrectionRef.current = null;
     if (!ref.current || restorationIsPending(restorationRef.current)) return;
     if (pendingResizeAnchorRef.current?.year === activeYear) return;
     const visibleTiles = [...ref.current.querySelectorAll<HTMLElement>(".photo-tile")]

@@ -6,7 +6,7 @@ The next year's validated manifests begin loading within the last 60 frames or f
 
 Year handoff retains the existing player, playback speed, music controls and fullscreen. The current image stays painted until the incoming frame decodes. Manual forward/backward stepping crosses year boundaries while preserving pause intent. A slow or failed year load holds the current frame and offers Retry. Pause cancels a pending automatic handoff; late responses cannot reopen a closed player.
 
-Handoff replaces the current photo URL without adding history entries. Share uses the displayed year/photo. Escape restores the viewed photo in its album, including when the player was opened from another year's grid. Player-close restoration verifies the target after removed segments/fullscreen changes settle; other archive restoration paths retain their existing behavior.
+Handoff replaces the current photo URL without adding history entries. Share uses the displayed year/photo. Escape restores the viewed photo in its album, including when the player was opened from another year's grid. Player-close restoration verifies the target after removed segments/fullscreen changes settle; other archive restoration paths retain their existing behavior. Viewport resize cancels queued segment corrections measured against the old layout so they cannot compete with resize restoration.
 
 ## QA and release
 
