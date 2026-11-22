@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { CircleHelp, X } from "lucide-react";
 import { mediaUrl } from "../lib/assets";
 import type { Photo } from "../types";
@@ -53,13 +53,26 @@ interface CacheEntry {
   failed: boolean;
 }
 
-interface PhotoPlayerProps {
+export interface PlayerYearNavigation {
+  revision: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+  pending: boolean;
+  error: boolean;
+  prefetch: (direction: -1 | 1) => void;
+  request: (direction: -1 | 1) => void;
+  cancel: () => void;
+  retry: () => void;
+}
+
+export interface PhotoPlayerProps {
   photos: Photo[];
   initialIndex: number;
   openInFullscreen?: boolean;
   scope: PlayerScope;
   onClose: (photoId: string) => void;
   launchMode?: "standard" | "homepage-autoplay";
+  yearNavigation?: PlayerYearNavigation;
 }
 
 function clampIndex(index: number, total: number) {
@@ -183,13 +196,20 @@ function imageGeometryStyle(mode: ImageMode, geometry: ImageGeometry | null) {
   };
 }
 
-export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard" }: PhotoPlayerProps) {
+export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, scope, onClose, launchMode = "standard", yearNavigation }: PhotoPlayerProps) {
   const resetKey = `${scope.type}:${scope.year}:${initialIndex}:${photos.length}`;
+  const continuationRevisionRef = useRef(yearNavigation?.revision ?? 0);
+  const continuingYear = continuationRevisionRef.current !== (yearNavigation?.revision ?? 0);
+  const hasNextYear = yearNavigation?.hasNext ?? false;
+  const hasPreviousYear = yearNavigation?.hasPrevious ?? false;
+  const requestYear = yearNavigation?.request;
+  const cancelYear = yearNavigation?.cancel;
+  const prefetchYear = yearNavigation?.prefetch;
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
   const [desktopInstructions, setDesktopInstructions] = useState(usesDesktopInstructions);
   const [playerState, dispatch] = useReducer(
     playerReducer,
-    { initialIndex, total: photos.length, scope, launchMode, reducedMotion },
+    { initialIndex, total: photos.length, scope, launchMode, reducedMotion, hasNextYear },
     createPlayerState
   );
   const [paintedFrame, setPaintedFrame] = useState(() => ({
@@ -254,15 +274,15 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const mediaStageRef = useRef<HTMLDivElement | null>(null);
   const resetKeyRef = useRef(resetKey);
 
-  const currentIndex = playerState.currentIndex;
+  const currentIndex = continuingYear ? initialIndex : playerState.currentIndex;
   const currentPhoto = photos[currentIndex];
-  const paintedPhoto = paintedFrame.resetKey === resetKey
+  const paintedPhoto = paintedFrame.resetKey === resetKey || Boolean(yearNavigation?.revision)
     ? paintedFrame.photo
     : photos[clampIndex(initialIndex, photos.length)] ?? null;
   const isImagePending = Boolean(paintedPhoto && currentPhoto && paintedPhoto.id !== currentPhoto.id);
   desiredPhotoIdRef.current = currentPhoto?.id ?? null;
-  const atStart = currentIndex <= 0;
-  const atEnd = currentIndex >= photos.length - 1;
+  const atStart = currentIndex <= 0 && !hasPreviousYear;
+  const atEnd = currentIndex >= photos.length - 1 && !hasNextYear;
   const status = playerState.status;
   const isBuffering = status === "buffering";
   const initialPlayPending = status === "loading" || status === "initial-delay";
@@ -421,6 +441,14 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     [preloadPhoto]
   );
 
+  const requestYearBoundary = useCallback((direction: -1 | 1, manual: boolean) => {
+    if (!requestYear || (direction === 1 ? !hasNextYear : !hasPreviousYear)) return;
+    clearInitialDelayTimer();
+    clearResumeTimer();
+    dispatch({ type: "YEAR_WAIT", manual });
+    requestYear(direction);
+  }, [requestYear, hasNextYear, hasPreviousYear, clearInitialDelayTimer, clearResumeTimer]);
+
   const revealControls = useCallback(() => {
     setControlsVisible(true);
     if (controlsTimerRef.current !== null) {
@@ -436,11 +464,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const pauseExplicitly = useCallback(() => {
+    cancelYear?.();
     revealControls();
     clearInitialDelayTimer();
     clearResumeTimer();
     dispatch({ type: "PAUSE" });
-  }, [clearInitialDelayTimer, clearResumeTimer, revealControls]);
+  }, [cancelYear, clearInitialDelayTimer, clearResumeTimer, revealControls]);
 
   const playExplicitly = useCallback(() => {
     revealControls();
@@ -548,15 +577,17 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       const fromIndex = currentIndexRef.current;
       const nextIndex = clampIndex(fromIndex + direction, photos.length);
       if (nextIndex === fromIndex) {
+        requestYearBoundary(direction, true);
         return;
       }
 
+      cancelYear?.();
       clearInitialDelayTimer();
       clearResumeTimer();
       dispatch({ type: direction > 0 ? "MANUAL_NEXT" : "MANUAL_PREVIOUS" });
       warmBuffer(nextIndex);
     },
-    [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
+    [cancelYear, requestYearBoundary, clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
   );
 
   const pauseForFrameInteraction = useCallback(() => {
@@ -578,15 +609,17 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       const fromIndex = currentIndexRef.current;
       const nextIndex = clampIndex(fromIndex + direction, photos.length);
       if (nextIndex === fromIndex) {
+        requestYearBoundary(direction, true);
         return;
       }
 
+      cancelYear?.();
       clearInitialDelayTimer();
       clearResumeTimer();
       dispatch({ type: direction > 0 ? "FRAME_NEXT" : "FRAME_PREVIOUS" });
       warmBuffer(nextIndex);
     },
-    [clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
+    [cancelYear, requestYearBoundary, clearInitialDelayTimer, clearResumeTimer, photos.length, revealControls, warmBuffer]
   );
 
   useEffect(() => {
@@ -915,6 +948,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     const nextIndex = state.currentIndex + 1;
     if (nextIndex >= photos.length) {
+      if (hasNextYear) { requestYearBoundary(1, false); return false; }
       dispatch({ type: "REACH_END" });
       return false;
     }
@@ -927,7 +961,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     dispatch({ type: "ADVANCE" });
     return true;
-  }, [photos.length, preloadPhoto]);
+  }, [hasNextYear, requestYearBoundary, photos.length, preloadPhoto]);
 
   const markVisibleImageReady = useCallback((image: HTMLImageElement, photo: Photo) => {
     if (!image || !image.complete || image.naturalWidth === 0) {
@@ -950,7 +984,20 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     }
   }, [resetKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const isContinuation = continuationRevisionRef.current !== (yearNavigation?.revision ?? 0);
+    continuationRevisionRef.current = yearNavigation?.revision ?? 0;
+    if (isContinuation) {
+      resetKeyRef.current = resetKey;
+      clearImageCache();
+      clearInitialDelayTimer();
+      clearResumeTimer();
+      rotationDispatch({ type: "RESET" });
+      setPaintedFrame(previous => ({ resetKey, photo: previous.photo }));
+      dispatch({ type: "CONTINUE_YEAR", initialIndex, total: photos.length, scope, hasNextYear });
+      warmBuffer(initialIndex);
+      return;
+    }
     const isInitialMount = resetKeyRef.current === resetKey;
     if (!isInitialMount) {
       resetKeyRef.current = resetKey;
@@ -976,7 +1023,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
         initialIndex,
         total: photos.length,
         scope: { type: scope.type, year: scope.year },
-        reducedMotion
+        reducedMotion,
+        hasNextYear
       });
     }
 
@@ -992,6 +1040,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
 
     return () => window.cancelAnimationFrame(frame);
   }, [
+    yearNavigation?.revision,
+    hasNextYear,
     clearImageCache,
     clearInitialDelayTimer,
     clearResumeTimer,
@@ -1007,6 +1057,11 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     preloadPhoto,
     reducedMotion
   ]);
+
+  useEffect(() => {
+    if (currentIndex >= photos.length - Math.max(60, Math.ceil(5000 / playerState.delayMs))) prefetchYear?.(1);
+    if (currentIndex < PRELOAD_BEHIND) prefetchYear?.(-1);
+  }, [currentIndex, photos.length, playerState.delayMs, prefetchYear, scope.year]);
 
   useEffect(() => {
     if (playerState.warmupPhase === "inactive") warmBuffer(currentIndex);
@@ -1540,6 +1595,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       role="dialog"
       aria-modal="true"
       aria-label="Photo player"
+      data-player-status={status}
+      data-player-year={scope.year}
       data-player-warmup-phase={playerState.warmupPhase}
       data-player-cache-entries={cacheRef.current.size}
       data-player-pending-images={[...cacheRef.current.values()].filter((entry) => !entry.ready && !entry.failed).length}
@@ -1672,7 +1729,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
               if (stateRef.current.launchMode === "homepage-autoplay" && stateRef.current.warmupPhase !== "inactive") {
                 return;
               }
-              if (!atEnd) {
+              if (currentIndex >= photos.length - 1 && hasNextYear) {
+                requestYearBoundary(1, false);
+              } else if (!atEnd) {
                 dispatch({ type: "ADVANCE" });
               } else {
                 dispatch({ type: "REACH_END" });
@@ -1681,6 +1740,12 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
           />
         </button>
       </div>
+
+      {yearNavigation?.pending || yearNavigation?.error ? (
+        <div className="player-year-status" role={yearNavigation.error ? "alert" : "status"}>
+          {yearNavigation.error ? <>Photos could not be loaded. <button type="button" onClick={yearNavigation.retry}>Retry year</button></> : "Preparing next photos…"}
+        </div>
+      ) : null}
 
       <div className={`player-control-frame ${controlState.speedMenuOpen ? "is-speed-menu-open" : ""}`}>
         {!desktopOnboardingActive ? <PlayerControls

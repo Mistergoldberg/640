@@ -2078,3 +2078,18 @@ html[data-debug-scrubber-target] .archive-diagnostic-scrubber-target {
 html[data-debug-safe-area] .archive-diagnostic-safe-area {
   display: block;
 }
+
+.player-year-status {
+  position: fixed;
+  left: 50%;
+  bottom: calc(5rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 10;
+  max-width: calc(100vw - 2rem);
+  padding: .6rem .9rem;
+  border-radius: .5rem;
+  background: rgba(0, 0, 0, .85);
+  color: white;
+  font-size: .875rem;
+}
+.player-year-status button { color: inherit; text-decoration: underline; }
