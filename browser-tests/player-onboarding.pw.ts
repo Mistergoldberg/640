@@ -1,6 +1,7 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { publicFlagEnabled } from "../src/lib/publicFlag";
 
-const enabled = process.env.VITE_HOMEPAGE_AUTOPLAYER === "1";
+const enabled = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
 const STORAGE_KEY = "pixilation-player-onboarding-v1";
 const DIRECT_PHOTO = "2002-5d0aaeea05b95f";
 

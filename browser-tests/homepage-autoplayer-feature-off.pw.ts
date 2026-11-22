@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { publicFlagEnabled } from "../src/lib/publicFlag";
 
-const enabled = process.env.VITE_HOMEPAGE_AUTOPLAYER === "1";
+const enabled = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
 test.skip(enabled, "feature-off coverage requires VITE_HOMEPAGE_AUTOPLAYER to be disabled");
 
 test("feature-off reload remains archive mode without adding history", async ({ page }) => {

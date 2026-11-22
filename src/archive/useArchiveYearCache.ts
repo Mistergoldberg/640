@@ -61,22 +61,23 @@ interface RetryRequest {
 }
 
 export async function loadAlbumResults(
-  albums: YearIndex["albums"],
+  sourceIndex: YearIndex,
   signal: AbortSignal,
   maxConcurrentAlbumRequests = Number.POSITIVE_INFINITY
 ): Promise<Array<PromiseSettledResult<AlbumLoadResult>>> {
-  return loadAlbumResultsWithProgress(albums, signal, maxConcurrentAlbumRequests);
+  return loadAlbumResultsWithProgress(sourceIndex, signal, maxConcurrentAlbumRequests);
 }
 
 export async function loadAlbumResultsWithProgress(
-  albums: YearIndex["albums"],
+  sourceIndex: YearIndex,
   signal: AbortSignal,
   maxConcurrentAlbumRequests = Number.POSITIVE_INFINITY,
   onResult?: (index: number, result: PromiseSettledResult<AlbumLoadResult>) => void
 ): Promise<Array<PromiseSettledResult<AlbumLoadResult>>> {
   const concurrency = Number.isFinite(maxConcurrentAlbumRequests)
     ? Math.max(1, Math.floor(maxConcurrentAlbumRequests))
-    : albums.length || 1;
+    : sourceIndex.albums.length || 1;
+  const albums = sourceIndex.albums;
   const results: Array<PromiseSettledResult<AlbumLoadResult>> = new Array(albums.length);
   let nextIndex = 0;
 
@@ -85,7 +86,7 @@ export async function loadAlbumResultsWithProgress(
       const index = nextIndex;
       nextIndex += 1;
       try {
-        results[index] = { status: "fulfilled", value: await loadAlbum(albums[index], signal) };
+        results[index] = { status: "fulfilled", value: await loadAlbum(albums[index], signal, sourceIndex) };
       } catch (reason) {
         results[index] = { status: "rejected", reason };
       }
@@ -236,7 +237,7 @@ export function useArchiveYearCache(
       });
     };
 
-    void loadAlbumResultsWithProgress(sourceIndex.albums, controller.signal, options.maxConcurrentAlbumRequests, publishProgressiveCollection)
+    void loadAlbumResultsWithProgress(sourceIndex, controller.signal, options.maxConcurrentAlbumRequests, publishProgressiveCollection)
       .then((settled) => {
         if (!requestIsCurrent(generationRef.current.get(year) || 0, generation, controller.signal.aborted)) return;
         const results = settled.map((result, index): AlbumLoadResult => result.status === "fulfilled"
@@ -292,7 +293,7 @@ export function useArchiveYearCache(
     for (const summary of ordered) {
       recordDiagnostic("year-index-load-start", { year: summary.year });
       void fetchJson(assetUrl(summary.indexUrl), indexController.signal)
-        .then(validateYearIndex)
+        .then((value) => validateYearIndex(value, summary.year))
         .then((index) => {
           recordDiagnostic("year-index-load-complete", { year: summary.year, albumCount: index.albums.length });
           setStates((current) => {
@@ -367,7 +368,7 @@ export function useArchiveYearCache(
         return next;
       });
       void fetchJson(assetUrl(summary.indexUrl), controller.signal)
-        .then(validateYearIndex)
+        .then((value) => validateYearIndex(value, summary.year))
         .then((index) => {
           setStates((current) => {
             const state = current.get(year);
@@ -416,7 +417,7 @@ export function useArchiveYearCache(
       }
     });
     retainCollection(year, replaceAlbumResult(state.collection, albumId, { status: "loading", album: target.album }));
-    void loadAlbum(target.album, controller.signal)
+    void loadAlbum(target.album, controller.signal, state.collection.sourceIndex)
       .then((result) => {
         const latest = statesRef.current.get(year);
         if (!latest?.collection) return;

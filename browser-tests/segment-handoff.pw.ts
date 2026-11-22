@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { publicFlagEnabled } from "../src/lib/publicFlag";
 
-const enabled = process.env.VITE_SEAMLESS_YEAR_SEGMENTS === "1";
+const enabled = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS);
 
 test.skip(!enabled, "seamless year segment handoff tests require VITE_SEAMLESS_YEAR_SEGMENTS=1");
 

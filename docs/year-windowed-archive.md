@@ -1,3 +1,5 @@
+> Historical evidence: this document describes earlier commits and datasets. Start with [the current source audit and baseline](audit-baseline-2026-10-31.md); verify current release identity, catalogue and tooling before following operational commands below.
+
 # Year-windowed archive
 
 The archive browsing surface renders one active year. Its justified layout is virtualized to the visible rows plus directional overscan. Changing years replaces the mounted grid; inactive years contribute no rows, photo tiles, or image elements.

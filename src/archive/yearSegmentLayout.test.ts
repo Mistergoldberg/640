@@ -157,24 +157,19 @@ describe("year segment deterministic layout", () => {
     expect(new Set(heights).size).toBeGreaterThan(1);
   });
 
-  it("handles empty years and rejected metadata without fabricating photo anchors", () => {
+  it("handles empty years and rejects inconsistent complete metadata", () => {
     const empty = syntheticYearCollection("2039", 0, 0);
     expect(empty.availableCount).toBe(0);
     expect(layoutFor(empty, 390).totalHeight).toBe(0);
 
-    const withRejectedRecord = syntheticYearCollection("2038", 12, 2, { rejectedRecord: true });
-    const rejectedId = "2038-rejected-missing-record";
-    const layout = layoutFor(withRejectedRecord, 390);
-    expect(withRejectedRecord.expectedCount).toBe(13);
-    expect(withRejectedRecord.availableCount).toBe(12);
-    expect(layout.photoTops.has(rejectedId)).toBe(false);
+    expect(() => syntheticYearCollection("2038", 12, 2, { rejectedRecord: true })).toThrow("Year index could not be loaded");
   });
 });
 
 describe("year segment synthetic scale model", () => {
   it("builds a large metadata-only year without creating DOM or image elements", () => {
     const started = performance.now();
-    const huge = syntheticYearCollection("2037", 100_000, 40, { rejectedRecord: true });
+    const huge = syntheticYearCollection("2037", 100_000, 40);
     const collectionElapsedMs = performance.now() - started;
     const activeLayoutStarted = performance.now();
     const activeLayout = layoutFor(huge, 1024);
@@ -183,7 +178,7 @@ describe("year segment synthetic scale model", () => {
     const adjacentLayout = layoutFor(huge, 390);
     const adjacentLayoutElapsedMs = performance.now() - adjacentLayoutStarted;
 
-    expect(huge.expectedCount).toBe(100_001);
+    expect(huge.expectedCount).toBe(100_000);
     expect(huge.availableCount).toBe(100_000);
     expect(activeLayout.photoTops.size).toBe(100_000);
     expect(adjacentLayout.totalHeight).toBeGreaterThan(activeLayout.totalHeight);

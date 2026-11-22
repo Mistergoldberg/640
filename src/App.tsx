@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { assetUrl, mediaUrl } from "./lib/assets";
 import { formatPublicArchiveAlbumLabel } from "./lib/archiveAlbumPresentation";
 import { useElementWidth } from "./hooks/useElementWidth";
-import { validateCatalog } from "./data/manifestValidation";
+import { ManifestValidationError, validateCatalog } from "./data/manifestValidation";
+import { resolvePhotoAlias, validatePhotoAliasMap, type PhotoAliasMap } from "./data/photoAliasResolution";
 import { ArchiveScrubber } from "./archive/ArchiveScrubber";
 import { useArchiveYearCache, type ArchiveLoadReason, type ArchiveYearState } from "./archive/useArchiveYearCache";
 import { archiveRatioForLocation, buildArchiveTimelineModel, orderedArchiveYears, type ArchiveTarget } from "./archive/archiveTimelineModel";
@@ -52,6 +53,7 @@ import {
 } from "./player/homepageAutoplay";
 
 const CATALOG_URL = assetUrl("data/catalog.json");
+const PHOTO_ALIAS_URL = assetUrl("data/photo-id-aliases.json");
 const GRID_MIN_OVERSCAN_PX = 260;
 const GRID_SCROLL_AHEAD_PX = 720;
 const RESTORE_OFFSET_PX = 112;
@@ -107,8 +109,8 @@ interface PendingVisualCorrection {
 
 type CatalogLoadState =
   | { status: "loading"; message: string }
-  | { status: "error"; message: string }
-  | { status: "ready"; catalog: Catalog };
+  | { status: "error"; message: string; retry: () => void }
+  | { status: "ready"; catalog: Catalog; photoAliases: PhotoAliasMap | null };
 
 function yearExists(catalog: Catalog, year: string | null) {
   return Boolean(year && catalog.years.some((candidate) => candidate.year === year));
@@ -214,8 +216,17 @@ async function fetchJson(url: string): Promise<unknown> {
   return response.json();
 }
 
+async function fetchOptionalJson(url: string): Promise<unknown | null> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+  if (response.headers.get("content-type")?.toLowerCase().startsWith("text/html")) return null;
+  return response.json();
+}
+
 function useCatalog(): CatalogLoadState {
   const [state, setState] = useState<CatalogLoadState>({ status: "loading", message: "Loading catalogue" });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -227,11 +238,14 @@ function useCatalog(): CatalogLoadState {
       if (!years.length) {
         throw new Error("No imported years are available in the catalogue");
       }
+      const aliasValue = await fetchOptionalJson(PHOTO_ALIAS_URL);
+      const photoAliases = aliasValue === null ? null : validatePhotoAliasMap(aliasValue, catalog);
 
       if (isMounted) {
-        recordDiagnostic("catalogue-load-complete", { yearCount: years.length });
+        recordDiagnostic("catalogue-load-complete", { yearCount: years.length, photoAliasCount: photoAliases?.aliases.size || 0 });
         setState({
           status: "ready",
+          photoAliases,
           catalog: {
             ...catalog,
             years
@@ -242,10 +256,17 @@ function useCatalog(): CatalogLoadState {
 
     loadCatalog().catch((error: unknown) => {
       if (isMounted) {
-        recordDiagnostic("catalogue-load-error", { message: error instanceof Error ? error.message : "Catalogue could not be loaded" });
+        recordDiagnostic("catalogue-load-error", {
+          name: error instanceof Error ? error.name : "UnknownError",
+          code: error instanceof ManifestValidationError ? error.code : "request-failed"
+        });
         setState({
           status: "error",
-          message: error instanceof Error ? error.message : "Catalogue could not be loaded"
+          message: "Catalogue data could not be loaded",
+          retry: () => {
+            setState({ status: "loading", message: "Loading catalogue" });
+            setAttempt((current) => current + 1);
+          }
         });
       }
     });
@@ -253,7 +274,7 @@ function useCatalog(): CatalogLoadState {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [attempt]);
 
   return state;
 }
@@ -380,6 +401,7 @@ function leadInPlanForLayout(layout: GridLayout, maxRows = SEGMENT_LEAD_IN_ROW_C
 function App() {
   const catalogState = useCatalog();
   const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
+  const photoAliases = catalogState.status === "ready" ? catalogState.photoAliases : null;
   const catalogueId = useMemo(() => catalog ? archiveCatalogueIdentity(catalog) : "", [catalog]);
   const [activeYear, setActiveYear] = useState<string | null>(null);
   const [restoration, dispatchRestoration] = useReducer(archiveRestorationReducer, undefined, createArchiveRestorationState);
@@ -526,6 +548,17 @@ function App() {
 
   useEffect(() => {
     if (!catalog || initializedRef.current) return;
+    const requestedUrl = new URL(window.location.href);
+    const requestedPhotoId = requestedUrl.searchParams.get("photo");
+    const requestedYear = requestedUrl.searchParams.get("year") || requestedPhotoId?.slice(0, 4) || "";
+    const aliasResolution = requestedPhotoId ? resolvePhotoAlias(photoAliases, requestedYear, requestedPhotoId) : { status: "unchanged" as const };
+    if (aliasResolution.status === "alias") {
+      recordDiagnostic("legacy-photo-alias-resolved", { oldYear: requestedYear, oldPhotoId: requestedPhotoId, newYear: aliasResolution.year, newPhotoId: aliasResolution.photoId });
+      updateUrlState(aliasResolution.year, aliasResolution.photoId, "replace", catalogueId, false, { photoId: aliasResolution.photoId });
+    } else if (aliasResolution.status === "retired") {
+      recordDiagnostic("legacy-photo-alias-retired", { oldYear: requestedYear, oldPhotoId: requestedPhotoId });
+      updateUrlState(requestedYear, null, "replace", catalogueId);
+    }
     const target = resolveNavigationRestoration({
       catalog,
       href: window.location.href,
@@ -543,7 +576,7 @@ function App() {
       setActivePhotoId(photoId);
       setActivePhotoYear(target.year);
     }
-  }, [catalog, navigateToArchiveTarget]);
+  }, [catalog, catalogueId, navigateToArchiveTarget, photoAliases]);
 
   useEffect(() => {
     if (!homepageAutoplayDocumentRef.current.eligible || homepageAutoplayDocumentRef.current.dismissed || activePhotoIdRef.current || !activeYear) return;
@@ -560,6 +593,17 @@ function App() {
     if (!catalog) return;
     const handlePopState = () => {
       fullscreenLaunchPhotoIdRef.current = null;
+      const requestedUrl = new URL(window.location.href);
+      const requestedPhotoId = requestedUrl.searchParams.get("photo");
+      const requestedYear = requestedUrl.searchParams.get("year") || requestedPhotoId?.slice(0, 4) || "";
+      const aliasResolution = requestedPhotoId ? resolvePhotoAlias(photoAliases, requestedYear, requestedPhotoId) : { status: "unchanged" as const };
+      if (aliasResolution.status === "alias") {
+        recordDiagnostic("legacy-photo-alias-resolved", { oldYear: requestedYear, oldPhotoId: requestedPhotoId, newYear: aliasResolution.year, newPhotoId: aliasResolution.photoId });
+        updateUrlState(aliasResolution.year, aliasResolution.photoId, "replace", catalogueId, false, { photoId: aliasResolution.photoId });
+      } else if (aliasResolution.status === "retired") {
+        recordDiagnostic("legacy-photo-alias-retired", { oldYear: requestedYear, oldPhotoId: requestedPhotoId });
+        updateUrlState(requestedYear, null, "replace", catalogueId);
+      }
       const photoId = readUrlPhotoId();
       let target = resolveNavigationRestoration({
         catalog,
@@ -588,7 +632,7 @@ function App() {
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [catalog, catalogueId, navigateToArchiveTarget]);
+  }, [catalog, catalogueId, navigateToArchiveTarget, photoAliases]);
 
   useEffect(() => {
     if (!activePhotoId || !activePhotoYear) return;
@@ -650,7 +694,7 @@ function App() {
   const archiveView = catalogState.status === "loading"
     ? <SystemState title="640×480" message={catalogState.message} />
     : catalogState.status === "error"
-      ? <SystemState title="640×480" message={catalogState.message} />
+      ? <SystemState title="640×480" message={catalogState.message} actionLabel="Retry catalogue" onAction={catalogState.retry} />
       : !activeYear || !states.size
         ? <SystemState title="640×480" message="Building archive index" />
         : (
@@ -782,6 +826,7 @@ function YearWindowGrid({
   const activeWarningsRef = useRef(new Set<string>());
   const requestedSegmentYearsRef = useRef(new Set<string>());
   const passiveHandoffTargetRef = useRef<string | null>(null);
+  const passiveHandoffArmedRef = useRef(false);
   const lastPassiveHandoffRef = useRef("");
   const compensatedPrependedYearsRef = useRef(new Set<string>());
   const restoredFromSpacerYearsRef = useRef(new Set<string>());
@@ -1166,23 +1211,39 @@ function YearWindowGrid({
       afterHeight: pending.afterHeight === undefined ? null : Math.round(pending.afterHeight)
     };
     updateDiagnostics({ lastLayoutCorrection: detail, lastProgrammaticScroll: correction ? { ...detail, kind: `${pending.kind}-scrollBy` } : getDiagnostics().lastProgrammaticScroll }, "visual-anchor-correction", detail);
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      if (pending.sequence !== visualCorrectionSequenceRef.current) return;
-      const verified = findVisualAnchorElement(anchor);
-      if (!verified) return;
-      const verifiedTop = verified.getBoundingClientRect().top;
-      recordDiagnostic("visual-anchor-verified", {
-        ...detail,
-        verifiedTop: Math.round(verifiedTop * 100) / 100,
-        finalDrift: Math.round((verifiedTop - anchor.top) * 100) / 100,
-        scrollYVerified: Math.round(window.scrollY)
-      });
-    }));
+    const verifyAnchor = (verificationCorrections = 0) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        if (pending.sequence !== visualCorrectionSequenceRef.current) return;
+        const verified = findVisualAnchorElement(anchor);
+        if (!verified) return;
+        const verifiedTop = verified.getBoundingClientRect().top;
+        const finalDrift = verifiedTop - anchor.top;
+        if (Math.abs(finalDrift) > 1 && verificationCorrections < 2) {
+          window.scrollBy({ top: finalDrift, behavior: "auto" });
+          verifyAnchor(verificationCorrections + 1);
+          return;
+        }
+        recordDiagnostic("visual-anchor-verified", {
+          ...detail,
+          verifiedTop: Math.round(verifiedTop * 100) / 100,
+          finalDrift: Math.round(finalDrift * 100) / 100,
+          verificationCorrections,
+          scrollYVerified: Math.round(window.scrollY)
+        });
+      }));
+    };
+    verifyAnchor();
   });
 
   useLayoutEffect(() => {
     restorationRef.current = restoration;
   }, [restoration]);
+
+  useEffect(() => {
+    if (!segmentedMode || restoration.phase !== "settled" || restoration.settledYear !== activeYear) return;
+    scrollDirectionRef.current = null;
+    previousScrollYRef.current = window.scrollY;
+  }, [activeYear, restoration.phase, restoration.settledYear, segmentedMode]);
 
   useEffect(() => {
     if (!segmentedMode) return;
@@ -1198,6 +1259,7 @@ function YearWindowGrid({
       return;
     }
     requestedSegmentYearsRef.current.clear();
+    passiveHandoffArmedRef.current = false;
     compensatedPrependedYearsRef.current.clear();
     restoredFromSpacerYearsRef.current.clear();
     scrollDirectionRef.current = null;
@@ -1206,6 +1268,24 @@ function YearWindowGrid({
     setMountedSegmentYears([activeYear]);
     lastPassiveHandoffRef.current = "";
   }, [activeYear, segmentedMode]);
+
+  useEffect(() => {
+    if (!segmentedMode) return;
+    const armPassiveHandoff = () => { passiveHandoffArmedRef.current = true; };
+    const armFromKey = (event: KeyboardEvent) => {
+      if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) armPassiveHandoff();
+    };
+    window.addEventListener("wheel", armPassiveHandoff, { passive: true });
+    window.addEventListener("touchstart", armPassiveHandoff, { passive: true });
+    window.addEventListener("pointerdown", armPassiveHandoff, { passive: true });
+    window.addEventListener("keydown", armFromKey);
+    return () => {
+      window.removeEventListener("wheel", armPassiveHandoff);
+      window.removeEventListener("touchstart", armPassiveHandoff);
+      window.removeEventListener("pointerdown", armPassiveHandoff);
+      window.removeEventListener("keydown", armFromKey);
+    };
+  }, [segmentedMode]);
 
   useEffect(() => {
     if (!segmentedMode || !pendingAdjacent) return;
@@ -1322,7 +1402,7 @@ function YearWindowGrid({
   ]);
 
   useEffect(() => {
-    if (!segmentedMode || mountedSegmentYears.length < 2) return;
+    if (!segmentedMode || mountedSegmentYears.length < 2 || restorationPending || !passiveHandoffArmedRef.current) return;
     const anchorY = window.scrollY + RESTORE_OFFSET_PX;
     for (const year of mountedSegmentYears) {
       if (year === activeYear) continue;
@@ -1334,11 +1414,12 @@ function YearWindowGrid({
       const signature = `${activeYear}->${year}`;
       if (lastPassiveHandoffRef.current === signature) return;
       lastPassiveHandoffRef.current = signature;
+      passiveHandoffArmedRef.current = false;
       passiveHandoffTargetRef.current = year;
       onPassiveHandoff(stableAnchorForSegment(year));
       return;
     }
-  }, [activeYear, mountedSegmentYears, onPassiveHandoff, sectionForSegment, segmentedMode, stableAnchorForSegment, viewport.scrollY]);
+  }, [activeYear, mountedSegmentYears, onPassiveHandoff, restorationPending, sectionForSegment, segmentedMode, stableAnchorForSegment, viewport.scrollY]);
 
   useLayoutEffect(() => {
     if (!segmentedMode || mountedSegmentYears.length < 2 || restorationPending) return;

@@ -51,8 +51,6 @@ export function ArchiveDiagnosticsPanel() {
 
   const rows: Array<[string, unknown]> = [
     ["Build", snapshot.buildCommit],
-    ["UA", snapshot.userAgent],
-    ["Platform", snapshot.platform],
     ["URL", snapshot.url],
     ["Navigation", snapshot.navigationType],
     ["Scroll Y / document", `${snapshot.scrollY} / ${snapshot.documentHeight}`],
@@ -156,14 +154,14 @@ export function ArchiveDiagnosticsPanel() {
 }
 
 interface DiagnosticErrorBoundaryState {
-  error: string | null;
+  failed: boolean;
 }
 
 export class DiagnosticErrorBoundary extends Component<{ children: ReactNode }, DiagnosticErrorBoundaryState> {
-  state: DiagnosticErrorBoundaryState = { error: null };
+  state: DiagnosticErrorBoundaryState = { failed: false };
 
-  static getDerivedStateFromError(error: Error): DiagnosticErrorBoundaryState {
-    return { error: error.message || "Application render failed" };
+  static getDerivedStateFromError(): DiagnosticErrorBoundaryState {
+    return { failed: true };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -175,7 +173,16 @@ export class DiagnosticErrorBoundary extends Component<{ children: ReactNode }, 
   }
 
   render() {
-    if (this.state.error) return <main className="system-state"><h1>640×480</h1><p>Application render failed. Export the diagnostic report.</p></main>;
+    if (this.state.failed) return (
+      <main className="system-state" role="alert">
+        <h1>640×480</h1>
+        <p>The archive encountered a display problem. Reload this page or return to the archive.</p>
+        <div className="system-state__actions">
+          <button type="button" onClick={() => window.location.reload()}>Reload page</button>
+          <a href={import.meta.env.BASE_URL || "/"}>Return to archive</a>
+        </div>
+      </main>
+    );
     return this.props.children;
   }
 }
