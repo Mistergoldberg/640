@@ -439,12 +439,6 @@ function App() {
     return index >= 0 ? index : null;
   }, [activePhotoId, playerCollection]);
 
-  useEffect(() => {
-    const previous = window.history.scrollRestoration;
-    window.history.scrollRestoration = "manual";
-    return () => { window.history.scrollRestoration = previous; };
-  }, []);
-
   useEffect(() => { activeYearRef.current = activeYear; }, [activeYear]);
   useEffect(() => { activePhotoIdRef.current = activePhotoId; }, [activePhotoId]);
   useEffect(() => { activePhotoYearRef.current = activePhotoYear; }, [activePhotoYear]);
@@ -1695,42 +1689,41 @@ function YearWindowGrid({
     const baseOffset = target.photoId ? RESTORE_OFFSET_PX : ARCHIVE_JUMP_OFFSET_PX;
     const firstAlbumId = layout.albumAnchors[0]?.id || null;
     const enteringAtYearStart = !target.photoId && (!target.albumId || target.albumId === firstAlbumId);
-    const measureTargetTop = () => {
-      const headingTop = yearHeadingRef.current
-        ? yearHeadingRef.current.getBoundingClientRect().top + window.scrollY
-        : undefined;
-      const stickyHeight = chromeRef.current?.getBoundingClientRect().height || 0;
-      return Math.max(0, enteringAtYearStart && headingTop !== undefined
-        ? headingTop - stickyHeight - 6
-        : (ref.current?.getBoundingClientRect().top || 0) + window.scrollY + virtualTop - baseOffset + target.adjustmentPx);
-    };
-    const stillCurrent = () => restorationRef.current.generation === generation && restorationRef.current.phase !== "cancelled" && Boolean(ref.current);
-    const settleAtTarget = (corrections = 0) => {
+    const headingTop = yearHeadingRef.current
+      ? yearHeadingRef.current.getBoundingClientRect().top + window.scrollY
+      : undefined;
+    const stickyHeight = chromeRef.current?.getBoundingClientRect().height || 0;
+    const nextTop = enteringAtYearStart && headingTop !== undefined
+      ? headingTop - stickyHeight - 6
+      : ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
+    const settleAfterLayout = (corrections = 0) => {
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-        if (!stillCurrent()) return;
-        // Segment removal and fullscreen exit can change grid position after the first scroll.
-        const liveTop = measureTargetTop();
-        if (sourceTarget.source === "photo-close" && Math.abs(window.scrollY - liveTop) > 1 && corrections < 2) {
-          window.scrollTo({ top: liveTop, behavior: "auto" });
-          settleAtTarget(corrections + 1);
-          return;
+        if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled" || !ref.current) return;
+        // Closing across years can remove a preceding segment after the first scroll.
+        // Re-measure only this photo-close path; normal archive navigation is unchanged.
+        if (sourceTarget.source === "photo-close" && target.photoId && corrections < 2) {
+          const liveTop = Math.max(0, ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx);
+          if (Math.abs(window.scrollY - liveTop) > 1) {
+            window.scrollTo({ top: liveTop, behavior: "auto" });
+            settleAfterLayout(corrections + 1);
+            return;
+          }
         }
         if (sourceTarget.focusPhoto && target.photoId) {
-          ref.current?.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(target.photoId)}"]`)?.focus({ preventScroll: true });
+          ref.current.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(target.photoId)}"]`)?.focus({ preventScroll: true });
         }
         onRestorationSettle(generation, activeYear);
       }));
     };
     const frame = window.requestAnimationFrame(() => {
-      if (!stillCurrent()) return;
-      const nextTop = measureTargetTop();
+      if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
       onRestorationApply(generation);
-      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "year-local-restoration", top: nextTop, generation, year: activeYear } }, "programmatic-scroll", { kind: "year-local-restoration", top: nextTop, generation, year: activeYear });
-      window.scrollTo({ top: nextTop, behavior: "auto" });
-      settleAtTarget();
+      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear } }, "programmatic-scroll", { kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear });
+      window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+      settleAfterLayout();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeYear, collection, layout.albumAnchors, layout.photoTops, mountedSegmentYears, spacerSegments, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, state, width]);
+  }, [activeYear, collection, layout.albumAnchors, layout.photoTops, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, state, width]);
 
   useEffect(() => {
     if (!restorationPending) return;
