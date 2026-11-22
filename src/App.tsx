@@ -42,7 +42,7 @@ import {
   type StoredArchiveAnchor
 } from "./archive/archiveRestoration";
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "./player/fullscreen";
-import { PhotoPlayer as PhotoPlayerView } from "./player/PhotoPlayer";
+import { ContinuousPhotoPlayer as PhotoPlayerView } from "./player/ContinuousPhotoPlayer";
 import type { Catalog } from "./types";
 import { diagnosticsEnabled, getDiagnostics, recordDiagnostic, registerArchiveObserver, updateDiagnostics } from "./debug/archiveDiagnostics";
 import { segmentIdentity } from "./archive/yearSegmentController";
@@ -616,9 +616,12 @@ function App() {
         target = createArchiveRestorationTarget(createStoredArchiveAnchor({
           catalogueId,
           entryId: target.entryId,
-          year: target.year,
+          year: restoreId.slice(0, 4),
           photoId: restoreId
         }), "photo-close", true);
+      }
+      if (pendingClosePhotoIdRef.current && !photoId && target.year !== requestedYear) {
+        updateUrlState(target.year, null, "replace", catalogueId, false, { entryId: target.entryId, photoId: restoreId });
       }
       navigateToArchiveTarget(target, "history");
       if (photoId) {
@@ -669,7 +672,7 @@ function App() {
     }
     fullscreenLaunchPhotoIdRef.current = null;
     const restoreId = photoId || activePhotoIdRef.current;
-    const year = activePhotoYearRef.current || activeYearRef.current;
+    const year = restoreId?.slice(0, 4) || activePhotoYearRef.current || activeYearRef.current;
     recordDiagnostic("player-close", { year, photoId: restoreId });
     pendingClosePhotoIdRef.current = restoreId;
     const historyState = readArchiveHistoryState(window.history.state);
@@ -735,6 +738,12 @@ function App() {
       {showPlayer ? (
         <PhotoPlayerView
           key={homepageAutoplayActive ? "homepage-autoplayer-session" : `${displayedYear}:${activePhotoId}`}
+          catalog={catalog}
+          onYearChange={(year, photoId) => {
+            const state = readArchiveHistoryState(window.history.state);
+            updateUrlState(year, photoId, "replace", catalogueId, state?.fromGrid || false, { photoId });
+            recordDiagnostic("player-year-handoff", { year, photoId });
+          }}
           photos={displayedPhotos}
           initialIndex={displayedInitialIndex}
           openInFullscreen={fullscreenLaunchPhotoIdRef.current === activePhotoId}
@@ -1513,6 +1522,10 @@ function YearWindowGrid({
   ]);
 
   const capturePendingResizeAnchor = useCallback(() => {
+    // A viewport change supersedes segment corrections measured in the old layout.
+    // Cancel their queued animation frames before resize restoration takes over.
+    visualCorrectionSequenceRef.current += 1;
+    pendingVisualCorrectionRef.current = null;
     if (!ref.current || restorationIsPending(restorationRef.current)) return;
     if (pendingResizeAnchorRef.current?.year === activeYear) return;
     const visibleTiles = [...ref.current.querySelectorAll<HTMLElement>(".photo-tile")]
@@ -1687,18 +1700,31 @@ function YearWindowGrid({
     const nextTop = enteringAtYearStart && headingTop !== undefined
       ? headingTop - stickyHeight - 6
       : ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx;
-    const frame = window.requestAnimationFrame(() => {
-      if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
-      onRestorationApply(generation);
-      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear } }, "programmatic-scroll", { kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear });
-      window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+    const settleAfterLayout = (corrections = 0) => {
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
         if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled" || !ref.current) return;
+        // Closing across years can remove a preceding segment after the first scroll.
+        // Re-measure only this photo-close path; normal archive navigation is unchanged.
+        if (sourceTarget.source === "photo-close" && target.photoId && corrections < 2) {
+          const liveTop = Math.max(0, ref.current.getBoundingClientRect().top + window.scrollY + virtualTop - baseOffset + target.adjustmentPx);
+          if (Math.abs(window.scrollY - liveTop) > 1) {
+            window.scrollTo({ top: liveTop, behavior: "auto" });
+            settleAfterLayout(corrections + 1);
+            return;
+          }
+        }
         if (sourceTarget.focusPhoto && target.photoId) {
           ref.current.querySelector<HTMLButtonElement>(`[data-photo-id="${escapeCssAttribute(target.photoId)}"]`)?.focus({ preventScroll: true });
         }
         onRestorationSettle(generation, activeYear);
       }));
+    };
+    const frame = window.requestAnimationFrame(() => {
+      if (restorationRef.current.generation !== generation || restorationRef.current.phase === "cancelled") return;
+      onRestorationApply(generation);
+      updateDiagnostics({ lastProgrammaticScroll: { at: new Date().toISOString(), kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear } }, "programmatic-scroll", { kind: "year-local-restoration", top: Math.max(0, nextTop), generation, year: activeYear });
+      window.scrollTo({ top: Math.max(0, nextTop), behavior: "auto" });
+      settleAfterLayout();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeYear, collection, layout.albumAnchors, layout.photoTops, onRestorationApply, onRestorationSettle, restoration.generation, restoration.phase, restoration.target, state, width]);

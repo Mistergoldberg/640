@@ -21,6 +21,7 @@ export interface PlayerState {
   status: PlaybackStatus;
   delayMs: number;
   total: number;
+  hasNextYear: boolean;
   bufferTargetIndex: number | null;
   resumeToken: number;
   resumeDelayMs: number | null;
@@ -32,6 +33,8 @@ export interface PlayerState {
 }
 
 export type PlayerEvent =
+  | { type: "YEAR_WAIT"; manual: boolean }
+  | { type: "CONTINUE_YEAR"; initialIndex: number; total: number; scope: PlayerScope; hasNextYear: boolean }
   | { type: "READY" }
   | { type: "INITIAL_DELAY_COMPLETE" }
   | { type: "PLAY" }
@@ -48,7 +51,7 @@ export type PlayerEvent =
   | { type: "ADVANCE" }
   | { type: "REACH_END" }
   | { type: "CHANGE_SPEED"; delayMs: number }
-  | { type: "RESET"; initialIndex: number; total: number; scope: PlayerScope; delayMs?: number; reducedMotion?: boolean }
+  | { type: "RESET"; initialIndex: number; total: number; scope: PlayerScope; delayMs?: number; reducedMotion?: boolean; hasNextYear?: boolean }
   | { type: "CLOSE" }
   | { type: "WARMUP_FRAME"; index: number; phase: import("./homepageAutoplay").HomepageWarmupPhase }
   | { type: "WARMUP_EXIT" };
@@ -59,7 +62,8 @@ export function createPlayerState({
   delayMs = 100,
   scope,
   launchMode = "standard",
-  reducedMotion = false
+  reducedMotion = false,
+  hasNextYear = false
 }: {
   initialIndex: number;
   total: number;
@@ -67,6 +71,7 @@ export function createPlayerState({
   scope: PlayerScope;
   launchMode?: "standard" | "homepage-autoplay";
   reducedMotion?: boolean;
+  hasNextYear?: boolean;
 }): PlayerState {
   const reducedHomepageAutoplay = launchMode === "homepage-autoplay" && reducedMotion;
   return {
@@ -74,6 +79,7 @@ export function createPlayerState({
     status: reducedHomepageAutoplay ? "explicitly-paused" : "loading",
     delayMs,
     total,
+    hasNextYear,
     bufferTargetIndex: null,
     resumeToken: 0,
     resumeDelayMs: null,
@@ -160,6 +166,33 @@ function frameGestureEnd(state: PlayerState): PlayerState {
 
 export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerState {
   switch (event.type) {
+    case "YEAR_WAIT":
+      return {
+        ...state,
+        status: event.manual
+          ? canAutoResumeAfterManual(state.status) ? "temporarily-paused" : "explicitly-paused"
+          : "buffering",
+        bufferTargetIndex: null,
+        frameGestureActive: false,
+        resumeDelayMs: null,
+        warmupPhase: "inactive"
+      };
+
+    case "CONTINUE_YEAR":
+      return {
+        ...state,
+        currentIndex: clampIndex(event.initialIndex, event.total),
+        total: event.total,
+        scope: event.scope,
+        hasNextYear: event.hasNextYear,
+        status: state.status === "buffering" ? "playing" : state.status,
+        bufferTargetIndex: null,
+        frameGestureActive: false,
+        resumeToken: state.resumeToken + 1,
+        resumeDelayMs: state.status === "temporarily-paused" ? MANUAL_RESUME_DELAY_MS : null,
+        warmupPhase: "inactive"
+      };
+
     case "READY":
       if (state.status !== "loading") {
         return state;
@@ -167,7 +200,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
 
       if (state.launchMode === "homepage-autoplay") return state;
 
-      if (state.currentIndex >= state.total - 1) {
+      if (!state.hasNextYear && state.currentIndex >= state.total - 1) {
         return {
           ...state,
           status: "ended",
@@ -191,7 +224,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         return state;
       }
 
-      if (state.currentIndex >= state.total - 1) {
+      if (!state.hasNextYear && state.currentIndex >= state.total - 1) {
         return {
           ...state,
           status: "ended",
@@ -210,7 +243,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
       };
 
     case "PLAY":
-      if (state.currentIndex >= state.total - 1) {
+      if (!state.hasNextYear && state.currentIndex >= state.total - 1) {
         return {
           ...state,
           status: "ended",
@@ -261,7 +294,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         return state;
       }
 
-      if (state.currentIndex >= state.total - 1) {
+      if (!state.hasNextYear && state.currentIndex >= state.total - 1) {
         return {
           ...state,
           status: "ended",
@@ -301,7 +334,7 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
       return {
         ...state,
         currentIndex: state.bufferTargetIndex,
-        status: state.bufferTargetIndex >= state.total - 1 ? "ended" : "playing",
+        status: !state.hasNextYear && state.bufferTargetIndex >= state.total - 1 ? "ended" : "playing",
         bufferTargetIndex: null,
         frameGestureActive: false,
         resumeDelayMs: null
@@ -322,10 +355,10 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
       return {
         ...state,
         currentIndex: nextIndex,
-        status: nextIndex >= state.total - 1 ? "ended" : state.status,
+        status: !state.hasNextYear && nextIndex >= state.total - 1 ? "ended" : state.status,
         bufferTargetIndex: null,
         frameGestureActive: false,
-        resumeDelayMs: nextIndex >= state.total - 1 ? null : state.resumeDelayMs
+        resumeDelayMs: !state.hasNextYear && nextIndex >= state.total - 1 ? null : state.resumeDelayMs
       };
     }
 
@@ -352,7 +385,8 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         delayMs: event.delayMs ?? state.delayMs,
         scope: event.scope,
         launchMode: state.launchMode,
-        reducedMotion: event.reducedMotion
+        reducedMotion: event.reducedMotion,
+        hasNextYear: event.hasNextYear
       });
 
     case "WARMUP_FRAME":

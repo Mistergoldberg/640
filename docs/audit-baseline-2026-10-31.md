@@ -138,7 +138,9 @@ Required change: give API loading an explicit bounded lifecycle, reset retryable
 
 ## Feature register and removal policy
 
-Current amendment: [2026 order and seamless browsing QA](2026-order-seamless-qa.md) enables seamless year segments by default. The table below retains the audited October baseline.
+The owner approved production promotion of [reversed 2026 ordering, seamless archive scrolling and continuous player playback](player-continuation-production-2026-11-22.md) on 2026-11-22. The exact sealed build uses homepage autoplay off and seamless segments on.
+
+Current amendment: [2026 order and seamless browsing QA](2026-order-seamless-qa.md) enables seamless year segments by default. [Player continuation](player-year-continuation.md) adds automatic playback across catalogue years. The table below retains the audited October baseline.
 
 | Surface | Trigger/status established in source | Disposition |
 | --- | --- | --- |
