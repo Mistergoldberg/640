@@ -1,5 +1,9 @@
 # Publication authority
 
+The [2026-11-21 approved release](fresh-archive-release-2026-11-21.md) records the
+current verified package, complete publication receipt, hosted QA artifact and
+owner production authority. The missing-package status below is historical.
+
 Status verified 2026-10-31. This repository is the public read-only application and committed catalogue. It is not the authority for creating or publishing replacement media.
 
 The authoritative local workflow is the separately controlled `pixilation-import-plan` repository, observed at `ba3bbb5025264a02a958b22264583f9cd7c5a69a` (`feature/stable-unreadable-run-identity`). Its package contract is documented there in `docs/aggregate-archive-package.md` and `docs/package-bound-release.md`. The workflow requires complete publication-eligible stages, explicit owner authority bound to an exact package and seal, a closed-world promotion package, package-bound R2 credentials, a durable publication receipt, and a sealed candidate release before QA activation.

@@ -2,6 +2,11 @@
 
 Public, read-only photo archive and player built with React, TypeScript and Vite.
 
+The [approved fresh archive release](docs/fresh-archive-release-2026-11-21.md)
+contains 24 years, 135 albums and 65,781 photos, verified legacy-link aliases,
+forward 2026 playback and desktop Escape-to-album behavior. Its exact QA artifact
+and production promotion/rollback procedure are recorded there.
+
 Start with [the 2026-10-31 audit and source baseline](docs/audit-baseline-2026-10-31.md) and [working instructions](AGENTS.md). The source baseline is d519413e6c676e93a4538ef0814f063b4f091606: 24 years, 137 albums and 66,170 photos. These describe the audited snapshot; future catalogues may differ.
 
 ## Local application work
