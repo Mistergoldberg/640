@@ -1710,7 +1710,7 @@ function YearWindowGrid({
         if (!stillCurrent()) return;
         // Segment removal and fullscreen exit can change grid position after the first scroll.
         const liveTop = measureTargetTop();
-        if (Math.abs(window.scrollY - liveTop) > 1 && corrections < 2) {
+        if (sourceTarget.source === "photo-close" && Math.abs(window.scrollY - liveTop) > 1 && corrections < 2) {
           window.scrollTo({ top: liveTop, behavior: "auto" });
           settleAtTarget(corrections + 1);
           return;
