@@ -1,5 +1,7 @@
 # 2026 order and seamless browsing QA amendment
 
+Production promotion was approved on 2026-11-22. The [production runbook](player-continuation-production-2026-11-22.md) supersedes the historical QA-only hold below.
+
 Owner request: reverse the entire 2026 sequence, including album order and the photos within each album, then enable seamless year transitions. This replaces the earlier forward-order decision. Production remains on the previously approved release until visual review of this candidate.
 
 2026 now starts at photo `2026-abad9300031a9b` (2026-3/IMG_8515.JPG), continues through albums 2026-3, 2026-2 and 2026-1, and ends at `2026-7e312ff1ad75bb` (2026-1/IMG_8123.JPG). All 661 photo IDs, memberships and derivative keys remain unchanged. Other years and legacy aliases remain byte-identical.

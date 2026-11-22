@@ -1,5 +1,7 @@
 # Continuous player playback across years
 
+Production promotion was approved on 2026-11-22. The [production runbook](player-continuation-production-2026-11-22.md) supersedes the historical QA-only hold below.
+
 The player continues from the last frame of a year into the first frame of the next **catalogue** year: for this release, 2026 → 2025 → 2023. It stops at the oldest year. The approved reversed 2026 sequence and every public data/media file remain unchanged.
 
 The next year's validated manifests begin loading within the last 60 frames or five seconds of playback, whichever is earlier. Five lead-in display images are decoded ahead of the handoff. A player-owned cache keeps only the current year and its two neighbours, with at most three concurrent album requests per load. The archive's existing bounded cache remains separate. Closing cancels player requests and image work. Failed prefetches remain failed until deliberate retry; a 30-second timeout makes stalled requests recoverable.
