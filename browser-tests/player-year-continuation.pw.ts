@@ -98,7 +98,10 @@ test('pause cancels a pending autoplay handoff and late data does not move the f
 test('close cancels a pending handoff without reopening the player or rewriting the album URL',async ({page})=>{
   let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
   await page.route(`**/data/${fixture.adjacent}/albums/**`,async route=>{await gate;try{await route.continue();}catch{/* cancelled request */}});
-  await openLast(page);await page.locator('[data-player-control="forward"]').click();
+  await openLast(page);await page.keyboard.press('Escape');
+  const tile=page.locator(`[data-photo-id="${last.id}"]`);
+  await expect(tile).toBeFocused();await tile.click();
+  await page.locator('[data-player-control="forward"]').click();
   await expect(page.getByRole('status').filter({hasText:'Preparing next photos'})).toBeVisible();
   await page.keyboard.press('Escape');release();
   await expect(page.getByRole('dialog',{name:'Photo player'})).toHaveCount(0);

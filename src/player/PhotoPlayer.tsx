@@ -340,6 +340,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const close = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
+    cancelYear?.();
     frameInteractionRef.current?.destroy();
     framePointerIdRef.current = null;
     touchInteractionRef.current?.destroy();
@@ -352,7 +353,7 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     }
     dispatch({ type: "CLOSE" });
     onClose(photos[currentIndexRef.current]?.id || photos[initialIndex]?.id || "");
-  }, [clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos]);
+  }, [cancelYear, clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos]);
 
   const closeRef = useRef(close);
   closeRef.current = close;
