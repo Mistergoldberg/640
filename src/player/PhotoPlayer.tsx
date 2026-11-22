@@ -1060,9 +1060,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   ]);
 
   useEffect(() => {
+    if (!photos.length || playerState.warmupPhase !== "inactive") return;
     if (currentIndex >= photos.length - Math.max(60, Math.ceil(5000 / playerState.delayMs))) prefetchYear?.(1);
     if (currentIndex < PRELOAD_BEHIND) prefetchYear?.(-1);
-  }, [currentIndex, photos.length, playerState.delayMs, prefetchYear, scope.year]);
+  }, [currentIndex, photos.length, playerState.delayMs, playerState.warmupPhase, prefetchYear, scope.year]);
 
   useEffect(() => {
     if (playerState.warmupPhase === "inactive") warmBuffer(currentIndex);

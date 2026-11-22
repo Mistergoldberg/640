@@ -117,6 +117,12 @@ if (homepageAutoplayer) {
         }
       });
     });
+    // Keep the homepage player mounted briefly before its current-year photos arrive.
+    // Adjacent-year prefetch must not jump ahead of the initial five frames.
+    await page.route(`**/data/${fixture.newest}/albums/**`, async route => {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await route.continue();
+    });
     const failed = fixture.photos[1];
     await installSyntheticMedia(page, [failed.displayKey]);
     await page.goto("/");
