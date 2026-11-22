@@ -3,7 +3,7 @@ import path from "node:path";
 
 const externalBaseURL = process.env.PIXILATION_PLAYWRIGHT_BASE_URL?.trim();
 const matrix = process.env.PIXILATION_BROWSER_MATRIX === "1";
-const profile = process.env.PIXILATION_ACCEPTANCE_PROFILE || "default-off-off";
+const profile = process.env.PIXILATION_ACCEPTANCE_PROFILE || "default-off-on";
 if (externalBaseURL && !process.env.PIXILATION_EXPECTED_BUILD_COMMIT?.trim()) {
   throw new Error("PIXILATION_EXPECTED_BUILD_COMMIT is required with PIXILATION_PLAYWRIGHT_BASE_URL");
 }

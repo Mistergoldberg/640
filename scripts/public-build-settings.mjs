@@ -7,6 +7,6 @@ export function publicBuildSettings(env = process.env) {
     appBasePath: env.VITE_APP_BASE_PATH?.trim() || "/",
     mediaBaseUrl: env.VITE_MEDIA_BASE_URL?.trim() || "https://media.pixilation.org/",
     homepageAutoplayer: publicFlagEnabled(env.VITE_HOMEPAGE_AUTOPLAYER),
-    seamlessYearSegments: publicFlagEnabled(env.VITE_SEAMLESS_YEAR_SEGMENTS)
+    seamlessYearSegments: publicFlagEnabled(env.VITE_SEAMLESS_YEAR_SEGMENTS ?? "1")
   };
 }

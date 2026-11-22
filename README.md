@@ -4,8 +4,8 @@ Public, read-only photo archive and player built with React, TypeScript and Vite
 
 The [approved fresh archive release](docs/fresh-archive-release-2026-11-21.md)
 contains 24 years, 135 albums and 65,781 photos, verified legacy-link aliases,
-forward 2026 playback and desktop Escape-to-album behavior. Its exact QA artifact
-and production promotion/rollback procedure are recorded there.
+and desktop Escape-to-album behavior. The [2026 order and seamless browsing amendment](docs/2026-order-seamless-qa.md)
+reverses 2026 and enables automatic adjacent-year browsing for QA review.
 
 Start with [the 2026-10-31 audit and source baseline](docs/audit-baseline-2026-10-31.md) and [working instructions](AGENTS.md). The source baseline is d519413e6c676e93a4538ef0814f063b4f091606: 24 years, 137 albums and 66,170 photos. These describe the audited snapshot; future catalogues may differ.
 
@@ -32,7 +32,7 @@ Production builds default to the public media host https://media.pixilation.org/
 | VITE_MEDIA_BASE_URL | Production: https://media.pixilation.org/; development: local media | Public derivative origin |
 | VITE_BUILD_COMMIT | local-uncommitted in diagnostics when omitted | Explicit build identity |
 | VITE_HOMEPAGE_AUTOPLAYER | Off | Optional automatic homepage player |
-| VITE_SEAMLESS_YEAR_SEGMENTS | Off | Optional moving year-segment window |
+| VITE_SEAMLESS_YEAR_SEGMENTS | On | Optional moving year-segment window |
 
 Feature switches accept 1 or case-insensitive true in application code. Query parameter debug=1 enables local diagnostic UI even in production builds. These public values must never contain credentials.
 

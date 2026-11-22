@@ -4,7 +4,7 @@ import { currentCatalogueFixture, installSyntheticMedia } from "./support/catalo
 
 const fixture = currentCatalogueFixture();
 const homepageAutoplayer = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
-const seamlessYearSegments = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS);
+const seamlessYearSegments = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS ?? "1");
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("pixilation-player-onboarding-v1", "1"));

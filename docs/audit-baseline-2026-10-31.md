@@ -138,6 +138,8 @@ Required change: give API loading an explicit bounded lifecycle, reset retryable
 
 ## Feature register and removal policy
 
+Current amendment: [2026 order and seamless browsing QA](2026-order-seamless-qa.md) enables seamless year segments by default. The table below retains the audited October baseline.
+
 | Surface | Trigger/status established in source | Disposition |
 | --- | --- | --- |
 | Public year/archive browsing, scrubber, album labels | Normal navigation | Preserve |

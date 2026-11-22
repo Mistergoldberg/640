@@ -10,7 +10,7 @@ Routine local inspection, reversible cleanup, tests and documentation within the
 
 Preserve observed working behaviour unless the task explicitly changes it. Hidden, disabled-by-default and retired are different states. Before removing a feature, identify its trigger, callers, dependencies, storage, CSS, tests, docs and documented replacement or owner retirement decision. Record the disposition.
 
-Current optional flags are VITE_HOMEPAGE_AUTOPLAYER and VITE_SEAMLESS_YEAR_SEGMENTS. Both default off; application parsing accepts 1 or case-insensitive true. Diagnostics are activated with debug=1, including in production builds. Do not silently remove these paths or assume the live build uses defaults.
+Current optional flags are VITE_HOMEPAGE_AUTOPLAYER and VITE_SEAMLESS_YEAR_SEGMENTS. Homepage autoplay defaults off; seamless year segments default on after the owner-approved 2026 order change. Explicit 0 disables either feature; application parsing accepts 1 or case-insensitive true. Diagnostics are activated with debug=1, including in production builds. Do not silently remove these paths or assume the live build uses defaults.
 
 ## Data and publication boundary
 
