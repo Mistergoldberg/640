@@ -64,14 +64,20 @@ interactive. A single compact action bar contains `Skip` beside the current
 blue next action: `Speed`, `Music`, or `Play`. Escape is also available. Manual
 Help captures whether playback
 was active, including during the initial loading/warm-up state, pauses cleanly,
-and restores that state when Skip or Escape exits early. Automatic completion
+and restores that state when Skip exits early (or Escape on touch devices). Automatic completion
 defaults to Play. Player controls are interactive again as soon as the tutorial
 closes.
 
 For visitors requesting reduced motion, automatic homepage playback is paused
-from its first usable frame and the demonstration is omitted. Skip and Escape
+from its first usable frame and the demonstration is omitted. Skip and touch-device Escape
 leave playback paused, including during a Help replay. Only the explicit
 Play control or final tutorial `Play` action starts photographs moving.
+
+On desktop, Escape closes the entire player and returns focus to the current
+photo in the album, including while Help, speed choices, or rotation controls
+are open. This also applies when the browser consumes Escape to leave native
+fullscreen. The screen-size button still switches to the fitted player without
+closing it.
 
 ## Responsive and accessible behavior
 
@@ -100,9 +106,10 @@ remain centered over the photograph, clear of the top-center action bar.
 
 The player remains the modal dialog and the tutorial is a labelled non-modal
 guided dialog inside it. Focus enters the highlighted real target, Tab and
-Shift+Tab cycle through the target and tutorial controls, Escape exits, each of
+Shift+Tab cycle through the target and tutorial controls, each of
 the six frames is announced with its numeric position, and focus returns to the player surface
-or Help control. Text labels prevent color from carrying meaning alone.
+or Help control when the tutorial closes. Desktop Escape instead returns focus
+to the album as described above. Text labels prevent color from carrying meaning alone.
 Reduced-motion CSS removes every tutorial highlight, ripple, pulse, and
 transition while retaining the same labels and static outlines.
 

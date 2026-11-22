@@ -82,7 +82,7 @@ async function expectFitContainment(page: Page) {
   expect(image!.y + image!.height).toBeLessThanOrEqual(stage!.y + stage!.height + 1);
 }
 
-test("rotation mode pauses, rotates once per keyboard activation, and respects menus, Help, and Escape", async ({ context, page }) => {
+test("rotation mode pauses, rotates once per keyboard activation, and respects menus, Help, and its toggle", async ({ context, page }) => {
   await installFullscreenFallback(context);
   await useLocalPlayerMedia(page);
   const image = await openDirectPhoto(page, LANDSCAPE_PHOTO, "landscape");
@@ -114,8 +114,8 @@ test("rotation mode pauses, rotates once per keyboard activation, and respects m
   await openRotationMode(page);
   await expect(page.getByRole("radiogroup", { name: "Playback speed" })).toHaveCount(0);
 
-  await page.keyboard.press("Escape");
   const rotationToggle = page.locator('[data-player-control="rotation"]');
+  await rotationToggle.click();
   await expect(page.getByRole("group", { name: "Photo rotation controls" })).toHaveCount(0);
   await expect(rotationToggle).toBeFocused();
   await expect(page.getByLabel("Photo player")).toBeVisible();

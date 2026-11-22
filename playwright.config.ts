@@ -11,8 +11,8 @@ if (externalBaseURL && !process.env.PIXILATION_EXPECTED_BUILD_COMMIT?.trim()) {
 export default defineConfig({
   testDir: "./browser-tests",
   testMatch: matrix
-    ? ["**/current-catalogue-acceptance.pw.ts", "**/optional-feature-acceptance.pw.ts"]
-    : ["**/current-catalogue-acceptance.pw.ts", "**/legacy-photo-alias-resolution.pw.ts"],
+    ? ["**/current-catalogue-acceptance.pw.ts", "**/optional-feature-acceptance.pw.ts", "**/player-desktop-escape.pw.ts"]
+    : ["**/current-catalogue-acceptance.pw.ts", "**/legacy-photo-alias-resolution.pw.ts", "**/player-desktop-escape.pw.ts"],
   timeout: 60_000,
   fullyParallel: false,
   workers: 1,

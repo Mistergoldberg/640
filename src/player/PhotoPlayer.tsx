@@ -233,6 +233,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   const desiredPhotoIdRef = useRef<string | null>(null);
   const nativeFullscreenRef = useRef(nativeFullscreenActive);
   const fullscreenRequestTokenRef = useRef(0);
+  const screenModeExitRequestedRef = useRef(false);
+  const closingRef = useRef(false);
   const controlsTimerRef = useRef<number | null>(null);
   const initialPlayTimerRef = useRef<number | null>(null);
   const resumeTimerRef = useRef<number | null>(null);
@@ -316,6 +318,8 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
   }, []);
 
   const close = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
     frameInteractionRef.current?.destroy();
     framePointerIdRef.current = null;
     touchInteractionRef.current?.destroy();
@@ -329,6 +333,9 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
     dispatch({ type: "CLOSE" });
     onClose(photos[currentIndexRef.current]?.id || photos[initialIndex]?.id || "");
   }, [clearInitialDelayTimer, clearResumeTimer, initialIndex, onClose, photos]);
+
+  const closeRef = useRef(close);
+  closeRef.current = close;
 
   const markBufferedImageReady = useCallback((index: number) => {
     const state = stateRef.current;
@@ -723,7 +730,10 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       fullscreenRequestTokenRef.current += 1;
       controlDispatch({ type: "EXIT_SCREEN_MODE" });
       if (nativeFullscreenRef.current) {
-        void exitDocumentFullscreen();
+        screenModeExitRequestedRef.current = true;
+        void exitDocumentFullscreen().then((exited) => {
+          if (!exited) screenModeExitRequestedRef.current = false;
+        });
       }
       return;
     }
@@ -1294,9 +1304,15 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       }
 
       if (nextActive) {
+        screenModeExitRequestedRef.current = false;
         controlDispatch({ type: "NATIVE_FULLSCREEN_ENTERED" });
       } else if (wasActive) {
+        const requestedByScreenControl = screenModeExitRequestedRef.current;
+        screenModeExitRequestedRef.current = false;
         controlDispatch({ type: "NATIVE_FULLSCREEN_EXITED" });
+        // Browsers can consume Escape before it reaches the page. An external
+        // desktop fullscreen exit must still return to the album.
+        if (!requestedByScreenControl && hasFinePointer()) closeRef.current();
       }
     };
 
@@ -1347,6 +1363,18 @@ export function PhotoPlayer({ photos, initialIndex, openInFullscreen = false, sc
       }
     };
   }, []);
+
+  useEffect(() => {
+    const closeOnDesktopEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !hasFinePointer()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
+    // Capture before Help or player menus can consume desktop Escape.
+    window.addEventListener("keydown", closeOnDesktopEscape, true);
+    return () => window.removeEventListener("keydown", closeOnDesktopEscape, true);
+  }, [close]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
