@@ -5,7 +5,7 @@ import { committedCatalogueIdentity, currentCatalogueFixture, installSyntheticMe
 
 const fixture = currentCatalogueFixture();
 const homepageAutoplayer = publicFlagEnabled(process.env.VITE_HOMEPAGE_AUTOPLAYER);
-const seamlessYearSegments = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS);
+const seamlessYearSegments = publicFlagEnabled(process.env.VITE_SEAMLESS_YEAR_SEGMENTS ?? "1");
 
 async function waitForYear(page: Page, year: string) {
   await expect(page.locator(`.collection-shell[data-active-year="${year}"]`)).toBeVisible({ timeout: 20_000 });
